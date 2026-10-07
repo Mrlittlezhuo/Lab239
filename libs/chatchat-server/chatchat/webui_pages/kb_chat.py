@@ -175,13 +175,25 @@ def kb_chat(api: ApiRequest):
             prompt_name = "default"
             history_len = st.number_input("历史对话轮数：", 0, 20, key="history_len")
             kb_top_k = st.number_input("匹配知识条数：", 1, 20, key="kb_top_k")
-            # Bge 模型会超过 1
+            if dialogue_mode == "文件对话":
+                threshold_max = 2.0
+                threshold_help = "距离阈值越小匹配越接近；2 表示不按距离过滤。"
+            else:
+                threshold_max = 1.0
+                threshold_help = "相关度阈值越大要求越高；0 表示不按相关度过滤。"
+            current_threshold = float(st.session_state.get("score_threshold", 0.4))
+            if not 0 <= current_threshold <= threshold_max:
+                st.session_state["score_threshold"] = min(
+                    max(float(Settings.kb_settings.SCORE_THRESHOLD), 0.0),
+                    threshold_max,
+                )
             score_threshold = st.slider(
                 "知识匹配分数阈值：",
                 0.0,
-                2.0,
+                threshold_max,
                 step=0.01,
                 key="score_threshold",
+                help=threshold_help,
             )
             return_direct = st.checkbox("仅返回检索结果", key="return_direct")
 

@@ -3,6 +3,7 @@
 from chatchat.server.api_server.conversation_routes import _msg_out
 from chatchat.server.db.models.message_model import MessageModel
 from chatchat.server.knowledge_base.utils import build_references, format_reference
+from chatchat.settings import KBSettings, ToolSettings
 from chatchat.webui_pages.auth_state import (
     RAG_CONVERSATION_LIST_KEY,
     RAG_CONVERSATION_SELECTOR_KEY,
@@ -54,6 +55,11 @@ def test_default_document_score_is_not_presented_as_real_score():
         "http://api.test",
     )
     assert refs[0]["score"] is None
+
+
+def test_default_retrieval_threshold_matches_langchain_range():
+    assert 0 <= KBSettings().SCORE_THRESHOLD <= 1
+    assert 0 <= ToolSettings().search_local_knowledgebase["score_threshold"] <= 1
 
 
 def test_message_history_api_exposes_persisted_reference_metadata():

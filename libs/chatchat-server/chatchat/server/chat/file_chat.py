@@ -127,7 +127,7 @@ async def file_chat(
     top_k: int = Body(Settings.kb_settings.VECTOR_SEARCH_TOP_K, description="匹配向量数"),
     score_threshold: float = Body(
         Settings.kb_settings.SCORE_THRESHOLD,
-        description="知识库匹配相关度阈值，取值范围在0-1之间，SCORE越小，相关度越高，取到1相当于不筛选，建议设置在0.5左右",
+        description="临时文件库距离阈值，取值范围在0-2之间；越小要求匹配越接近，2相当于不筛选",
         ge=0,
         le=2,
     ),

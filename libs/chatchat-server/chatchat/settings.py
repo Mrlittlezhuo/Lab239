@@ -153,8 +153,8 @@ class KBSettings(BaseFileSettings):
     VECTOR_SEARCH_TOP_K: int = 3 # TODO: 与 tool 配置项重复
     """知识库匹配向量数量"""
 
-    SCORE_THRESHOLD: float = 2.0
-    """知识库匹配相关度阈值，取值范围在0-2之间，SCORE越小，相关度越高，取到2相当于不筛选，建议设置在0.5左右"""
+    SCORE_THRESHOLD: float = 0.4
+    """默认检索阈值；永久知识库使用0-1相关度，临时FAISS文件库沿用0-2距离阈值"""
 
     DEFAULT_SEARCH_ENGINE: t.Literal["bing", "duckduckgo", "metaphor", "searx"] = "duckduckgo"
     """默认搜索引擎"""
@@ -473,7 +473,7 @@ class ToolSettings(BaseFileSettings):
     search_local_knowledgebase: dict = {
         "use": False,
         "top_k": 3,
-        "score_threshold": 2.0,
+        "score_threshold": 0.4,
         "conclude_prompt": {
             "with_result": '<指令>根据已知信息，简洁和专业的来回答问题。如果无法从中得到答案，请说 "根据已知信息无法回答该问题"，'
             "不允许在答案中添加编造成分，答案请使用中文。 </指令>\n"
