@@ -134,10 +134,8 @@ MODEL_PLATFORMS:
     auto_detect_model: false
     llm_models:
       - qwen2:7b
-      # - qwen:7b
     embed_models:
       - bge-m3
-      #- quentinz/bge-large-zh-v1.5
     text2image_models: []
     image2text_models: []
     rerank_models: []
