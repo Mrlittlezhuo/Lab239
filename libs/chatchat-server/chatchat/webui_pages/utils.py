@@ -903,6 +903,41 @@ class ApiRequest:
             resp, as_json=True, value_func=lambda r: r.get("data")
         )
 
+    # Agent 运行（agent_run）相关操作 —— 任务 011
+    # 接口直接返回 JSON（无 {"code","data"} 包装）；401/403 抛出 AuthenticationError；
+    # 404 表示「运行不存在或无权访问」（他人运行同样按 404 处理，不泄露存在性）。
+
+    def _agent_run_request(self, method: str, url: str, **kw) -> httpx.Response:
+        fn = getattr(self, method)
+        response = fn(url, retry=1, **kw)
+        if response is None:
+            raise AuthenticationError("无法连接API服务器")
+        self._raise_for_auth(response)
+        return response
+
+    def agent_run_list(
+        self, conversation_id: str = None, limit: int = 20
+    ) -> List[Dict]:
+        """对应 GET /agent-runs，返回当前用户的运行列表（create_time DESC）。"""
+        params = {"limit": limit}
+        if conversation_id:
+            params["conversation_id"] = conversation_id
+        r = self._agent_run_request("get", "/agent-runs", params=params)
+        data = self._get_response_value(r, as_json=True)
+        if isinstance(data, dict):
+            return data.get("runs", [])
+        return data if isinstance(data, list) else []
+
+    def agent_run_detail(self, run_id: str) -> Dict:
+        """对应 GET /agent-runs/{run_id}，返回运行详情与步骤轨迹。"""
+        r = self._agent_run_request("get", f"/agent-runs/{run_id}")
+        return self._get_response_value(r, as_json=True)
+
+    def agent_run_cancel(self, run_id: str) -> Dict:
+        """对应 POST /agent-runs/{run_id}/cancel，取消 pending/running 状态的运行。"""
+        r = self._agent_run_request("post", f"/agent-runs/{run_id}/cancel")
+        return self._get_response_value(r, as_json=True)
+
     # MCP Profile Methods
     def get_mcp_profile(self, **kwargs) -> Dict:
         """

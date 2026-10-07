@@ -125,6 +125,29 @@ async def chat_completions(
         tool_names = [x["function"]["name"] for x in body.tools]
         tool_config = {name: get_tool_config(name) for name in tool_names}
 
+    # 任务 011：extra 中显式开启 agent_run 时，走新的单 Agent 任务闭环
+    # （规划 → 多步工具执行 → 观察 → 判断 → 持久化轨迹）；未开启时保持
+    # 原有 Agent 执行器行为不变。
+    if extra.get("agent_run"):
+        from chatchat.server.agent_run.service import agent_run_chat
+
+        result = await agent_run_chat(
+            query=body.messages[-1]["content"],
+            conversation_id=conversation_id,
+            message_id=message_id,
+            session=session,
+            owner_id=user.id,
+            stream=body.stream,
+            tool_config=tool_config,
+            use_mcp=extra.get("use_mcp", False),
+            model_name=body.model,
+            history_len=Settings.model_settings.HISTORY_LEN,
+            max_steps=extra.get("agent_max_steps"),
+        )
+        if isinstance(result, dict):
+            result["conversation_id"] = conversation_id
+        return result
+
     result = await chat(
         query=body.messages[-1]["content"],
         metadata=extra.get("metadata", {}),

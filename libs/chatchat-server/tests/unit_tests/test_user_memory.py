@@ -1,6 +1,6 @@
 """用户级分层长期记忆离线测试（任务 007）。
 
-全部使用临时 SQLite 数据库（迁移到 v6），不连接模型服务、外部网络或真实
+全部使用临时 SQLite 数据库（迁移到 v7），不连接模型服务、外部网络或真实
 用户数据库；模型相关路径用 mock / 打桩替代。
 
 覆盖任务文档 §8 要求：
@@ -73,14 +73,14 @@ def secret(monkeypatch):
 
 @pytest.fixture
 def temp_user_db(secret, tmp_path):
-    """临时 SQLite 数据库：建全表、迁移到 v6，注册模型元数据。"""
+    """临时 SQLite 数据库：建全表、迁移到 v7，注册模型元数据。"""
     path = tmp_path / "memory_test.db"
     engine = create_engine(f"sqlite:///{path}")
     # 先跑迁移（从空库建表并记录版本），再补建任何迁移未覆盖的模型表
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 6
+    assert current_version(engine.connect()) == 7
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
     engine.dispose()
@@ -205,7 +205,7 @@ class TestMigration:
             assert {
                 "memory_key", "source_conversation_id", "source_message_id"
             }.issubset(memory_columns)
-        assert current_version(engine.connect()) == 6
+        assert current_version(engine.connect()) == 7
         # 迁移仅覆盖 user_account/openai_file/memory/session_summary，
         # conversation/message/knowledge_* 由模型元数据建表
         Base.metadata.create_all(engine)
@@ -254,7 +254,7 @@ class TestMigration:
         with engine.connect() as conn:
             result = apply_migrations(registry, conn)
         assert result.applied == []
-        assert current_version(engine.connect()) == 6
+        assert current_version(engine.connect()) == 7
 
         s = Session()
         try:

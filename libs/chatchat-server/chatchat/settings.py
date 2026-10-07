@@ -324,6 +324,12 @@ class ApiModelSettings(BaseFileSettings):
     TEMPERATURE: float = 0.7
     """LLM通用对话参数"""
 
+    AGENT_MAX_STEPS: int = 8
+    """单 Agent 运行最大步骤数（任务 011）：达到后运行收敛为 failed，不再调用工具"""
+
+    AGENT_RUN_TIMEOUT_SECONDS: int = 600
+    """单 Agent 运行总超时（秒，任务 011）：超过后停止执行并收敛为 failed"""
+
     SUPPORT_AGENT_MODELS: t.List[str] = [
             "chatglm3-6b",
             "glm-4",

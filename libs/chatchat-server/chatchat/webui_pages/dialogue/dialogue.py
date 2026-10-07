@@ -327,11 +327,22 @@ def dialogue_page(
                 "启用Agent", help="请确保选择的模型具备Agent能力", key="use_agent"
             )
             use_mcp = False
+            use_agent_run = False
             # 选择工具
             tools = list_tools(api)
             tool_names = ["None"] + list(tools)
             if use_agent:
                 use_mcp = st.checkbox("使用MCP", key="use_mcp")
+                use_agent_run = st.checkbox(
+                    "启用任务闭环执行（Agent Run）",
+                    help=(
+                        "启用后按单 Agent 任务闭环执行：生成结构化计划 → 多步执行工具 → "
+                        "记录观察结果 → 判断完成或重新规划 → 生成最终回答，执行轨迹会持久化，"
+                        "运行中可用左侧“取消 Agent 运行”按钮取消。请确保所选模型具备规划与 "
+                        "JSON 输出能力。"
+                    ),
+                    key="use_agent_run",
+                )
                 # selected_tools = sac.checkbox(list(tools), format_func=lambda x: tools[x]["title"], label="选择工具",
                 # check_all=True, key="selected_tools")
                 selected_tools = st.multiselect(
@@ -352,6 +363,43 @@ def dialogue_page(
 
             if "None" in selected_tools:
                 selected_tools.remove("None")
+
+            # 任务 011：进行中的 Agent 任务运行（Agent Run）取消入口。
+            # 流式输出期间页面被占用、无法点击控件；点击本按钮会触发页面重跑，
+            # 既中断当前请求（服务端运行收敛到终态），又显式调用取消接口，
+            # 已执行步骤的轨迹保持持久化。
+            _agent_run_state = st.session_state.get("agent_run") or {}
+            if (
+                _agent_run_state.get("run_id")
+                and _agent_run_state.get("status") in ("pending", "running")
+            ):
+                if st.button(
+                    "取消 Agent 运行",
+                    key="agent_run_cancel_btn",
+                    help="请求取消进行中的 Agent 任务运行（已执行步骤会保留）",
+                ):
+                    _cancel_res = None
+                    try:
+                        _cancel_res = api.agent_run_cancel(
+                            _agent_run_state["run_id"]
+                        )
+                    except AuthenticationError:
+                        st.toast("登录已失效，请重新登录")
+                    if isinstance(_cancel_res, dict) and isinstance(
+                        _cancel_res.get("run"), dict
+                    ):
+                        st.session_state["agent_run"]["status"] = (
+                            _cancel_res["run"].get("status", "cancelled")
+                        )
+                        st.toast("已发送取消请求", icon="⏹️")
+                    else:
+                        _detail = (
+                            _cancel_res.get("detail")
+                            if isinstance(_cancel_res, dict)
+                            else None
+                        )
+                        st.toast(_detail or "取消运行失败", icon="⚠️")
+                    rerun()
             # 当不启用Agent时，手动生成工具参数
             # TODO: 需要更精细的控制控件
             tool_input = {}
@@ -558,6 +606,8 @@ def dialogue_page(
             tool_input=tool_input,
             upload_image=upload_image,
             use_mcp=use_mcp,
+            # 任务 011：启用单 Agent 任务闭环（规划→多步执行→观察→判断→持久化轨迹）
+            agent_run=use_agent_run,
         )
         stream = not is_vision_chat
         params = dict(
@@ -573,6 +623,45 @@ def dialogue_page(
         if Settings.model_settings.MAX_TOKENS:
             params["max_tokens"] = Settings.model_settings.MAX_TOKENS
 
+        # 任务 011：Agent 任务闭环（Agent Run）的流式事件展示辅助
+        # （运行/计划/步骤/重规划/终态），同时把轨迹同步到 session_state，
+        # 供侧边栏“取消 Agent 运行”按钮读取 run_id 与状态。
+        agent_tl = {
+            "run_id": None,
+            "plan": None,
+            "steps": {},
+            "status": None,
+            "final": "",
+        }
+        agent_announced = False  # run_created 会触发两次（pending/running），只提示一次
+
+        def _agent_chunk_content(d):
+            try:
+                return d.choices[0].delta.content or ""
+            except Exception:
+                return getattr(d, "content", "") or ""
+
+        def _agent_step_seq(step):
+            seq = (step or {}).get("seq")
+            if seq is None:
+                seq = len(agent_tl["steps"]) + 1
+            return seq
+
+        def _agent_step_line(step, state):
+            icon = {
+                "completed": "✅",
+                "failed": "❌",
+                "running": "⏳",
+                "cancelled": "⏹️",
+            }.get(state, "•")
+            line = f"{icon} 第 {step.get('seq')} 步：{step.get('goal') or ''}"
+            if step.get("tool_name"):
+                line += f"（工具 `{step['tool_name']}`）"
+            return line
+
+        def _agent_sync_state():
+            st.session_state["agent_run"] = dict(agent_tl)
+
         if stream:
             try:
                 for d in client.chat.completions.create(**params):
@@ -587,6 +676,105 @@ def dialogue_page(
                     if not started:
                         chat_box.update_msg("", streaming=False)
                         started = True
+
+                    # 任务 011：单 Agent 任务闭环事件。Agent 事件的 status 为
+                    # None，必须先于下方 status 分支处理，否则会落入普通内容
+                    # 分支把事件内容当作文本追加。
+                    agent_event = getattr(d, "agent_event", None)
+                    if agent_event:
+                        if getattr(d, "run_id", None):
+                            agent_tl["run_id"] = d.run_id
+                        content = _agent_chunk_content(d)
+                        if agent_event == "run_created":
+                            agent_tl["status"] = "running"
+                            _agent_sync_state()
+                            if not agent_announced:
+                                agent_announced = True
+                                st.info("Agent 任务运行已启动", icon="🤖")
+                        elif agent_event == "plan_ready":
+                            plan = getattr(d, "agent_plan", None) or {}
+                            agent_tl["plan"] = plan
+                            _agent_sync_state()
+                            plan_steps = plan.get("steps") or []
+                            plan_title = "执行计划" + (
+                                f"（{plan['summary']}）" if plan.get("summary") else ""
+                            )
+                            with st.expander(plan_title, expanded=False):
+                                if plan.get("direct_answer") and not plan_steps:
+                                    st.markdown("无需执行工具，将直接回答。")
+                                for i, p in enumerate(plan_steps, 1):
+                                    try:
+                                        args_txt = json.dumps(
+                                            p.get("args") or {}, ensure_ascii=False
+                                        )
+                                    except Exception:
+                                        args_txt = str(p.get("args"))
+                                    st.markdown(
+                                        f"{i}. **{p.get('goal') or ''}** "
+                                        f"（工具 `{p.get('tool') or ''}`，参数 `{args_txt}`）"
+                                    )
+                        elif agent_event == "step_started":
+                            step = dict(getattr(d, "agent_step", None) or {})
+                            step["status"] = "running"
+                            agent_tl["steps"][_agent_step_seq(step)] = step
+                            _agent_sync_state()
+                            if step.get("type") == "answer":
+                                st.markdown("⏳ 正在生成最终回答…")
+                            else:
+                                st.markdown(_agent_step_line(step, "running"))
+                        elif agent_event == "step_finished":
+                            step = dict(getattr(d, "agent_step", None) or {})
+                            agent_tl["steps"][_agent_step_seq(step)] = step
+                            _agent_sync_state()
+                            state = step.get("status") or "completed"
+                            st.markdown(_agent_step_line(step, state))
+                            detail = step.get("output_summary") or step.get(
+                                "error_summary"
+                            )
+                            if step.get("type") == "answer" and detail:
+                                agent_tl["final"] = detail
+                            if state == "failed":
+                                st.warning(detail or "步骤执行失败")
+                            elif detail:
+                                with st.expander("步骤输出摘要", expanded=False):
+                                    st.code(detail, language=None)
+                        elif agent_event == "replanned":
+                            new_steps = getattr(d, "agent_steps", None) or []
+                            for s in new_steps:
+                                if isinstance(s, dict):
+                                    agent_tl["steps"][_agent_step_seq(s)] = s
+                            _agent_sync_state()
+                            st.markdown(f"🔁 重新规划：新增 {len(new_steps)} 个步骤")
+                            for s in new_steps:
+                                if isinstance(s, dict):
+                                    st.markdown(_agent_step_line(s, "pending"))
+                        elif agent_event in (
+                            "run_completed",
+                            "run_failed",
+                            "run_cancelled",
+                        ):
+                            agent_tl["status"] = agent_event.split("_", 1)[1]
+                            if agent_event == "run_completed":
+                                agent_tl["final"] = content
+                            _agent_sync_state()
+                            if agent_event == "run_completed":
+                                chat_box.update_msg(
+                                    (content or "").replace("\n", "\n\n"),
+                                    streaming=False,
+                                    metadata=metadata,
+                                )
+                                st.success("任务执行完成")
+                            elif agent_event == "run_failed":
+                                chat_box.update_msg(
+                                    content, streaming=False, metadata=metadata
+                                )
+                                st.error(content or "Agent 运行失败")
+                            else:
+                                chat_box.update_msg(
+                                    content, streaming=False, metadata=metadata
+                                )
+                                st.warning(content or "Agent 运行已取消")
+                        continue
 
                     if d.status == AgentStatus.error:
                         st.error(d.choices[0].delta.content)
@@ -662,7 +850,44 @@ def dialogue_page(
         else:
             try:
                 d =client.chat.completions.create(**params)
-                chat_box.update_msg(d.choices[0].message.content or "", streaming=False)
+                if getattr(d, "class_name", None) == "AgentRunResult":
+                    # 任务 011：非流式 Agent 任务闭环结果（如图片对话）
+                    content = ""
+                    if d.choices:
+                        content = d.choices[0].message.content or ""
+                    content = content or (getattr(d, "content", "") or "")
+                    run = getattr(d, "agent_run", None) or {}
+                    run_steps = {
+                        s.get("seq"): s
+                        for s in (run.get("steps") or [])
+                        if isinstance(s, dict)
+                    }
+                    st.session_state["agent_run"] = {
+                        "run_id": run.get("run_id"),
+                        "plan": run.get("plan"),
+                        "steps": run_steps,
+                        "status": run.get("status"),
+                        "final": run.get("final_result") or content,
+                    }
+                    if run:
+                        with st.expander("执行轨迹", expanded=False):
+                            plan = run.get("plan") or {}
+                            if plan.get("summary"):
+                                st.markdown(f"计划：{plan['summary']}")
+                            for s in (run.get("steps") or []):
+                                if isinstance(s, dict):
+                                    state = s.get("status") or "completed"
+                                    line = _agent_step_line(s, state)
+                                    st.markdown(line)
+                                    detail = s.get("output_summary") or s.get(
+                                        "error_summary"
+                                    )
+                                    if detail:
+                                        with st.expander("步骤详情", expanded=False):
+                                            st.code(detail, language=None)
+                    chat_box.update_msg(content, streaming=False)
+                else:
+                    chat_box.update_msg(d.choices[0].message.content or "", streaming=False)
             except Exception as e:
                 st.error(e.body)
 

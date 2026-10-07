@@ -15,6 +15,9 @@
 - v6（任务 007）：新增用户级分层长期记忆表 ``memory`` 与短期会话摘要表
   ``session_summary``；长期记忆按用户隔离、独立于 conversation/message，
   不进入公共知识库；会话摘要记录"已摘要到的位置"以支持增量摘要。
+- v7（任务 011）：新增单 Agent 运行表 ``agent_run`` 与步骤表 ``agent_step``；
+  运行/步骤按 ``owner_id`` 隔离，仅保存结构化计划、工具行为、观察摘要与
+  用户可见状态，不保存模型隐藏思维链。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -283,6 +286,76 @@ def _v6_user_memory(conn: Connection) -> None:
             )
 
 
+_AGENT_RUN_TABLE = """
+CREATE TABLE IF NOT EXISTS agent_run (
+    id VARCHAR(32) PRIMARY KEY,
+    owner_id VARCHAR(32) NOT NULL,
+    conversation_id VARCHAR(32),
+    source_message_id VARCHAR(32),
+    goal VARCHAR(2000) NOT NULL,
+    plan_text VARCHAR(8000) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    current_step INTEGER NOT NULL DEFAULT 0,
+    max_steps INTEGER NOT NULL DEFAULT 8,
+    final_result VARCHAR(8000),
+    error VARCHAR(1000),
+    create_time TIMESTAMP,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+    CHECK (current_step >= 0),
+    CHECK (max_steps >= 1)
+)
+"""
+
+_AGENT_STEP_TABLE = """
+CREATE TABLE IF NOT EXISTS agent_step (
+    id VARCHAR(32) PRIMARY KEY,
+    run_id VARCHAR(32) NOT NULL,
+    seq INTEGER NOT NULL,
+    type VARCHAR(16) NOT NULL DEFAULT 'tool_call',
+    status VARCHAR(16) NOT NULL DEFAULT 'running',
+    goal VARCHAR(500) NOT NULL DEFAULT '',
+    tool_name VARCHAR(128),
+    tool_input VARCHAR(2000),
+    output_summary VARCHAR(2000),
+    error_summary VARCHAR(1000),
+    create_time TIMESTAMP,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    UNIQUE (run_id, seq),
+    CHECK (type IN ('tool_call', 'answer')),
+    CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
+    CHECK (seq >= 1)
+)
+"""
+
+_AGENT_RUN_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_agent_run_owner_id ON agent_run (owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_agent_run_owner_conv ON agent_run (owner_id, conversation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_agent_step_run_id ON agent_step (run_id)",
+]
+
+
+def _v7_agent_run(conn: Connection) -> None:
+    """v7：新增单 Agent 运行/步骤表（任务 011）。
+
+    - ``agent_run``：一次单 Agent 闭环运行（目标、结构化计划文本、状态、
+      当前步骤、最终结果/错误、起止时间）；``owner_id`` 来自服务端认证
+      上下文，查询/取消/读取一律按所有者限定。
+    - ``agent_step``：运行内逐步持久化的执行轨迹（工具/回答步骤、状态、
+      工具名与结构化输入、截断后的观察/错误摘要）；仅保存结构化计划、
+      工具行为、观察摘要与用户可见状态，不保存模型隐藏思维链。
+    - 仅 schema，不动既有 user/conversation/message/记忆/知识库表，
+      不重建向量索引；重复执行安全（IF NOT EXISTS）。
+    - 失败即回滚且版本不记录（由迁移框架保证）。
+    """
+    conn.execute(text(_AGENT_RUN_TABLE))
+    conn.execute(text(_AGENT_STEP_TABLE))
+    for stmt in _AGENT_RUN_INDEXES:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -290,6 +363,7 @@ _MIGRATIONS = [
     (4, "openai_file", _v4_openai_file),
     (5, "legacy_conversation_owner", _v5_legacy_conversation_owner),
     (6, "user_memory", _v6_user_memory),
+    (7, "agent_run", _v7_agent_run),
 ]
 
 
