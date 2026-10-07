@@ -1,0 +1,3 @@
+# 本地下载的论文 PDF 与临时下载文件不纳入版本库（任务 009/010 要求）
+documents/*.pdf
+documents/*.part
