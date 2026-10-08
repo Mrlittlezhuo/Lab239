@@ -125,6 +125,9 @@ def validate_route_result(raw: Any, available_tools: Any) -> RouteResult:
         raw_tools = list(raw.candidate_tools or [])
         confidence = _clamp_confidence(raw.confidence)
         summary = str(raw.summary or "")
+        provider = str(raw.provider or "")
+        source = str(raw.source or "")
+        fallback_reason = str(raw.fallback_reason or "")
     elif isinstance(raw, dict):
         path = str(raw.get("path") or "").strip().lower()
         intent = str(raw.get("intent") or "").strip().lower()
@@ -132,6 +135,9 @@ def validate_route_result(raw: Any, available_tools: Any) -> RouteResult:
         raw_tools = [str(t) for t in (raw.get("candidate_tools") or [])]
         confidence = _clamp_confidence(raw.get("confidence"))
         summary = str(raw.get("summary") or "")
+        provider = str(raw.get("provider") or "")
+        source = str(raw.get("source") or "")
+        fallback_reason = str(raw.get("fallback_reason") or "")
     else:
         raise RouteError(
             f"路由结果必须是 dict 或 RouteResult，实际为 {type(raw).__name__}"
@@ -172,6 +178,9 @@ def validate_route_result(raw: Any, available_tools: Any) -> RouteResult:
         candidate_tools=tools,
         confidence=confidence,
         summary=summary[:SUMMARY_MAX_CHARS],
+        provider=provider,
+        source=source,
+        fallback_reason=fallback_reason,
     )
 
 

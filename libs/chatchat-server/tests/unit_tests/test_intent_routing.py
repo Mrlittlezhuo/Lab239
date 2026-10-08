@@ -67,6 +67,8 @@ from chatchat.server.intent_router import (
     PATH_DIRECT,
     IntentProvider,
     IntentRouter,
+    FastJevIntentProvider,
+    FallbackIntentProvider,
     LlmIntentProvider,
     RouteContext,
     RouteError,
@@ -557,6 +559,93 @@ class TestLlmIntentProvider:
         p = LlmIntentProvider(llm)
         p.route(RouteContext(query="q", available_tools={}))
         assert "当前没有可用工具" in llm.calls[0][0][1]
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload, status_error=None):
+        self.payload = payload
+        self.status_error = status_error
+
+    def raise_for_status(self):
+        if self.status_error:
+            raise self.status_error
+
+    def json(self):
+        return self.payload
+
+
+class _FakeHttpClient:
+    def __init__(self, payload=None, raises=None):
+        self.payload = payload
+        self.raises = raises
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if self.raises:
+            raise self.raises
+        return _FakeHttpResponse(self.payload)
+
+
+class TestFastJevIntentProvider:
+    def test_kb_route_and_tool_selection(self):
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {
+                    "choice": "kb_search",
+                    "probabilities": {"kb_search": 0.91},
+                },
+                "primary_tool": {
+                    "type": "choice",
+                    "choice": "search_local_knowledgebase",
+                    "probabilities": {"search_local_knowledgebase": 0.88},
+                },
+                "secondary_tool": {
+                    "type": "choice",
+                    "choice": "none",
+                    "probabilities": {"none": 0.9},
+                },
+            }
+        })
+        provider = FastJevIntentProvider(
+            "http://127.0.0.1:8811", "model", http_client=client
+        )
+        result = provider.route(RouteContext(
+            query="查知识库",
+            available_tools={"search_local_knowledgebase": FakeTool("kb", "知识库")},
+        ))
+        assert result.path == PATH_AGENT_RUN
+        assert result.intent == INTENT_KB_SEARCH
+        assert result.candidate_tools == ["search_local_knowledgebase"]
+        assert result.confidence == 0.91
+        assert client.calls[0][0].endswith("/v1/systemone")
+
+    def test_direct_route_ignores_tools(self):
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {
+                    "choice": "general",
+                    "probabilities": {"general": 0.8},
+                }
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(query="解释概念", available_tools={})
+        )
+        assert result.path == PATH_DIRECT
+        assert result.provider == "fastjev"
+
+    def test_service_failure_falls_back_to_llm(self):
+        primary = FastJevIntentProvider(
+            "http://local", "model", http_client=_FakeHttpClient(raises=OSError("down"))
+        )
+        fallback = FixedRouteProvider(RouteResult(path=PATH_DIRECT, intent=INTENT_GENERAL))
+        fallback.name = "llm"
+        result = FallbackIntentProvider(primary, fallback).route(
+            RouteContext(query="解释概念")
+        )
+        assert result.path == PATH_DIRECT
+        assert result.provider == "llm"
 
 
 # ---------------------------------------------------------------------------

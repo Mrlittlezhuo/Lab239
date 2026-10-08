@@ -339,6 +339,21 @@ class ApiModelSettings(BaseFileSettings):
     AUTO_ROUTE_USE_MCP: bool = False
     """自动路由是否把 MCP 工具纳入候选（任务 012）：默认关闭，MCP 仍可由手动调试开关启用"""
 
+    AUTO_ROUTE_PROVIDER: str = "fastjev"
+    """自动意图路由来源：fastjev 优先使用本机分类服务并在失败时回退现有 LLM；llm 仅使用现有 LLM"""
+
+    FASTJEV_BASE_URL: str = "http://127.0.0.1:8811"
+    """本机 FastJev System One API 地址"""
+
+    FASTJEV_MODEL: str = "fastjev-qwen3.5-4b-q4-k-m"
+    """FastJev 服务发布的模型名称"""
+
+    FASTJEV_TIMEOUT_SECONDS: float = 8.0
+    """单次 FastJev HTTP 请求超时（秒）"""
+
+    FASTJEV_TOOL_THRESHOLD: float = 0.0
+    """FastJev 工具选项最低概率；默认接受模型选出的非 none 工具"""
+
     SUPPORT_AGENT_MODELS: t.List[str] = [
             "chatglm3-6b",
             "glm-4",

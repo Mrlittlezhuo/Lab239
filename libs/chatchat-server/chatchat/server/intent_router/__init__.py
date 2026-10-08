@@ -7,6 +7,8 @@
 """
 
 from .providers import (
+    FallbackIntentProvider,
+    FastJevIntentProvider,
     IntentProvider,
     LlmIntentProvider,
     RouteContext,
@@ -31,6 +33,8 @@ from .schemas import (
 __all__ = [
     "IntentProvider",
     "LlmIntentProvider",
+    "FastJevIntentProvider",
+    "FallbackIntentProvider",
     "RouteContext",
     "rule_fast_path",
     "IntentRouter",

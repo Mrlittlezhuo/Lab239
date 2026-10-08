@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 from chatchat.server.utils import build_logger
 
 from .providers import (
+    FallbackIntentProvider,
+    FastJevIntentProvider,
     IntentProvider,
     LlmIntentProvider,
     RouteContext,
@@ -120,7 +122,7 @@ class IntentRouter:
             and result.confidence < self.min_confidence
         ):
             logger.info(
-                "意图路由置信度 %.2f 低于阈值 %.2f，回退直接回答",
+                "意图路由置信度 {:.2f} 低于阈值 {:.2f}，回退直接回答",
                 result.confidence,
                 self.min_confidence,
             )
@@ -151,7 +153,7 @@ class IntentRouter:
         try:
             if result.source == "fallback":
                 logger.warning(
-                    "意图路由回退：provider=%s, path=%s, reason=%s, query_len=%d",
+                    "意图路由回退：provider={}, path={}, reason={}, query_len={}",
                     result.provider,
                     result.path,
                     result.fallback_reason,
@@ -159,8 +161,8 @@ class IntentRouter:
                 )
             else:
                 logger.info(
-                    "意图路由：provider=%s, path=%s, intent=%s, tools=%s, "
-                    "confidence=%s, query_len=%d",
+                    "意图路由：provider={}, path={}, intent={}, tools={}, "
+                    "confidence={}, query_len={}",
                     result.provider,
                     result.path,
                     result.intent,
@@ -177,9 +179,8 @@ def build_router(
 ) -> IntentRouter:
     """按当前配置构建路由器。
 
-    ``provider`` 缺省时使用现有 ``get_ChatOpenAI`` 模型路径构建
-    ``LlmIntentProvider``（与任务 011 规划器同一模型来源）；调用方
-    也可注入自定义 provider（如后续 FastJev）而无需改动其他模块。
+    ``provider`` 缺省时按 ``AUTO_ROUTE_PROVIDER`` 构建。FastJev 模式
+    优先访问本机服务，调用失败时自动回退现有 LLM provider。
     """
     model_settings = None
     try:
@@ -195,11 +196,23 @@ def build_router(
     if provider is None:
         from chatchat.server.utils import get_ChatOpenAI
 
+        llm_provider = None
         try:
-            provider = LlmIntentProvider(get_ChatOpenAI())
+            llm_provider = LlmIntentProvider(get_ChatOpenAI())
         except Exception as exc:
-            logger.warning("构建 LLM 路由 provider 失败，将统一回退直接回答：%s", exc)
-            provider = None
+            logger.warning("构建 LLM 路由 provider 失败，将统一回退直接回答：{}", exc)
+
+        provider_name = str(getattr(model_settings, "AUTO_ROUTE_PROVIDER", "llm")).lower()
+        if provider_name == "fastjev":
+            primary = FastJevIntentProvider(
+                getattr(model_settings, "FASTJEV_BASE_URL", "http://127.0.0.1:8811"),
+                getattr(model_settings, "FASTJEV_MODEL", "fastjev-qwen3.5-4b-q4-k-m"),
+                timeout_seconds=getattr(model_settings, "FASTJEV_TIMEOUT_SECONDS", 8.0),
+                tool_threshold=getattr(model_settings, "FASTJEV_TOOL_THRESHOLD", 0.0),
+            )
+            provider = FallbackIntentProvider(primary, llm_provider)
+        else:
+            provider = llm_provider
 
     return IntentRouter(provider, timeout_seconds=timeout, min_confidence=min_confidence)
 
@@ -227,12 +240,12 @@ def route_auto_agent(
         try:
             router = build_router()
         except Exception as exc:
-            logger.warning("构建意图路由器失败，回退直接回答：%s", exc)
+            logger.warning("构建意图路由器失败，回退直接回答：{}", exc)
             return _fallback_result("", f"路由器构建失败：{exc}")
     try:
         return router.route(ctx)
     except Exception as exc:
-        logger.warning("意图路由意外异常，回退直接回答：%s", exc)
+        logger.warning("意图路由意外异常，回退直接回答：{}", exc)
         return _fallback_result(router.provider_name, f"路由意外异常：{exc}")
 
 
