@@ -348,11 +348,17 @@ class ApiModelSettings(BaseFileSettings):
     FASTJEV_MODEL: str = "fastjev-qwen3.5-4b-q4-k-m"
     """FastJev 服务发布的模型名称"""
 
-    FASTJEV_TIMEOUT_SECONDS: float = 8.0
-    """单次 FastJev HTTP 请求超时（秒）"""
+    FASTJEV_TIMEOUT_SECONDS: float = 12.0
+    """单次 FastJev HTTP 请求超时（秒）。本机实测推理延迟约 7~8s，8s 过于贴线
+    （偶发超时触发 LLM 兜底），12s 留出余量"""
 
     FASTJEV_TOOL_THRESHOLD: float = 0.0
     """FastJev 工具选项最低概率；默认接受模型选出的非 none 工具"""
+
+    FASTJEV_PROMOTION_THRESHOLD: float = 0.9
+    """FastJev 工具头提升阈值：意图头判 general/unknown 时，primary_tool 头对
+    某具体工具得分达到该值则提升为 Agent 工具调用（修复"明确要求用工具"被
+    系统性误判为普通对话的问题）；设为 1.0 可关闭提升"""
 
     SUPPORT_AGENT_MODELS: t.List[str] = [
             "chatglm3-6b",

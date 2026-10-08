@@ -207,8 +207,11 @@ def build_router(
             primary = FastJevIntentProvider(
                 getattr(model_settings, "FASTJEV_BASE_URL", "http://127.0.0.1:8811"),
                 getattr(model_settings, "FASTJEV_MODEL", "fastjev-qwen3.5-4b-q4-k-m"),
-                timeout_seconds=getattr(model_settings, "FASTJEV_TIMEOUT_SECONDS", 8.0),
+                timeout_seconds=getattr(model_settings, "FASTJEV_TIMEOUT_SECONDS", 12.0),
                 tool_threshold=getattr(model_settings, "FASTJEV_TOOL_THRESHOLD", 0.0),
+                promotion_threshold=getattr(
+                    model_settings, "FASTJEV_PROMOTION_THRESHOLD", 0.9
+                ),
             )
             provider = FallbackIntentProvider(primary, llm_provider)
         else:

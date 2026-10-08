@@ -189,14 +189,16 @@ class FastJevIntentProvider(IntentProvider):
         base_url: str,
         model: str,
         *,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 12.0,
         tool_threshold: float = 0.0,
+        promotion_threshold: float = 0.9,
         http_client: Any = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = max(1.0, float(timeout_seconds))
         self.tool_threshold = min(1.0, max(0.0, float(tool_threshold)))
+        self.promotion_threshold = min(1.0, max(0.0, float(promotion_threshold)))
         self.http_client = http_client or httpx.Client(trust_env=False)
 
     def route(self, ctx: RouteContext) -> RouteResult:
@@ -222,6 +224,32 @@ class FastJevIntentProvider(IntentProvider):
             raise RouteError(f"FastJev 返回结构非法：{exc}") from exc
 
         if intent in ("general", "unknown"):
+            # 工具头提升：意图头会把"明确要求调用工具"的请求（如"联网搜索
+            # X"）系统性误判为 general，而同一请求的 primary_tool 头往往给
+            # 对应工具打出高分（如 search_internet 0.96）。工具头得分达到
+            # 阈值时信任工具头、提升为 Agent 调用，避免真实工具请求被漏掉；
+            # 未达阈值维持直接回答，避免闲聊被提升进 Agent。
+            primary = self._tool_answer(answers, "primary_tool")
+            if (
+                primary is not None
+                and primary[0] in offered_tools
+                and primary[1] >= self.promotion_threshold
+            ):
+                tool_name, score = primary
+                result = RouteResult(
+                    path="agent_run",
+                    intent="single_tool",
+                    complexity="single",
+                    candidate_tools=[tool_name],
+                    confidence=score,
+                    summary=(
+                        f"意图头判为{intent}，但工具头给 {tool_name} "
+                        f"高分 {score:.2f}，提升为 Agent 工具调用"
+                    ),
+                    provider=self.name,
+                    source=self.name,
+                )
+                return validate_route_result(result, ctx.available_tools)
             return RouteResult(
                 path=PATH_DIRECT,
                 intent=intent,
@@ -235,15 +263,12 @@ class FastJevIntentProvider(IntentProvider):
         selected: List[str] = []
         tool_scores: Dict[str, float] = {}
         for question_id in ("primary_tool", "secondary_tool"):
-            try:
-                answer = answers[question_id]
-                tool_name = str(answer["choice"])
-                score = float(answer["probabilities"][tool_name])
-            except (KeyError, TypeError, ValueError):
+            picked = self._tool_answer(answers, question_id)
+            if picked is None:
                 continue
+            tool_name, score = picked
             if (
-                tool_name != "none"
-                and tool_name in offered_tools
+                tool_name in offered_tools
                 and tool_name not in selected
                 and score >= self.tool_threshold
             ):
@@ -262,17 +287,50 @@ class FastJevIntentProvider(IntentProvider):
         else:
             normalized_intent = "complex"
 
+        # 工具头置信度托底：意图头对"明确要求调用工具"的请求系统性低估
+        # （如"搜索互联网上关于X的最新论文"意图头只给 complex 0.46，而工具头
+        # 给 search_internet 0.96），低分会被路由器低置信度护栏降级为直接
+        # 回答。工具头对某具体工具给出达到提升阈值的得分时，用工具头得分
+        # 托底整体置信度；工具头未达阈值时保持意图头原分，交由护栏处置。
+        backed_confidence = max(
+            confidence,
+            max(
+                (
+                    score
+                    for score in tool_scores.values()
+                    if score >= self.promotion_threshold
+                ),
+                default=0.0,
+            ),
+        )
+
         result = RouteResult(
             path="agent_run",
             intent=normalized_intent,
             complexity="multi" if normalized_intent == "complex" and len(selected) > 1 else "single",
             candidate_tools=selected,
-            confidence=confidence,
+            confidence=backed_confidence,
             summary="FastJev 判断需要 Agent 调用工具",
             provider=self.name,
             source=self.name,
         )
         return validate_route_result(result, ctx.available_tools)
+
+    @staticmethod
+    def _tool_answer(answers: Dict[str, Any], question_id: str) -> Optional[tuple[str, float]]:
+        """读取某工具题（primary_tool / secondary_tool）的选中工具及其概率。
+
+        缺失、格式非法或选择 none 时返回 None。
+        """
+        try:
+            answer = answers[question_id]
+            tool_name = str(answer["choice"])
+            score = float(answer["probabilities"][tool_name])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if tool_name == "none":
+            return None
+        return tool_name, score
 
     def _payload(self, ctx: RouteContext) -> tuple[Dict[str, Any], set[str]]:
         questions: Dict[str, Any] = {

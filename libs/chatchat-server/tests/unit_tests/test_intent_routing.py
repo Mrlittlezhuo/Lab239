@@ -647,6 +647,153 @@ class TestFastJevIntentProvider:
         assert result.path == PATH_DIRECT
         assert result.provider == "llm"
 
+    # -- 工具头提升规则（修复"联网搜索"类请求被意图头误判为 general 的问题） --
+
+    def test_general_intent_promoted_by_high_tool_score(self):
+        """意图头判 general 但工具头给具体工具高分 → 提升为 agent_run。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.96},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(
+                query="帮我联网搜索一下X",
+                available_tools={"search_internet": FakeTool("web", "联网搜索")},
+            )
+        )
+        assert result.path == PATH_AGENT_RUN
+        assert result.intent == INTENT_SINGLE_TOOL
+        assert result.candidate_tools == ["search_internet"]
+        assert result.complexity == "single"
+        assert result.confidence == 0.96
+        assert result.provider == "fastjev"
+
+    def test_general_intent_below_promotion_threshold_stays_direct(self):
+        """工具头得分低于阈值 → 维持直接回答，避免闲聊被提升进 Agent。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.5},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(
+                query="随便聊聊",
+                available_tools={"search_internet": FakeTool("web", "联网搜索")},
+            )
+        )
+        assert result.path == PATH_DIRECT
+        assert result.candidate_tools == []
+
+    def test_promotion_requires_tool_offered(self):
+        """高分工具不在可用列表内 → 不提升（不编造工具）。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.97},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(query="帮我联网搜索一下X", available_tools={})
+        )
+        assert result.path == PATH_DIRECT
+        assert result.candidate_tools == []
+
+    def test_unknown_intent_promoted_by_high_tool_score(self):
+        """意图头判 unknown 但工具头高分 → 同样提升。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "unknown", "probabilities": {"unknown": 0.7}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.95},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(
+                query="查一下最新进展",
+                available_tools={"search_internet": FakeTool("web", "联网搜索")},
+            )
+        )
+        assert result.path == PATH_AGENT_RUN
+        assert result.candidate_tools == ["search_internet"]
+
+    def test_promotion_disabled_at_threshold_one(self):
+        """阈值设为 1.0 时关闭提升（任何 <1.0 的得分都不触发）。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.96},
+                },
+            }
+        })
+        provider = FastJevIntentProvider(
+            "http://local", "model", http_client=client, promotion_threshold=1.0
+        )
+        result = provider.route(RouteContext(
+            query="帮我联网搜索一下X",
+            available_tools={"search_internet": FakeTool("web", "联网搜索")},
+        ))
+        assert result.path == PATH_DIRECT
+
+    # -- 工具头置信度托底（非 general/unknown 意图分支） --
+
+    def test_low_intent_confidence_backed_by_high_tool_score(self):
+        """意图头低分（complex 0.46）但工具头高分（0.95）→ 置信度托底到工具头，
+        不再被路由器低置信度护栏降级。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "complex", "probabilities": {"complex": 0.46}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.95},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(
+                query="搜索互联网上关于X的最新论文",
+                available_tools={"search_internet": FakeTool("web", "联网搜索")},
+            )
+        )
+        assert result.path == PATH_AGENT_RUN
+        assert result.candidate_tools == ["search_internet"]
+        assert result.confidence == 0.95
+
+    def test_low_intent_confidence_unbacked_below_threshold(self):
+        """工具头得分低于提升阈值 → 置信度保持意图头原分，交由路由器护栏。"""
+        client = _FakeHttpClient({
+            "answers": {
+                "intent": {"choice": "complex", "probabilities": {"complex": 0.4}},
+                "primary_tool": {
+                    "choice": "search_internet",
+                    "probabilities": {"search_internet": 0.8},
+                },
+            }
+        })
+        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
+            RouteContext(
+                query="搜索一下X",
+                available_tools={"search_internet": FakeTool("web", "联网搜索")},
+            )
+        )
+        assert result.path == PATH_AGENT_RUN
+        assert result.confidence == 0.4
+
 
 # ---------------------------------------------------------------------------
 # 4. IntentRouter：异常 / 超时 / 低置信度统一回退
