@@ -330,6 +330,15 @@ class ApiModelSettings(BaseFileSettings):
     AGENT_RUN_TIMEOUT_SECONDS: int = 600
     """单 Agent 运行总超时（秒，任务 011）：超过后停止执行并收敛为 failed"""
 
+    AUTO_ROUTE_TIMEOUT_SECONDS: int = 20
+    """自动意图路由总超时（秒，任务 012）：超过后回退直接回答，不阻断对话"""
+
+    AUTO_ROUTE_MIN_CONFIDENCE: t.Optional[float] = 0.5
+    """自动意图路由的最小置信度（任务 012）：Agent Run 判定低于该值时回退直接回答；None 表示不做置信度检查"""
+
+    AUTO_ROUTE_USE_MCP: bool = False
+    """自动路由是否把 MCP 工具纳入候选（任务 012）：默认关闭，MCP 仍可由手动调试开关启用"""
+
     SUPPORT_AGENT_MODELS: t.List[str] = [
             "chatglm3-6b",
             "glm-4",

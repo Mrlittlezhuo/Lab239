@@ -17,7 +17,7 @@
 | 009 | [RAG 与长期记忆公开论文语料采集](./009-RAG与长期记忆公开论文语料采集.md) | `completed` | `50f68ae9ba239b3e0338696be447fc3fa489f77e` |
 | 010 | [公开论文语料采集补全](./010-公开论文语料采集补全.md) | `completed` | `ccb3b9222825f463031cba8762feb9b3772e2d3a` |
 | 011 | [第一版单 Agent 任务闭环](./011-第一版单Agent任务闭环.md) | `completed` | `55a6c228d6bc7e10b6619d3ccbfe242c0a74f397` |
-| 012 | [智能意图路由与自动 Agent](./012-智能意图路由与自动Agent.md) | `ready_for_claude` | `c7068b9a7de4cc5f9bdce721910d05f10222fb71` |
+| 012 | [智能意图路由与自动 Agent](./012-智能意图路由与自动Agent.md) | `completed` | `c7068b9a7de4cc5f9bdce721910d05f10222fb71` |
 
 状态以具体任务文档为准。如果索引和任务文档不一致，Codex 应先核对 Git 历史和工作区，再修正索引。
 

@@ -323,15 +323,32 @@ def dialogue_page(
         tab1, tab2 = st.tabs(["工具设置", "会话设置"])
 
         with tab1:
-            use_agent = st.checkbox(
-                "启用Agent", help="请确保选择的模型具备Agent能力", key="use_agent"
+            # 任务 012：三类对话模式。默认「自动 Agent」是面向普通用户的主
+            # 入口，无需手动选择工具；「普通对话」不做自动工具路由；
+            # 「手动调试」保留现有工具多选 / MCP / Agent Run 手动控件。
+            dialogue_mode = st.radio(
+                "对话模式",
+                ["自动 Agent（推荐）", "普通对话", "手动调试"],
+                index=0,
+                horizontal=True,
+                key="dialogue_mode",
+                help=(
+                    "自动 Agent：系统自动判断直接回答还是进入 Agent 执行（可调用工具）；"
+                    "普通对话：仅直接聊天，不做工具路由；"
+                    "手动调试：手动选择工具 / MCP / Agent Run，用于调试。"
+                ),
             )
+            auto_agent = dialogue_mode == "自动 Agent（推荐）"
+            use_agent = dialogue_mode == "手动调试"
             use_mcp = False
             use_agent_run = False
             # 选择工具
             tools = list_tools(api)
             tool_names = ["None"] + list(tools)
-            if use_agent:
+            if auto_agent:
+                selected_tools = []
+                st.caption("自动模式会由系统判断是否使用工具，无需手动选择。")
+            elif use_agent:
                 use_mcp = st.checkbox("使用MCP", key="use_mcp")
                 use_agent_run = st.checkbox(
                     "启用任务闭环执行（Agent Run）",
@@ -608,6 +625,8 @@ def dialogue_page(
             use_mcp=use_mcp,
             # 任务 011：启用单 Agent 任务闭环（规划→多步执行→观察→判断→持久化轨迹）
             agent_run=use_agent_run,
+            # 任务 012：自动 Agent 模式触发服务端意图路由（直接回答 / Agent Run）
+            auto_agent=auto_agent,
         )
         stream = not is_vision_chat
         params = dict(
@@ -676,6 +695,22 @@ def dialogue_page(
                     if not started:
                         chat_box.update_msg("", streaming=False)
                         started = True
+
+                    # 任务 012：自动意图路由结果事件（流式响应首条）。
+                    # 只展示简短的路径与意图名称（如「Agent 执行 · 知识库检索」），
+                    # 不展示模型隐藏推理过程。
+                    route_result = getattr(d, "route_result", None)
+                    if route_result:
+                        _path = route_result.get("path_label") or route_result.get("path")
+                        _intent = (
+                            route_result.get("intent_label") or route_result.get("intent")
+                        )
+                        _summary = route_result.get("summary") or ""
+                        st.caption(
+                            f"🧭 {_path} · {_intent}"
+                            + (f"：{_summary}" if _summary else "")
+                        )
+                        continue
 
                     # 任务 011：单 Agent 任务闭环事件。Agent 事件的 status 为
                     # None，必须先于下方 status 分支处理，否则会落入普通内容
@@ -850,6 +885,13 @@ def dialogue_page(
         else:
             try:
                 d =client.chat.completions.create(**params)
+                # 任务 012：非流式响应同样附带自动意图路由结果，展示简短提示
+                if getattr(d, "route_result", None):
+                    _rr = d.route_result
+                    st.caption(
+                        f"🧭 {_rr.get('path_label') or _rr.get('path')} · "
+                        f"{_rr.get('intent_label') or _rr.get('intent')}"
+                    )
                 if getattr(d, "class_name", None) == "AgentRunResult":
                     # 任务 011：非流式 Agent 任务闭环结果（如图片对话）
                     content = ""

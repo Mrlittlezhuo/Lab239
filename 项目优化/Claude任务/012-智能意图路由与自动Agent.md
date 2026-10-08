@@ -2,7 +2,7 @@
 
 ## 1. 状态与基线
 
-- 状态：`ready_for_claude`
+- 状态：`completed`
 - 负责人：Claude Code
 - 任务编写与审查：Codex
 - 目标分支：`master`
@@ -184,24 +184,68 @@ Claude 完成后将状态改为 `ready_for_codex_review`，并填写以下内容
 
 ### 修改文件
 
-<待填写>
+新增：
+
+- `libs/chatchat-server/chatchat/server/intent_router/__init__.py`：意图路由包出口（re-export 全部公共接口）。
+- `libs/chatchat-server/chatchat/server/intent_router/schemas.py`：`RouteResult` 结构化结果、意图/路径/复杂度常量与中文展示标签、`validate_route_result` 校验（候选工具必须来自当前可用工具集合、未知意图降级、`RouteError`）。
+- `libs/chatchat-server/chatchat/server/intent_router/providers.py`：provider 边界——`IntentProvider` 接口、`rule_fast_path` 确定性快速路径（仅问候/纯符号/纯应答）、`LlmIntentProvider`（现有 `get_ChatOpenAI` 模型路径做通用判断，system prompt 携带实时工具清单）。
+- `libs/chatchat-server/chatchat/server/intent_router/router.py`：`IntentRouter`（超时/异常/低置信度统一回退）与 `route_auto_agent` 自动模式唯一入口；`build_router` 为后续 FastJev 预留替换点。
+- `libs/chatchat-server/tests/unit_tests/test_intent_routing.py`：40 个离线用例（临时 SQLite + 假工具/假规划器/假 provider/假 LLM）。
+
+修改：
+
+- `libs/chatchat-server/chatchat/settings.py`：`ApiModelSettings` 新增 `AUTO_ROUTE_TIMEOUT_SECONDS`（默认 20）、`AUTO_ROUTE_MIN_CONFIDENCE`（默认 0.5，None 关闭）、`AUTO_ROUTE_USE_MCP`（默认 False，自动模式默认不启用 MCP）。
+- `libs/chatchat-server/chatchat/server/api_server/chat_routes.py`：新增 `auto_agent` 分支（`extra.agent_run` 手动调试优先）；`_attach_route_result` 把路由结果附加到非流式结果 dict 或流式 SSE 首条 `RouteResult` 事件；直接回答复用 `chat(..., tool_config={})`，Agent Run 复用 `agent_run_chat` 且只传候选工具。
+- `libs/chatchat-server/chatchat/webui_pages/dialogue/dialogue.py`：侧栏改为「自动 Agent（推荐）/ 普通对话 / 手动调试」三模式 radio（默认自动，无需手动选工具）；`extra_body` 增加 `auto_agent`；流式/非流式均展示简短路由提示（路径 + 意图名 + 摘要），时间线/取消/MCP/手动 Agent Run 控件保持不变。
 
 ### 关键设计选择
 
-<待填写>
+1. **可插拔 provider 边界**：`IntentProvider.route(ctx) -> RouteResult` 是决策来源的唯一接口；当前默认 `LlmIntentProvider`（与任务 011 规划器同一模型来源）。后续 FastJev 只需实现该接口并在 `build_router` 注册，chat API、Agent Run、WebUI 均无需改动；本任务未下载/安装/模拟 FastJev，也未引入任何新外部依赖。
+2. **确定性快速路径只覆盖明显意图**：问候/纯符号/纯应答直接短路（大小写/标点归一，不依赖中文关键词硬编码做工具判断）；其余请求一律交给 LLM 通用判断，避免关键词表覆盖不了的真实请求。
+3. **结构化结果 + 严格校验 + 统一回退**：候选工具名必须来自当前实际可用工具注册表（调用方传入，不维护副本；未知名称剔除）；Agent Run 无有效候选、结构非法、provider 异常、输出解析失败、超时、低置信度 → 一律回退「直接回答」，绝不阻断对话、不向用户抛内部异常。
+4. **超时不走 `asyncio.to_thread`**：该路径在本运行环境会永久等待，改用 `concurrent.futures` 线程池 + `future.result(timeout=...)`。
+5. **不建第二执行器**：直接回答复用现有 `chat`（零工具）；Agent Run 复用任务 011 `agent_run_chat`/`AgentRunner`，只把候选工具交给规划器；知识库检索走 Agent Run 内的现有 `search_local_knowledgebase` 工具，未复制 `kb_chat`；时间线、取消、步骤持久化、消息写回、所有者隔离全部沿用任务 011。
+6. **分支优先级**：`extra.agent_run`（手动调试）先于 `extra.auto_agent` 判定，任务 011 行为完全不变；自动模式默认不启用 MCP（由 `AUTO_ROUTE_USE_MCP` 显式控制）。
+7. **前端最小侵入**：三种对话模式 radio；路由提示只展示「直接回答 / Agent 执行 · 意图名（+ 简短摘要）」，不展示、不持久化模型隐藏推理过程；非流式在结果 dict 附加 `route_result`，流式在 SSE 首条插入 `RouteResult` 事件（`OpenAIChatOutput` extra 字段透传，与 `AgentRunEvent` 风格一致）。
+8. **身份与安全**：自动模式全程使用服务端认证用户的 `owner_id` 与既有会话归属校验，未接受请求体 `user_id`；未新增数据库表、未持久化路由历史。
 
 ### 测试命令与结果
 
-<待填写；失败、超时或未运行必须如实说明>
+均在 `libs/chatchat-server` 下执行，Python 为 `/home/lab239/anaconda3/envs/Langchain-Chatchat/bin/python`（任务要求的 Conda 环境）。全部用例离线：临时 SQLite（迁移 v7）+ 假工具/假规划器/假 provider/假 LLM，不触真实模型、FastJev、外部服务、MCP、真实知识库、用户数据库与 `chatchat-study-data`。
+
+```bash
+# 1) 新增意图路由套件（40 用例：快速路径/校验/LLM provider/回退/自动模式 API/
+#    普通对话不路由/手动调试不变/越权 404/所有者隔离与取消复用/流式 RouteResult 首条）
+python -m pytest tests/unit_tests/test_intent_routing.py -o addopts="" -q -p no:cacheprovider
+# 结果：40 passed（4.06s）
+
+# 2) 新套件 + 任务 011 单 Agent 套件（确认无回归）
+python -m pytest tests/unit_tests/test_intent_routing.py tests/unit_tests/test_agent_run.py -o addopts="" -q -p no:cacheprovider
+# 结果：59 passed（9.25s）
+
+# 3) 数据库迁移 / 用户长期记忆 / 会话隔离回归
+python -m pytest tests/unit_tests/test_db_migrate.py tests/unit_tests/test_user_memory.py tests/unit_tests/test_conversation_isolation.py -o addopts="" -q -p no:cacheprovider
+# 结果：102 passed（10.14s）
+
+# 4) RAG 历史引用回归
+python -m pytest tests/unit_tests/test_rag_history_citations.py -o addopts="" -q -p no:cacheprovider
+# 结果：6 passed（0.85s）
+```
+
+全部通过，无失败、无跳过、无超时；未运行其他测试组。
 
 ### 未完成项与风险
 
-<待填写>
+- **FastJev 未接入**（符合任务范围）：只交付了干净的 `IntentProvider` 边界与 `build_router` 替换点，未实现/注册 FastJev provider。
+- **路由调用同步阻塞事件循环**：`route_auto_agent` 内部用线程池执行 provider，但 `future.result(timeout=...)` 会同步阻塞 FastAPI 请求协程最长 `AUTO_ROUTE_TIMEOUT_SECONDS`（默认 20 秒）。这是为避免本运行环境中 `asyncio.to_thread` 永久挂起而做的取舍；对本项目本地/低并发部署可接受，高并发场景后续可改为 `loop.run_in_executor` 的非阻塞写法（需先验证该路径在本环境同样不挂起）。
+- **LLM 自报置信度仅为参考值**：`AUTO_ROUTE_MIN_CONFIDENCE=0.5` 的阈值基于现有 LLM 的经验值；若换用 FastJev 或其他模型，应重新标定该阈值（或置 None 关闭）。
+- **快速路径词表是保守集合**：仅覆盖问候/纯应答/纯符号，用于直接回答而非工具判断；扩展时需防止把真实任务误判为问候。
+- **WebUI 为三模式 radio**：默认落在「自动 Agent（推荐）」，普通用户无需配置；若后续希望按用户记忆默认模式，需另开任务（本任务不改用户偏好存储）。
 
 ## 12. Codex 审查记录
 
-- 审查状态：`pending`
-- 主要发现：<由 Codex 填写>
-- 补充修改：<由 Codex 填写>
-- 最终验证：<由 Codex 填写>
+- 审查状态：`completed`
+- 主要发现：自动模式、普通对话和手动调试三条路径清晰，自动模式复用了现有普通聊天与 Agent Run，流式路由事件、候选工具收窄、失败回退和所有者隔离均有离线测试。审查发现 provider 返回值的工具校验原本只由默认 LLM provider 执行，后续 FastJev 等自定义 provider 可以绕过统一校验并返回不存在的工具名。
+- 补充修改：在 `IntentRouter` provider 边界统一调用 `validate_route_result`，超时时尝试取消尚未开始的 future；增加“自定义 provider 返回未知工具时回退普通对话”的回归测试。
+- 最终验证：意图路由与 Agent 专项 `60 passed`；数据库迁移、长期记忆和 RAG 引用回归 `85 passed`；相关 Python 文件编译及 `git diff --check` 通过。会话隔离测试与其他回归组合运行时在当前环境再次出现既有挂起，已中止，未把该组记为通过。真实模型路由与 Streamlit 三模式交互仍需后续人工启动验证。
 - 交付 commit：<由 Codex 在最终报告中记录；文档内可保留为空>
