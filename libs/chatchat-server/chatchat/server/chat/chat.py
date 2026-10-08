@@ -42,6 +42,31 @@ from chatchat.server.utils import (
 logger = build_logger()
 
 
+def _load_intermediate_steps(last_metadata):
+    """解析上一轮持久化的工具上下文（intermediate_steps）。
+
+    上一轮的 metadata 可能没有 intermediate_steps（例如 Agent Run 轮只写
+    agent_run_id/agent_status，kb 轮只写引用元数据，普通轮在流被中断时
+    只有默认空 metadata），此时不能把 None 传给 loads，否则下一轮会抛
+    "the JSON object must be str, bytes or bytearray, not NoneType"
+    导致整轮回答失败。解析失败同样降级为空，不阻断回答。
+    """
+    raw = last_metadata.get("intermediate_steps") if isinstance(last_metadata, dict) else None
+    if not raw:
+        return []
+    try:
+        return loads(
+            raw,
+            valid_namespaces=["langchain_chatchat", "agent_toolkits", "all_tools", "tool"],
+        )
+    except Exception:
+        logger.warning(
+            "解析上一轮 intermediate_steps 失败（忽略，不携带工具上下文）",
+            exc_info=True,
+        )
+        return []
+
+
 def create_models_from_config(configs, callbacks, stream, max_tokens):
     configs = configs or Settings.model_settings.LLM_MODEL_CONFIG
     models = {}
@@ -111,7 +136,11 @@ def create_models_chains(
         # 置于历史最前，作为独立、清晰的记忆/摘要段
         history.insert(0, dict(msg))
 
-    intermediate_steps = loads(messages[-1].get("metadata", {}).get("intermediate_steps"), valid_namespaces=["langchain_chatchat", "agent_toolkits", "all_tools", "tool"] )  if len(messages)>0 and messages[-1].get("metadata") is not None else []
+    # 上一轮 metadata 缺少 intermediate_steps 时安全降级为空（见
+    # _load_intermediate_steps 注释），不再因 loads(None) 崩溃。
+    intermediate_steps = _load_intermediate_steps(
+        messages[-1].get("metadata") if messages else None
+    )
     llm = models["action_model"]
     llm.callbacks = callbacks
     connections = get_enabled_mcp_connections()
@@ -342,7 +371,9 @@ async def chat(
             return
         except Exception as e:
             logger.error(f"error in chat: {e}")
-            yield {"data": json.dumps({"error": str(e)})}
+            # 与正常 chunk 保持一致，统一输出 JSON 字符串（之前输出 dict，
+            # SSE 与非流式 json.loads 两种消费方式都无法正确处理）。
+            yield json.dumps({"error": str(e)}, ensure_ascii=False)
             return
 
     if stream:

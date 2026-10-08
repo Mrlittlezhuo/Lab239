@@ -220,10 +220,23 @@ def parse_decision(raw: Any, available_tools: set, max_steps: int) -> Decision:
     raise PlanError(f"未知判断动作：{action!r}（应为 answer/replan/fail）")
 
 
-def format_tools_description(tools: Dict[str, Any], limit_per_tool: int = 300) -> str:
-    """把工具名 + 描述 + 参数 schema 渲染成给规划器的文本。"""
+def format_tools_description(
+    tools: Dict[str, Any],
+    limit_per_tool: int = 300,
+    total_limit: int = 3000,
+    max_tools: int = 20,
+) -> str:
+    """把工具名 + 描述 + 参数 schema 渲染成给规划器的文本。
+
+    除单工具截断外还设总量上限（``total_limit`` / ``max_tools``）：MCP 等
+    工具数量增大时避免规划/判断提示词膨胀。按字典顺序保留靠前的工具——
+    调用方（``agent_run_chat``）把路由选出的候选平台工具放在前面、MCP
+    工具追加在后面，预算不足时先省略 MCP 工具。
+    """
     lines = []
-    for name, tool in tools.items():
+    rendered = 0
+    items = list(tools.items())
+    for name, tool in items[:max_tools]:
         desc = str(getattr(tool, "description", "") or "").strip()
         if len(desc) > limit_per_tool:
             desc = desc[:limit_per_tool] + "…"
@@ -237,7 +250,17 @@ def format_tools_description(tools: Dict[str, Any], limit_per_tool: int = 300) -
                 )
             except Exception:
                 args_desc = ""
-        lines.append(f"- {name}：{desc}{args_desc}" if desc else f"- {name}")
+        line = f"- {name}：{desc}{args_desc}" if desc else f"- {name}"
+        # 首个工具始终保留；其后超出总预算即停止
+        if lines and rendered + len(line) > total_limit:
+            break
+        lines.append(line)
+        rendered += len(line) + 1
+    omitted = len(items) - len(lines)
+    if omitted > 0:
+        lines.append(
+            f"（另有 {omitted} 个工具因长度限制未列出，不要在计划中选用它们）"
+        )
     return "\n".join(lines) if lines else "（无可用工具）"
 
 

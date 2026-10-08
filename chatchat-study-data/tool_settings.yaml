@@ -14,7 +14,10 @@ search_local_knowledgebase:
 # 搜索引擎工具配置项。推荐自己部署 searx 搜索引擎，国内使用最方便。
 search_internet:
   use: false
-  search_engine_name: duckduckgo
+  # 2026-10-08 切换为本机自建 SearXNG 实例（docker 容器 searxng，
+  # 宿主机端口 8010）：duckduckgo 对本机出口 IP 全线 202 限流、
+  # metasearx.com 与公共 searx 实例均被 403 拦截，实测不可用。
+  search_engine_name: searx
   search_engine_config:
     bing:
       bing_search_url: https://api.bing.microsoft.com/v7.0/search
@@ -26,7 +29,7 @@ search_internet:
       chunk_overlap: 0
     duckduckgo: {}
     searx:
-      host: https://metasearx.com
+      host: http://127.0.0.1:8010
       engines: []
       categories: []
       language: zh-CN

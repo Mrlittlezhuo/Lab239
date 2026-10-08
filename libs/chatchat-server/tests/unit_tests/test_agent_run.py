@@ -13,6 +13,13 @@
 - 运行中每步逐步持久化，完成 / 失败 / 请求中断均收敛到终态；
 - 用户 A 无法查看或取消用户 B 的运行（含未登录 401、必须改密 403）；
 - /chat/chat/completions 显式开启 agent_run 时接入新闭环（未开启时不变）。
+
+回归补充（自动 Agent 规划偶发"计划为空"修复）：
+- 规划器首次输出无效（仅 summary 的空计划 / 非 JSON）时一次性纠正重试，
+  重试后仍无效则保持可控失败，且模型最多调用两次；
+- 规划上下文中失败/取消的 Agent 轮被替换为中性占位，避免小模型把历史
+  里的失败叙述复述进后续规划；
+- 规划器工具描述设总量上限：小工具集输出不变，超大工具集截断并附说明。
 """
 import sys
 import types
@@ -48,6 +55,7 @@ from chatchat.server.db.session import get_db as db_get_db
 from chatchat.server.db.repository import create_conversation
 from chatchat.server.db.repository.message_repository import update_message
 from chatchat.server.db.repository import agent_run_repository as agent_repo
+from chatchat.server.agent_run.planner import LLMPlanner
 from chatchat.server.agent_run.runner import AgentRunner
 from chatchat.server.agent_run import schema as S
 import chatchat.server.agent_run.service as agent_service
@@ -99,6 +107,20 @@ class AsyncOnlyTool:
     async def ainvoke(self, args):
         self.calls.append(dict(args or {}))
         return self.result
+
+
+class FakeLLM:
+    """按脚本返回原始文本的假 LLM，模拟小模型规划输出（离线、确定性）。"""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []  # 每次调用收到的 user prompt
+
+    def invoke(self, messages):
+        self.calls.append(messages[-1]["content"])
+        if not self._responses:
+            raise AssertionError("假 LLM 脚本耗尽")
+        return self._responses.pop(0)
 
 
 class ScriptedPlanner:
@@ -1256,6 +1278,147 @@ class TestChatCompletionsAgentRun:
         with _session(temp_db) as s:
             runs = s.query(AgentRunModel).all()
         assert runs == []
+
+
+# ---------------------------------------------------------------------------
+# 4. 规划偶发无效输出的纠正重试 / 历史去污 / 工具描述预算
+# ---------------------------------------------------------------------------
+
+
+class TestLLMPlannerRetry:
+    """生产规划器（LLMPlanner）对偶发无效输出的有限次纠正重试。"""
+
+    @staticmethod
+    def _ctx():
+        tools = {
+            "search_internet": FakeTool("search_internet", "联网搜索"),
+        }
+        return S.PlanContext(goal="联网搜索 X", tools=tools, max_steps=8)
+
+    def test_summary_only_output_recovered_by_retry(self):
+        """首次仅输出 summary（空计划）→ 纠正重试后得到有效计划。"""
+        llm = FakeLLM([
+            '{"summary": "无法规划", "steps": [], "direct_answer": ""}',
+            '{"summary": "联网搜索", "steps": [{"goal": "搜索 X", '
+            '"tool": "search_internet", "args": {"query": "X"}}], '
+            '"direct_answer": ""}',
+        ])
+        planner = LLMPlanner(llm)
+        plan = planner.plan(self._ctx())
+        assert len(plan.steps) == 1
+        assert plan.steps[0].tool == "search_internet"
+        assert plan.direct_answer == ""
+        assert len(llm.calls) == 2
+        # 重试时携带明确的纠正提示，而不是简单重复原提示词
+        assert llm.calls[1].startswith(llm.calls[0])
+        assert "纠正" in llm.calls[1]
+        assert "不可同时为空" in llm.calls[1]
+
+    def test_persistently_invalid_output_still_fails(self):
+        """重试后仍无效：保持可控失败，模型最多调用两次（不无限重试）。"""
+        llm = FakeLLM([
+            '{"summary": "无法规划", "steps": [], "direct_answer": ""}',
+            "这不是一个 JSON 对象",
+        ])
+        planner = LLMPlanner(llm)
+        with pytest.raises(S.PlanError):
+            planner.plan(self._ctx())
+        assert len(llm.calls) == 2
+
+    def test_valid_first_output_no_retry(self):
+        """首次输出合法：不触发重试。"""
+        llm = FakeLLM([
+            '{"summary": "直接回答", "steps": [], "direct_answer": "答案是 42"}',
+        ])
+        planner = LLMPlanner(llm)
+        plan = planner.plan(self._ctx())
+        assert plan.direct_answer == "答案是 42"
+        assert len(llm.calls) == 1
+
+
+class TestToolsDescriptionBudget:
+    """规划器工具描述的总量预算（防止 MCP 等工具集膨胀撑爆提示词）。"""
+
+    def test_small_toolset_output_unchanged(self):
+        tools = {
+            "search_internet": FakeTool("search_internet", "联网搜索"),
+            "search_local_knowledgebase": FakeTool(
+                "search_local_knowledgebase", "本地知识库检索"
+            ),
+        }
+        text = S.format_tools_description(tools)
+        assert text == (
+            "- search_internet：联网搜索\n"
+            "- search_local_knowledgebase：本地知识库检索"
+        )
+
+    def test_oversized_toolset_truncated_with_note(self):
+        tools = {
+            f"tool_{i:02d}": FakeTool(f"tool_{i:02d}", "描述" * 100)
+            for i in range(30)
+        }
+        text = S.format_tools_description(tools)
+        assert len(text) <= 3200  # 总预算 3000 + 省略说明
+        assert "未列出" in text
+        # 字典序靠前的工具保留
+        assert text.startswith("- tool_00：描述")
+        # 靠后的工具被省略
+        assert "- tool_29" not in text
+
+    def test_empty_toolset_placeholder(self):
+        assert S.format_tools_description({}) == "（无可用工具）"
+
+
+class TestBuildHistoryNeutralization:
+    """规划历史去污：失败/取消的 Agent 轮替换为中性占位。"""
+
+    def _patch_filter_message(self, monkeypatch, newest_first):
+        # filter_message 生产实现按 create_time 倒序返回（最新在前）
+        monkeypatch.setattr(
+            agent_service, "filter_message",
+            lambda **k: list(newest_first),
+        )
+
+    def test_failed_and_cancelled_turns_are_neutralized(self, monkeypatch):
+        """历史中的失败/取消轮不再把错误文本带给规划器。"""
+        newest_first = [
+            {"query": "继续处理", "response": "（Agent 运行已取消）"},
+            {"query": "帮我联网搜索 X",
+             "response": "（Agent 运行失败：计划生成失败（模型输出无效）："
+                         "计划为空：既没有步骤也没有 direct_answer）"},
+            {"query": "什么是 MTP", "response": "MTP 是多token预测技术。"},
+        ]
+        self._patch_filter_message(monkeypatch, newest_first)
+        history = agent_service._build_history(
+            object(), "conv-1", "owner-1", None
+        )
+        # 时间正序：普通轮原样保留
+        assert history[0] == {"role": "user", "content": "什么是 MTP"}
+        assert history[1] == {
+            "role": "assistant", "content": "MTP 是多token预测技术。"
+        }
+        # 失败/取消轮：原始错误细节不再保留，替换为中性占位
+        assert "计划为空" not in history[3]["content"]
+        assert "模型输出无效" not in history[3]["content"]
+        assert "不可用" in history[3]["content"]
+        assert "不可用" in history[5]["content"]
+
+    def test_normal_history_unchanged(self, monkeypatch):
+        """普通轮（非 Agent 结果文本）保持原样。"""
+        newest_first = [
+            {"query": "Q2", "response": "A2"},
+            {"query": "Q1", "response": "A1"},
+        ]
+        self._patch_filter_message(monkeypatch, newest_first)
+        history = agent_service._build_history(
+            object(), "conv-1", "owner-1", None
+        )
+        assert history == [
+            {"role": "user", "content": "Q1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "user", "content": "Q2"},
+            {"role": "assistant", "content": "A2"},
+        ]
 
 
 if __name__ == "__main__":

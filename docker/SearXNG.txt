@@ -1,0 +1,4 @@
+docker run -d \
+  -p 8010:8080 \
+  --name searxng \
+  searxng/searxng

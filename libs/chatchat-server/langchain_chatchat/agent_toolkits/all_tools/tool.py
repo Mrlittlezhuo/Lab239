@@ -49,8 +49,11 @@ class BaseToolOutput(Serializable):
     """
 
     # 使用 pydantic v1 兼容的字段定义
+    # format 既可以是字符串哨兵（如 "json"），也可以是渲染函数
+    # （如知识库/联网搜索工具传入的 format_context）；必须是 Union 才能
+    # 让 pydantic 接受函数，否则传函数会抛 "format str type expected"。
     data: Any
-    format: str = None
+    format: Optional[Union[str, Callable]] = None
     data_alias: str = ""
     extras: dict = {}
 
@@ -66,8 +69,10 @@ class BaseToolOutput(Serializable):
     def __str__(self) -> str:
         if self.format == "json":
             return json.dumps(self.data, ensure_ascii=False, indent=2)
-        elif hasattr(self, "_format_callable") and callable(self._format_callable):
-            return self._format_callable(self)
+        elif callable(self.format):
+            # format 为渲染函数时（如知识库/联网搜索工具传入的 format_context），
+            # 调用它把结构化 data 渲染成 LLM 需要的字符串
+            return self.format(self)
         else:
             return str(self.data)
 

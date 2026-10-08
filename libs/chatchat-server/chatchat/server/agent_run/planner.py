@@ -12,6 +12,10 @@
 ``LLMPlanner`` 是生产实现：把规划/判断收敛为"只输出一个 JSON 对象"的
 提示词，并用现有 ``get_ChatOpenAI`` 构建的非流式模型实例调用
 （不新增依赖、不复用聊天流）。测试中用确定性假规划器替代。
+
+小模型（如 7B）会偶发输出不合规计划（仅 summary 的空计划、非 JSON、
+引用未知工具）。``LLMPlanner.plan`` 对无效输出追加明确纠正提示**重试
+一次**；仍无效才抛 ``PlanError``——保持有限次、可控失败，绝不无限循环。
 """
 from __future__ import annotations
 
@@ -33,7 +37,8 @@ from chatchat.server.agent_run.schema import (
 
 PLAN_SYSTEM_PROMPT = """你是一个任务规划器，负责把用户目标拆成可执行的结构化计划。
 你必须只输出一个 JSON 对象，不要输出代码块标记、解释或任何多余文字。
-只使用下面列出的工具；目标无需工具时，把完整最终答案写入 direct_answer 并令 steps 为空。"""
+只使用下面列出的工具；目标无需工具时，把完整最终答案写入 direct_answer 并令 steps 为空。
+steps 与 direct_answer 不可同时为空：要么至少给出一个步骤，要么给出面向用户的完整答案。"""
 
 PLAN_USER_TEMPLATE = """可用工具：
 {tools}
@@ -50,7 +55,9 @@ PLAN_USER_TEMPLATE = """可用工具：
 约束：
 - 每个 step 的 tool 必须是可用工具名之一，args 是该工具参数的 JSON 对象；
 - steps 不超过 {max_steps} 个；
-- 无法完成或信息不足时不要强行规划，可输出空 steps 与空 direct_answer 之外的说明性 summary。
+- 只要任一可用工具能推进用户目标（如需要联网查询、检索知识库、执行操作），steps 必须包含至少一个步骤，不得只用 summary 或 direct_answer 代替工具执行；
+- 仅当目标确实无需任何工具即可完成（常识问答、简单计算、解释概念）时，才把完整最终答案写入 direct_answer 并令 steps 为空；
+- steps 与 direct_answer 不可同时为空：即使无法完成任务，也必须在 direct_answer 中写一段面向用户的完整说明。
 """
 
 DECIDE_SYSTEM_PROMPT = """你是一个任务执行判断器，负责根据已完成步骤的观察结果决定任务如何收尾。
@@ -115,8 +122,22 @@ class LLMPlanner:
             goal=ctx.goal,
             max_steps=ctx.max_steps,
         )
-        raw = _extract_json_object(self._invoke(PLAN_SYSTEM_PROMPT, user))
-        return parse_plan(raw, set(ctx.tools.keys()), ctx.max_steps)
+        try:
+            raw = _extract_json_object(self._invoke(PLAN_SYSTEM_PROMPT, user))
+            return parse_plan(raw, set(ctx.tools.keys()), ctx.max_steps)
+        except PlanError as exc:
+            # 小模型偶发输出不合规（仅 summary 的空计划、非 JSON、引用未知
+            # 工具）：追加明确纠正提示重试一次；仍无效则保持可控失败。
+            retry_user = user + (
+                "\n\n[纠正] 你上一次的输出无效："
+                f"{exc}。请重新输出一个 JSON 对象："
+                "只要任一可用工具能推进用户目标，steps 必须包含至少一个步骤"
+                "（选择最匹配的工具）；仅当任何工具都无法推进目标时，才把"
+                "完整说明写入 direct_answer。steps 与 direct_answer 不可"
+                "同时为空。"
+            )
+            raw = _extract_json_object(self._invoke(PLAN_SYSTEM_PROMPT, retry_user))
+            return parse_plan(raw, set(ctx.tools.keys()), ctx.max_steps)
 
     def decide(self, ctx: PlanContext, results: List[StepResult]) -> Decision:
         remaining = max(1, ctx.max_steps - len(results))

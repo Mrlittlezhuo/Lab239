@@ -28,7 +28,10 @@ from chatchat.server.agent.tools_factory.search_internet import search_engine
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
 from chatchat.server.chat.utils import History
 from chatchat.server.knowledge_base.kb_service.base import KBServiceFactory
-from chatchat.server.knowledge_base.kb_doc_api import search_docs, search_temp_docs
+from chatchat.server.knowledge_base.kb_doc_api import (
+    search_docs,
+    search_temp_docs_by_user_id,
+)
 from chatchat.server.knowledge_base.utils import (
     build_references,
     format_reference_markdown,
@@ -85,8 +88,14 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
     elif mode == "temp_kb":
         assert_temp_owner(user, kb_name)
 
+    # 请求会话可能在流式生成器开始前被关闭（FastAPI 在返回响应对象时
+    # 即拆除依赖，SQLAlchemy 2.0 的 close() 会 detach 会话内所有实例）。
+    # 因此必须在会话仍处于打开状态时先取出 user.id，生成器内部只能
+    # 使用这个值，不能再读取 user 的属性。
+    user_id = user.id
+
     if conversation_id:
-        if get_owned_conversation(session, conversation_id, user.id) is None:
+        if get_owned_conversation(session, conversation_id, user_id) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="会话不存在或无权访问",
@@ -94,14 +103,14 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
     else:
         conversation_id = create_conversation(
             session,
-            owner_id=user.id,
+            owner_id=user_id,
             chat_type="kb_chat",
             name=(query or "")[:50],
         )
     message_id = add_message(
         session=session,
         conversation_id=conversation_id,
-        owner_id=user.id,
+        owner_id=user_id,
         chat_type="kb_chat",
         query=query,
     )
@@ -124,7 +133,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             try:
                 memory_service.auto_extract(
                     session,
-                    user.id,
+                    user_id,
                     query,
                     source_conversation_id=conversation_id,
                     source_message_id=message_id,
@@ -136,7 +145,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             # 不依赖模型），记录覆盖位置。失败不阻断正常回答。
             try:
                 if conversation_id:
-                    memory_service.summarize_conversation(session, user.id, conversation_id)
+                    memory_service.summarize_conversation(session, user_id, conversation_id)
             except Exception:
                 pass
 
@@ -161,12 +170,15 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 ok, msg = check_embed_model()
                 if not ok:
                     raise ValueError(msg)
-                docs = await run_in_threadpool(search_temp_docs,
+                # 线程池内只允许传递 user_id 字符串：请求会话在生成器开始
+                # 前已关闭，ORM user 实例处于 detached 状态，跨线程读取其
+                # 属性会抛 DetachedInstanceError（属主校验用纯字符串比较）。
+                docs = await run_in_threadpool(search_temp_docs_by_user_id,
                                                 kb_name,
                                                 query=query,
                                                 top_k=top_k,
                                                 score_threshold=score_threshold,
-                                                user=user)
+                                                user_id=user_id)
                 references = build_references(
                     kb_name, docs, api_address(is_public=True)
                 )
@@ -217,7 +229,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 update_message(
                     session=session,
                     message_id=message_id,
-                    owner_id=user.id,
+                    owner_id=user_id,
                     response="",
                     metadata=reference_metadata,
                 )
@@ -294,7 +306,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             _mem_msgs = [
                 History(role=m["role"], content=m["content"]).to_msg_template(False)
                 for m in memory_service.memory_system_messages(
-                    session, user.id, query, conversation_id
+                    session, user_id, query, conversation_id
                 )
             ]
             chat_prompt = ChatPromptTemplate.from_messages(
@@ -364,7 +376,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             update_message(
                 session=session,
                 message_id=message_id,
-                owner_id=user.id,
+                owner_id=user_id,
                 response=answer,
                 metadata=reference_metadata,
             )
@@ -380,7 +392,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 update_message(
                     session=session,
                     message_id=message_id,
-                    owner_id=user.id,
+                    owner_id=user_id,
                     response="",
                     metadata=reference_metadata,
                 )
@@ -403,4 +415,9 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
     if stream:
         return EventSourceResponse(knowledge_base_chat_iterator())
     else:
-        return await knowledge_base_chat_iterator().__anext__()
+        # 非流式路径必须消费完整生成器，否则 LLM 任务不会等待完成、
+        # 助手回复也不会通过 update_message 持久化（回复直接丢失）。
+        last_chunk = ""
+        async for chunk in knowledge_base_chat_iterator():
+            last_chunk = chunk
+        return last_chunk

@@ -45,12 +45,20 @@ def _session_factory() -> Session:
 
 
 def _build_planner(model_name: Optional[str] = None) -> LLMPlanner:
-    """用现有模型配置构建规划器（非流式）；测试中替换为假规划器。"""
+    """用现有模型配置构建规划器（非流式）；测试中替换为假规划器。
+
+    必须使用 ``local_wrap=False``（直连模型平台，如 ollama），不能用
+    ``local_wrap=True``：后者会把 LLM 指向 chatchat 自己的 ``/v1`` 接口，
+    而规划器在事件循环线程里同步调用 ``llm.invoke()``，会形成"事件循环
+    阻塞等待本服务 /v1、/v1 又只能靠事件循环处理"的自引用死锁，导致
+    Agent Run 永远停在"已启动"。与意图路由器（router.py 用默认
+    ``local_wrap=False`` 直连 ollama）保持一致。
+    """
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
         model_name=name,
         streaming=False,
-        local_wrap=True,
+        local_wrap=False,
         max_tokens=Settings.model_settings.MAX_TOKENS,
     )
     return LLMPlanner(llm)
@@ -114,6 +122,28 @@ async def _close_mcp_client_async(client: Optional[Any]) -> None:
         logger.warning("关闭 MCP 客户端失败（忽略）", exc_info=True)
 
 
+# 失败/取消的 Agent 轮持久化文本（``_final_message_text`` 生成）。这类文本
+# 进入规划上下文后，小模型会把"失败"当作事实复述（如直接回答"计划生成
+# 失败"），甚至诱发空计划；读取历史时替换为中性占位。
+_AGENT_FAILED_MARKERS = (
+    "（Agent 运行失败",
+    "（Agent 运行已取消）",
+    "Agent 运行失败",
+    "Agent 运行已取消",
+)
+
+
+def _neutralize_agent_result(text: Optional[str]) -> str:
+    """把历史中失败/取消的 Agent 轮替换为中性占位，避免污染后续规划。"""
+    t = (text or "").strip()
+    if not t or not t.startswith(_AGENT_FAILED_MARKERS):
+        return text or ""
+    return (
+        "（该次 Agent 运行失败或已取消，以上结果不可用；"
+        "请只依据当前用户目标重新规划，不要复述该失败）"
+    )
+
+
 def _build_history(
     session: Session,
     conversation_id: str,
@@ -136,7 +166,7 @@ def _build_history(
     history: List[Dict[str, str]] = []
     for message in reversed(messages or []):
         query = message.get("query") or ""
-        response = message.get("response")
+        response = _neutralize_agent_result(message.get("response"))
         if not query and not response:
             continue
         history.append({"role": "user", "content": query})

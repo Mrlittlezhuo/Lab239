@@ -26,7 +26,7 @@ from chatchat.server.knowledge_base.utils import (
     validate_kb_name,
 )
 from chatchat.server.knowledge_base.kb_cache.faiss_cache import memo_faiss_pool
-from chatchat.server.knowledge_base.temp_files import assert_temp_owner
+from chatchat.server.knowledge_base.temp_files import assert_temp_owner_id
 from chatchat.server.knowledge_base.kb_api import log_kb_operation
 from chatchat.server.utils import (
     BaseResponse,
@@ -40,20 +40,36 @@ from chatchat.utils import build_logger
 logger = build_logger()
 
 
-def search_temp_docs(knowledge_id: str = Body(..., description="知识库 ID", examples=["example_id"]),
-                     query: str = Body("", description="用户输入", examples=["你好"]),
-                     top_k: int = Body(..., description="返回的文档数量", examples=[5]),
-                     score_threshold: float = Body(..., description="分数阈值", examples=[0.8]),
-                     user: UserModel = Depends(require_password_changed)) -> List[Dict]:
-    '''从临时 FAISS 知识库中检索文档，用于文件对话'''
-    # 校验临时向量库属于当前用户；非属主/不存在统一 404
-    assert_temp_owner(user, knowledge_id)
+def search_temp_docs_by_user_id(knowledge_id: str, user_id: str,
+                                query: str = "",
+                                top_k: int = 5,
+                                score_threshold: float = 0.8) -> List[Dict]:
+    '''从临时 FAISS 知识库中检索文档（属主校验只用 user_id 字符串，
+    不依赖 ORM 实例，可在请求会话关闭后的线程池中安全执行）'''
+    assert_temp_owner_id(user_id, knowledge_id)
     with memo_faiss_pool.acquire(knowledge_id) as vs:
         docs = vs.similarity_search_with_score(
             query, k=top_k, score_threshold=score_threshold
         )
         docs = [x[0].dict() for x in docs]
         return docs
+
+
+def search_temp_docs(knowledge_id: str = Body(..., description="知识库 ID", examples=["example_id"]),
+                     query: str = Body("", description="用户输入", examples=["你好"]),
+                     top_k: int = Body(..., description="返回的文档数量", examples=[5]),
+                     score_threshold: float = Body(..., description="分数阈值", examples=[0.8]),
+                     user: UserModel = Depends(require_password_changed)) -> List[Dict]:
+    '''从临时 FAISS 知识库中检索文档，用于文件对话'''
+    # 属主来自服务端认证上下文；endpoint 运行在请求上下文内，
+    # 取 user.id 后委托 user_id 版本执行
+    return search_temp_docs_by_user_id(
+        knowledge_id,
+        query=query,
+        top_k=top_k,
+        score_threshold=score_threshold,
+        user_id=user.id,
+    )
 
 
 def search_docs(

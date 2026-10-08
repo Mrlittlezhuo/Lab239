@@ -497,7 +497,6 @@ class ApiModelSettings(BaseFileSettings):
 class ToolSettings(BaseFileSettings):
     """Agent 工具配置项"""
     model_config = SettingsConfigDict(yaml_file=CHATCHAT_ROOT / "tool_settings.yaml",
-                                      json_file=CHATCHAT_ROOT / "tool_settings.json",
                                       extra="allow")
 
     search_local_knowledgebase: dict = {
@@ -649,7 +648,6 @@ class PromptSettings(BaseFileSettings):
     """Prompt 模板.除 Agent 模板使用 f-string 外，其它均使用 jinja2 格式"""
 
     model_config = SettingsConfigDict(yaml_file=CHATCHAT_ROOT / "prompt_settings.yaml",
-                                      json_file=CHATCHAT_ROOT / "prompt_settings.json",
                                       extra="allow")
 
     preprocess_model: dict = {

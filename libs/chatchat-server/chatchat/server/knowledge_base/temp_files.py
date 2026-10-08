@@ -50,7 +50,7 @@ temp_file_ownership = TempFileOwnership()
 
 def assert_temp_owner(user: UserModel, temp_id: str) -> None:
     """非属主或不存在时抛 404（不泄露存在性）。"""
-    if not temp_file_ownership.is_owned_by(temp_id, user):
+    if not is_owned_by_id(temp_id, user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="临时文件不存在或无权访问",
@@ -58,4 +58,25 @@ def assert_temp_owner(user: UserModel, temp_id: str) -> None:
         )
 
 
-__all__ = ["TempFileOwnership", "temp_file_ownership", "assert_temp_owner"]
+def is_owned_by_id(temp_id: str, user_id: str) -> bool:
+    """纯 user_id 比较，不依赖 ORM 实例（可用于会话关闭后的线程池等场景）。"""
+    return temp_file_ownership.owner_of(temp_id) == user_id
+
+
+def assert_temp_owner_id(user_id: str, temp_id: str) -> None:
+    """assert_temp_owner 的 user_id 版本：请求会话关闭后仍可安全校验。"""
+    if not is_owned_by_id(temp_id, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="临时文件不存在或无权访问",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+__all__ = [
+    "TempFileOwnership",
+    "temp_file_ownership",
+    "assert_temp_owner",
+    "is_owned_by_id",
+    "assert_temp_owner_id",
+]
