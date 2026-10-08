@@ -3,15 +3,15 @@ import logging
 import sys
 from typing import List, Optional
 
-from langchain.chains import LLMChain, StuffDocumentsChain
-from langchain.chains.combine_documents.map_reduce import (
+from langchain_classic.chains import LLMChain, StuffDocumentsChain
+from langchain_classic.chains.combine_documents.map_reduce import (
     MapReduceDocumentsChain,
     ReduceDocumentsChain,
 )
-from langchain.docstore.document import Document
-from langchain.output_parsers.regex import RegexParser
-from langchain.prompts import PromptTemplate
-from langchain.schema.language_model import BaseLanguageModel
+from langchain_core.documents import Document
+from langchain_classic.output_parsers.regex import RegexParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.language_models import BaseLanguageModel
 
 from chatchat.server.knowledge_base.model.kb_document_model import DocumentWithVSId
 from chatchat.utils import build_logger

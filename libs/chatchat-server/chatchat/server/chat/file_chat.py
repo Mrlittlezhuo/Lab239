@@ -6,9 +6,9 @@ from typing import AsyncIterable, List, Optional
 
 import nest_asyncio
 from fastapi import Body, Depends, File, Form, UploadFile
-from langchain.callbacks import AsyncIteratorCallbackHandler
-from langchain.chains import LLMChain
-from langchain.prompts.chat import ChatPromptTemplate
+from langchain_classic.callbacks import AsyncIteratorCallbackHandler
+from langchain_classic.chains import LLMChain
+from langchain_core.prompts.chat import ChatPromptTemplate
 from sse_starlette.sse import EventSourceResponse
 
 from chatchat.settings import Settings

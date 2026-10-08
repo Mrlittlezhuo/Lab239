@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from langchain.prompts.prompt import PromptTemplate
+from langchain_core.prompts.prompt import PromptTemplate
 from sse_starlette import EventSourceResponse
 
 from chatchat.server.api_server.api_schemas import OpenAIChatInput

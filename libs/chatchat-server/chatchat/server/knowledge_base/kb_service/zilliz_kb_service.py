@@ -1,7 +1,7 @@
 from typing import Dict, List
 
-from langchain.schema import Document
-from langchain.vectorstores import Zilliz
+from langchain_core.documents import Document
+from langchain_community.vectorstores.zilliz import Zilliz
 
 from chatchat.settings import Settings
 from chatchat.server.file_rag.utils import get_Retriever

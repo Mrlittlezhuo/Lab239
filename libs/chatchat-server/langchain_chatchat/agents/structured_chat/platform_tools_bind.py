@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from typing import Sequence, Union, List, Dict, Any
 
-from langchain.agents.agent import NextStepOutput
+from langchain_classic.agents.agent import NextStepOutput
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnablePassthrough

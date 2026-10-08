@@ -1,6 +1,6 @@
 from typing import Any, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from chatchat.server.constant.response_code import ResponseCode
 
@@ -14,14 +14,13 @@ class BaseResponse(BaseModel):
     msg: str = Field("success", description="API status message")
     data: Optional[Union[Any, None]] = Field(default_factory=default_data, description="API data")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "code": 200,
-                "msg": "success",
-                "data": None
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "code": 200,
+            "msg": "success",
+            "data": None
         }
+    })
 
     @classmethod
     def success(cls, data: Optional[Any] = "", message: str = "success"):

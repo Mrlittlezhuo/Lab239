@@ -2,9 +2,9 @@ import asyncio
 from typing import AsyncIterable, Optional
 
 from fastapi import Body
-from langchain.callbacks import AsyncIteratorCallbackHandler
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
+from langchain_classic.callbacks import AsyncIteratorCallbackHandler
+from langchain_classic.chains import LLMChain
+from langchain_core.prompts import PromptTemplate
 from sse_starlette.sse import EventSourceResponse
 
 from chatchat.server.utils import get_OpenAI, get_prompt_template, wrap_done, build_logger

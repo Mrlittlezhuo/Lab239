@@ -7,8 +7,8 @@ import asyncio
 import json
 from pprint import pprint
 
-from langchain import globals
-from langchain.agents import AgentExecutor
+from langchain_core import globals
+from langchain_classic.agents import AgentExecutor
 
 
 from chatchat.server.utils import get_ChatOpenAI

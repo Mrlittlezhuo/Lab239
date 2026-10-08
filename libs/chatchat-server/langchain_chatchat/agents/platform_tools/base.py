@@ -17,8 +17,7 @@ from typing import (
 )
 import os
 import sys
-from langchain import hub
-from langchain.agents import AgentExecutor
+from langchain_classic.agents import AgentExecutor
 from langchain_core.agents import AgentAction
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseLanguageModel
@@ -127,9 +126,6 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
 
     mcp_connections: dict[str, StdioConnection | SSEConnection] = None
     """MCP connections."""
-
-    class Config:
-        arbitrary_types_allowed = True
 
     if PYDANTIC_V2:
         model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)

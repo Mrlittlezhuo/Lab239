@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, DateTime, Integer, String, func
 
 from chatchat.server.db.base import Base
@@ -35,5 +35,4 @@ class KnowledgeBaseSchema(BaseModel):
     file_count: Optional[int]
     create_time: Optional[datetime]
 
-    class Config:
-        from_attributes = True  # 确保可以从 ORM 实例进行验证
+    model_config = ConfigDict(from_attributes=True)  # 确保可以从 ORM 实例进行验证

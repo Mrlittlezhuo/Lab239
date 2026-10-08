@@ -9,7 +9,7 @@ from chatchat.server.knowledge_base.utils import make_text_splitter
 
 
 def text(splitter_name):
-    from langchain import document_loaders
+    from langchain_community import document_loaders
 
     # 使用DocumentLoader读取文件
     filepath = "../../knowledge_base/samples/content/test_files/test.txt"
@@ -29,7 +29,7 @@ def text(splitter_name):
 
 
 import pytest
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 
 @pytest.mark.parametrize(

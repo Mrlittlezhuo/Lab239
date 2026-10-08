@@ -3,8 +3,8 @@ import shutil
 from typing import Dict, List, Optional
 
 import sqlalchemy
-from langchain.schema import Document
-from langchain.vectorstores.pgvector import DistanceStrategy, PGVector
+from langchain_core.documents import Document
+from langchain_community.vectorstores.pgvector import DistanceStrategy, PGVector
 from sqlalchemy import text
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.orm import Session

@@ -8,8 +8,8 @@ from typing import Dict, Generator, List, Tuple, Union
 
 import chardet
 import langchain_community.document_loaders
-from langchain.docstore.document import Document
-from langchain.text_splitter import MarkdownHeaderTextSplitter, TextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import MarkdownHeaderTextSplitter, TextSplitter
 from langchain_community.document_loaders import JSONLoader, TextLoader
 
 from chatchat.settings import Settings
@@ -237,9 +237,9 @@ def make_text_splitter(splitter_name, chunk_size, chunk_overlap):
             try:  # 优先使用用户自定义的text_splitter
                 text_splitter_module = importlib.import_module("chatchat.server.file_rag.text_splitter")
                 TextSplitter = getattr(text_splitter_module, splitter_name)
-            except:  # 否则使用langchain的text_splitter
+            except:  # 否则使用 LangChain 独立的 text_splitters 包
                 text_splitter_module = importlib.import_module(
-                    "langchain.text_splitter"
+                    "langchain_text_splitters"
                 )
                 TextSplitter = getattr(text_splitter_module, splitter_name)
 
@@ -270,7 +270,7 @@ def make_text_splitter(splitter_name, chunk_size, chunk_overlap):
                     Settings.kb_settings.text_splitter_dict[splitter_name]["tokenizer_name_or_path"]
                     == "gpt2"
                 ):
-                    from langchain.text_splitter import CharacterTextSplitter
+                    from langchain_text_splitters import CharacterTextSplitter
                     from transformers import GPT2TokenizerFast
 
                     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
@@ -299,7 +299,7 @@ def make_text_splitter(splitter_name, chunk_size, chunk_overlap):
                     )
     except Exception as e:
         print(e)
-        text_splitter_module = importlib.import_module("langchain.text_splitter")
+        text_splitter_module = importlib.import_module("langchain_text_splitters")
         TextSplitter = getattr(text_splitter_module, "RecursiveCharacterTextSplitter")
         text_splitter = TextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 

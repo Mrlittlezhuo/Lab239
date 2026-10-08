@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from typing import List, Union
 
-from langchain.agents.agent import MultiActionAgentOutputParser, AgentOutputParser
-from langchain.agents.output_parsers.tools import ToolAgentAction
-from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_classic.agents.agent import MultiActionAgentOutputParser, AgentOutputParser
+from langchain_classic.agents.output_parsers.tools import ToolAgentAction
+from langchain_classic.agents.structured_chat.output_parser import StructuredChatOutputParser
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, Generation

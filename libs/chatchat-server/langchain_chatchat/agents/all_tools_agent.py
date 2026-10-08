@@ -13,20 +13,20 @@ from typing import (
     Sequence
 )
 
-from langchain.agents.agent import AgentExecutor
-from langchain.agents.tools import InvalidTool
-from langchain.utilities.asyncio import asyncio_timeout
+from langchain_classic.agents.agent import AgentExecutor
+from langchain_classic.agents.tools import InvalidTool
+from langchain_classic.utilities.asyncio import asyncio_timeout
 from langchain_core.agents import AgentAction, AgentFinish, AgentStep
 from langchain_core.callbacks import (
     AsyncCallbackManagerForChainRun,
     CallbackManagerForChainRun,
 )
 from langchain_core.runnables.base import RunnableSequence
-from langchain.agents.agent import BaseMultiActionAgent
+from langchain_classic.agents.agent import BaseMultiActionAgent
 from langchain_core.tools import BaseTool
 from langchain_core.utils import get_color_mapping
 
-from langchain_core.pydantic_v1 import root_validator
+from chatchat.server.pydantic_v1 import root_validator
 from langchain_chatchat.agent_toolkits.all_tools.struct_type import (
     AdapterAllToolStructType,
 )

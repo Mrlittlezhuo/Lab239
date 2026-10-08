@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from langchain_core.load import dumpd, dumps, load, loads
 
 from fastapi import Body
-from langchain.chains import LLMChain
-from langchain.prompts.chat import ChatPromptTemplate
+from langchain_classic.chains import LLMChain
+from langchain_core.prompts.chat import ChatPromptTemplate
 
 from chatchat.server.agents_registry.agents_registry import agents_registry
 from sse_starlette.sse import EventSourceResponse
@@ -193,7 +193,7 @@ async def chat(
         chat_model_config: dict = Body({}, description="LLM 模型配置", examples=[]),
         tool_config: dict = Body({}, description="工具配置", examples=[]),
         use_mcp: bool = Body(False, description="使用MCP"),
-        max_tokens: int = Body(None, description="LLM最大token数配置", example=4096),
+        max_tokens: int = Body(None, description="LLM最大token数配置", examples=[4096]),
         session: Session = None,
         owner_id: str = None,
 ):

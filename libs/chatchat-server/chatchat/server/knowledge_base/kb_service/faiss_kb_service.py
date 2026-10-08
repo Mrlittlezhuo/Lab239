@@ -2,7 +2,7 @@ import os
 import shutil
 from typing import Dict, List, Tuple
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from chatchat.settings import Settings
 from chatchat.server.file_rag.utils import get_Retriever

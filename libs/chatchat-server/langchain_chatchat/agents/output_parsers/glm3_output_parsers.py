@@ -8,10 +8,11 @@ from typing import Optional, Sequence, Union
 import re
 import langchain_core.messages
 import langchain_core.prompts
-from langchain.agents.agent import AgentOutputParser
-from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
-from langchain.output_parsers import OutputFixingParser
-from langchain.schema import AgentAction, AgentFinish, OutputParserException
+from langchain_classic.agents.agent import AgentOutputParser
+from langchain_classic.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_classic.output_parsers import OutputFixingParser
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.exceptions import OutputParserException
 
 from chatchat.server.pydantic_v1 import Field, model_schema, typing
 from langchain_chatchat.utils.try_parse_json_object import try_parse_json_object

@@ -64,7 +64,7 @@ from langchain_core.outputs import (
     LLMResult,
     RunInfo,
 )
-from langchain_core.pydantic_v1 import Field, SecretStr, root_validator
+from chatchat.server.pydantic_v1 import Field, SecretStr, root_validator
 from langchain_core.runnables.config import ensure_config, run_in_executor
 from langchain_core.utils import (
     convert_to_secret_str,

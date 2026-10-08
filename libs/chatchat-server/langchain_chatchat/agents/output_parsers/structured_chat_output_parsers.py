@@ -4,15 +4,17 @@ import json
 import re
 from typing import Any, List, Sequence, Tuple, Union
 
-from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
-from langchain.schema import (
+from langchain_classic.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_core.agents import (
     AgentAction,
     AgentFinish,
+)
+from langchain_classic.schema import (
     AIMessage,
     HumanMessage,
-    OutputParserException,
     SystemMessage,
 )
+from langchain_core.exceptions import OutputParserException
 
 from langchain_chatchat.utils.try_parse_json_object import try_parse_json_object
 

@@ -12,6 +12,8 @@ from openai.types.chat import (
     completion_create_params,
 )
 
+from pydantic import ConfigDict
+
 from chatchat.settings import Settings
 from langchain_chatchat.callbacks.agent_callback_handler import AgentStatus  # noaq
 from chatchat.server.pydantic_v2 import AnyUrl, BaseModel, Field
@@ -27,8 +29,7 @@ class OpenAIBaseInput(BaseModel):
     extra_json: Optional[Dict] = Field(None, alias="extra_body")
     timeout: Optional[float] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class OpenAIChatInput(OpenAIBaseInput):
@@ -129,8 +130,7 @@ class OpenAIBaseOutput(BaseModel):
     message_id: Optional[str] = None  # id in database table
     is_ref: bool = False  # wheather show in seperated expander
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
     def model_dump(self) -> dict:
         result = {
@@ -217,11 +217,6 @@ class MCPConnectionResponse(BaseModel):
     config: Dict
     create_time: str
     update_time: Optional[str]
-
-    class Config:
-        json_encoders = {
-            # 处理 datetime 类型
-        }
 
 
 class MCPConnectionListResponse(BaseModel):

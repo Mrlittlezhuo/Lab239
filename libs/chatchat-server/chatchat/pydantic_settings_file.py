@@ -139,7 +139,7 @@ class YamlTemplate:
                     comment = self.get_field_comment(n, m) or self.get_class_comment(sub_model_obj)
                     if comment:
                         o.yaml_set_comment_before_after_key(n, "\n"+comment, indent=indent)
-                    for f in sub_model_obj.model_fields:
+                    for f in sub_model_obj.__class__.model_fields:
                         s = sub_comment.get("sub_comments", {}).get(f, {})
                         _set_subfield_comment(o[n], sub_model_obj, f, s, indent+2)
             else:

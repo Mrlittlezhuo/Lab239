@@ -22,14 +22,14 @@ from typing import (
 import httpx
 import openai
 from fastapi import FastAPI
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 from langchain_core.embeddings import Embeddings
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_openai.llms import OpenAI
 from memoization import cached, CachingAlgorithmFlag
 
 from chatchat.settings import Settings, XF_MODELS_TYPES
-from chatchat.server.pydantic_v2 import BaseModel, Field
+from chatchat.server.pydantic_v2 import BaseModel, ConfigDict, Field
 from chatchat.utils import build_logger
 import requests
 
@@ -463,26 +463,24 @@ class BaseResponse(BaseModel):
     msg: str = Field("success", description="API status message")
     data: Any = Field(None, description="API data")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "code": 200,
                 "msg": "success",
             }
-        }
+        })
 
 
 class ListResponse(BaseResponse):
     data: List[Any] = Field(..., description="List of data")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "code": 200,
                 "msg": "success",
                 "data": ["doc1.docx", "doc2.pdf", "doc3.txt"],
             }
-        }
+        })
 
 
 class ChatMessage(BaseModel):
@@ -493,8 +491,7 @@ class ChatMessage(BaseModel):
         ..., description="List of source documents and their scores"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "question": "工伤保险如何办理？",
                 "response": "根据已知信息，可以总结如下：\n\n1. 参保单位为员工缴纳工伤保险费，以保障员工在发生工伤时能够获得相应的待遇。\n"
@@ -517,7 +514,7 @@ class ChatMessage(BaseModel):
                     "出处 [3] ...",
                 ],
             }
-        }
+        })
 
 
 def run_async(cor):

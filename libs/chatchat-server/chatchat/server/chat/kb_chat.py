@@ -7,8 +7,8 @@ from typing import AsyncIterable, List, Optional, Literal
 from fastapi import Body, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from sse_starlette.sse import EventSourceResponse
-from langchain.callbacks import AsyncIteratorCallbackHandler
-from langchain.prompts.chat import ChatPromptTemplate
+from langchain_classic.callbacks import AsyncIteratorCallbackHandler
+from langchain_core.prompts.chat import ChatPromptTemplate
 
 
 from chatchat.settings import Settings

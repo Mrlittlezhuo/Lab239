@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 
-from langchain.vectorstores import VectorStore
+from langchain_core.vectorstores import VectorStore
 
 
 class BaseRetrieverService(metaclass=ABCMeta):

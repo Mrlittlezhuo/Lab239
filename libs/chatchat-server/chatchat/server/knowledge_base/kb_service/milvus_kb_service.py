@@ -1,8 +1,8 @@
 import os
 from typing import Dict, List, Optional
 
-from langchain.schema import Document
-from langchain.vectorstores.milvus import Milvus
+from langchain_core.documents import Document
+from langchain_community.vectorstores.milvus import Milvus
 
 from chatchat.settings import Settings
 from chatchat.server.db.repository import list_file_num_docs_id_by_kb_name_and_file_name

@@ -1,4 +1,4 @@
-from langchain.chains import LLMChain
+from langchain_classic.chains import LLMChain
 from langchain_community.utilities import SQLDatabase
 from langchain_core.prompts.prompt import PromptTemplate
 from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain

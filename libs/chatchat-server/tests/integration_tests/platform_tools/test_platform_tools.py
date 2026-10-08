@@ -3,7 +3,7 @@ import logging
 import logging.config
 
 import pytest
-from langchain.agents import tool
+from langchain_classic.agents import tool
 
 from chatchat.server.agents_registry.agents_registry import agents_registry
 from chatchat.server.utils import get_ChatPlatformAIParams

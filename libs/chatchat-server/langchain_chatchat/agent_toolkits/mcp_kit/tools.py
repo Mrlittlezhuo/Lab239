@@ -16,8 +16,7 @@ from mcp.types import (
 from mcp.types import (
     Tool as MCPTool,
 )
-from pydantic.v1 import BaseModel, create_model, Field
-from pydantic.v1.fields import FieldInfo
+from chatchat.server.pydantic_v1 import BaseModel, create_model, Field, FieldInfo
 
 NonTextContent = ImageContent | EmbeddedResource
 

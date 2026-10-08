@@ -9,8 +9,8 @@ from uuid import UUID
 from enum import Enum
 from langchain_core.load import dumpd, dumps, load, loads
 
-from langchain.callbacks import AsyncIteratorCallbackHandler
-from langchain.schema import AgentAction, AgentFinish
+from langchain_classic.callbacks import AsyncIteratorCallbackHandler
+from langchain_core.agents import AgentAction, AgentFinish
 from langchain_community.callbacks.human import HumanRejectedException
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.outputs import LLMResult

@@ -3,7 +3,7 @@ import asyncio
 import sys
 from contextlib import AsyncExitStack
 
-from langchain.agents.agent import RunnableMultiActionAgent
+from langchain_classic.agents.agent import RunnableMultiActionAgent
 from langchain_core.messages import SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel
@@ -30,8 +30,7 @@ from typing import (
     Union, cast,
 )
 
-from langchain import hub
-from langchain.agents import AgentExecutor, create_openai_tools_agent, create_tool_calling_agent
+from langchain_classic.agents import AgentExecutor, create_openai_tools_agent, create_tool_calling_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.tools import BaseTool

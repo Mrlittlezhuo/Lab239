@@ -21,7 +21,7 @@ from typing import List
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from langchain.llms.base import BaseLLM
+from langchain_core.language_models import BaseLLM
 from langchain_core.embeddings import Embeddings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -105,8 +105,8 @@ class _FakeLLM(BaseLLM):
         return "fake"
 
     def _generate(self, prompts, stop=None, run_manager=None, **kwargs):
-        from langchain.schema import Generation
-        from langchain.schema.output import LLMResult
+        from langchain_core.outputs import Generation
+        from langchain_core.outputs import LLMResult
 
         return LLMResult(generations=[[Generation(text="ok")]])
 

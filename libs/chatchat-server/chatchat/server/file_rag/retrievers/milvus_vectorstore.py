@@ -1,12 +1,12 @@
 import warnings
 
-from langchain.vectorstores import VectorStore
+from langchain_core.vectorstores import VectorStore
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.vectorstores import VectorStoreRetriever
 
 from chatchat.server.file_rag.retrievers.base import BaseRetrieverService
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 from langchain_core.callbacks.manager import (
         AsyncCallbackManagerForRetrieverRun,
         CallbackManagerForRetrieverRun

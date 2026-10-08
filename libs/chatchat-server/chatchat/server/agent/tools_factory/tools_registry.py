@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import inspect
 import json
 import re
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, List
+from typing import Any, Callable, Dict, Optional, Type, Union, List
 
-from langchain.agents import tool
+from langchain_classic.agents import tool
 from langchain_core.tools import BaseTool
+from pydantic import ConfigDict
+from pydantic.fields import FieldInfo
 
 from chatchat.server.knowledge_base.kb_doc_api import DocumentWithVSId
-from chatchat.server.pydantic_v1 import BaseModel, Extra
+from chatchat.server.pydantic_v1 import BaseModel, Extra, create_model
+from langchain_chatchat.utils import PYDANTIC_V2
 
 __all__ = ["regist_tool", "BaseToolOutput", "format_context"]
 
@@ -17,55 +21,63 @@ _TOOLS_REGISTRY = {}
 
 
 # patch BaseTool to support extra fields e.g. a title
-BaseTool.Config.extra = Extra.allow
+if PYDANTIC_V2:
+    # pydantic v2: 通过覆盖基类 model_config 使后续创建的 tool 子类
+    # 允许未声明的构造参数（等价于 v1 的 BaseTool.Config.extra = Extra.allow）
+    _base_tool_config = dict(BaseTool.model_config)
+    _base_tool_config["extra"] = "allow"
+    BaseTool.model_config = ConfigDict(**_base_tool_config)
+else:
+    BaseTool.Config.extra = Extra.allow
 
-################################### TODO: workaround to langchain #15855
-# patch BaseTool to support tool parameters defined using pydantic Field
-
-
-def _new_parse_input(
-    self,
-    tool_input: Union[str, Dict],
-) -> Union[str, Dict[str, Any]]:
-    """Convert tool input to pydantic model."""
-    input_args = self.args_schema
-    if isinstance(tool_input, str):
-        if input_args is not None:
-            key_ = next(iter(input_args.__fields__.keys()))
-            input_args.validate({key_: tool_input})
-        return tool_input
-    else:
-        if input_args is not None:
-            result = input_args.parse_obj(tool_input)
-            return result.dict()
+# 说明：v1 时代为绕过 langchain#15855 曾在此 monkeypatch
+# ``BaseTool._parse_input`` / ``BaseTool._to_args_and_kwargs``（2 参签名）。
+# 迁移到 langchain-core v2 后，核心实现的 ``run``/``ainvoke`` 以 3 参
+# （``tool_input, tool_call_id``）调用这两个方法，且原生实现已覆盖
+# pydantic Field 工具参数与 ``InjectedToolCallId`` 的处理（项目工具未使用
+# 后两者），因此移除该补丁，改用 v2 原生实现。
 
 
-def _new_to_args_and_kwargs(self, tool_input: Union[str, Dict]) -> Tuple[Tuple, Dict]:
-    # For backwards compatibility, if run_input is a string,
-    # pass as a positional argument.
-    if isinstance(tool_input, str):
-        return (tool_input,), {}
-    else:
-        # for tool defined with `*args` parameters
-        # the args_schema has a field named `args`
-        # it should be expanded to actual *args
-        # e.g.: test_tools
-        #       .test_named_tool_decorator_return_direct
-        #       .search_api
-        if "args" in tool_input:
-            args = tool_input["args"]
-            if args is None:
-                tool_input.pop("args")
-                return (), tool_input
-            elif isinstance(args, tuple):
-                tool_input.pop("args")
-                return args, tool_input
-        return (), tool_input
+def _func_fieldinfo_has_schema_extra(func: Callable) -> bool:
+    """函数签名上是否存在携带 json_schema_extra（如 v1 风格 ``choices``）的
+    FieldInfo。v2 的 tool() 推断 schema 时仅透传 description，会丢弃这些信息。
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    for param in sig.parameters.values():
+        if isinstance(param.default, FieldInfo) and param.default.json_schema_extra:
+            return True
+    return False
 
 
-BaseTool._parse_input = _new_parse_input
-BaseTool._to_args_and_kwargs = _new_to_args_and_kwargs
-###############################
+def _build_function_args_schema(func: Callable, title: str) -> Type[BaseModel]:
+    """按 v1 语义从函数签名重建 args_schema。
+
+    v1 的 ``tool`` 装饰器会把签名上的 ``FieldInfo`` 原样保留（含
+    ``json_schema_extra`` 中的 ``choices`` 等，WebUI 依赖它渲染参数下拉框）；
+    v2 的 ``tool`` 只透传 ``description``。此函数仅在检测到
+    ``json_schema_extra`` 时由 ``regist_tool`` 调用，以 ``create_model``
+    还原 v1 行为，其余工具仍走 v2 原生推断路径。
+    """
+    import typing as _typing
+
+    sig = inspect.signature(func)
+    hints = _typing.get_type_hints(func)
+    fields: Dict[str, Any] = {}
+    for name, param in sig.parameters.items():
+        if name not in hints:
+            continue
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        if isinstance(param.default, FieldInfo):
+            fields[name] = (hints[name], param.default)
+        elif param.default is inspect.Parameter.empty:
+            fields[name] = (hints[name], ...)
+        else:
+            fields[name] = (hints[name], param.default)
+    return create_model(title, **fields)
 
 
 def regist_tool(
@@ -96,13 +108,31 @@ def regist_tool(
         # set a default title for human
         if not title:
             title = "".join([x.capitalize() for x in t.name.split("_")])
-        t.title = title
+        # pydantic v2 禁止给模型实例赋值未声明字段；
+        # 用 object.__setattr__ 保持 v1 时代 extra 属性（title）的语义
+        object.__setattr__(t, "title", title)
 
     def wrapper(def_func: Callable) -> BaseTool:
+        _args_schema = args_schema
+        if (
+            _args_schema is None
+            and infer_schema
+            and _func_fieldinfo_has_schema_extra(def_func)
+        ):
+            try:
+                _args_schema = _build_function_args_schema(
+                    def_func, def_func.__name__
+                )
+            except Exception:
+                # 回退到 v2 原生推断路径
+                _args_schema = None
         partial_ = tool(
             *args,
+            # v2 的 tool() 要求显式 description 或函数 docstring；
+            # v1 时 description 依赖 _parse_tool 事后覆盖，这里显式透传
+            description=description or None,
             return_direct=return_direct,
-            args_schema=args_schema,
+            args_schema=_args_schema,
             infer_schema=infer_schema,
         )
         t = partial_(def_func)
@@ -114,6 +144,7 @@ def regist_tool(
     else:
         t = tool(
             *args,
+            description=description or None,
             return_direct=return_direct,
             args_schema=args_schema,
             infer_schema=infer_schema,
@@ -131,7 +162,7 @@ def format_context(self: BaseToolOutput) -> str:
     source_documents = []
 
     for inum, doc in enumerate(docs):
-        doc = DocumentWithVSId.parse_obj(doc)
+        doc = DocumentWithVSId.model_validate(doc)
         source_documents.append(doc.page_content)
 
     if len(source_documents) == 0:

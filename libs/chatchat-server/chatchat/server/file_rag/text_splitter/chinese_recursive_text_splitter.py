@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Any, List, Optional
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from chatchat.utils import build_logger
 

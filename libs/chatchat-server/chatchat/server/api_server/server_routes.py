@@ -8,7 +8,8 @@ from chatchat.server.utils import get_prompt_template, get_server_configs
 
 server_router = APIRouter(prefix="/server", tags=["Server State"])
 
-available_template_types = list(Settings.prompt_settings.model_fields.keys())
+# pydantic v2.11+ 禁止在实例上访问 model_fields，改经类属性访问
+available_template_types = list(Settings.prompt_settings.__class__.model_fields.keys())
 
 # 服务器相关接口
 server_router.post(

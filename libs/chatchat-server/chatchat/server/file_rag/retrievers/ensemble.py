@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from langchain.retrievers import EnsembleRetriever
-from langchain.vectorstores import VectorStore
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_core.vectorstores import VectorStore
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.retrievers import BaseRetriever
 

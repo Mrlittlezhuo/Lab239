@@ -7,10 +7,10 @@ from functools import partial
 from operator import itemgetter
 from typing import Any, List, Sequence, Tuple, Union
 
-from langchain.agents.agent import AgentExecutor, RunnableAgent
-from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
-from langchain.prompts.chat import BaseChatPromptTemplate
-from langchain.schema import (
+from langchain_classic.agents.agent import AgentExecutor, RunnableAgent
+from langchain_classic.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_core.prompts.chat import BaseChatPromptTemplate
+from langchain_core.agents import (
     AgentAction,
     AgentFinish,
 )

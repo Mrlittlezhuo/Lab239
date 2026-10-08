@@ -2,7 +2,7 @@ import logging
 from functools import lru_cache
 from typing import Dict, List, Tuple, Union
 
-from langchain.prompts.chat import ChatMessagePromptTemplate
+from langchain_core.prompts.chat import ChatMessagePromptTemplate
 
 from chatchat.server.pydantic_v2 import BaseModel, Field
 from chatchat.utils import build_logger

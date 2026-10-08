@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from chatchat.settings import Settings
 from chatchat.utils import build_logger

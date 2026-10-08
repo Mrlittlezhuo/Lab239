@@ -20,9 +20,9 @@ from typing import (
 )
 
 from langchain_core.embeddings import Embeddings
-from langchain_core.pydantic_v1 import (
+from pydantic import ConfigDict
+from chatchat.server.pydantic_v1 import (
     BaseModel,
-    Extra,
     Field,
     SecretStr,
     root_validator,
@@ -83,11 +83,7 @@ class ZhipuAIEmbeddings(BaseModel, Embeddings):
     """Optional httpx.Client."""
 
 
-    class Config:
-        """Configuration for this pydantic object."""
-
-        extra = Extra.forbid
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     @root_validator(pre=True, allow_reuse=True)
     def build_extra(cls, values: Dict[str, Any]) -> Dict[str, Any]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import langchain_core.messages
 import langchain_core.prompts
-from langchain.prompts.chat import ChatPromptTemplate
+from langchain_core.prompts.chat import ChatPromptTemplate
 
 from chatchat.server.pydantic_v1 import Field, model_schema, typing
 

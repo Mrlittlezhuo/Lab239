@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from langchain.vectorstores import VectorStore
+from langchain_core.vectorstores import VectorStore
 from langchain_core.retrievers import BaseRetriever
 
 from chatchat.server.file_rag.retrievers.base import BaseRetrieverService

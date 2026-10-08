@@ -4,7 +4,8 @@ source  https://github.com/langchain-ai/langchain-mcp-adapters
 import os
 from contextlib import AsyncExitStack
 from types import TracebackType
-from typing import Any, Literal, Optional, TypedDict, cast
+from typing import Any, Literal, Optional, cast
+from typing_extensions import TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool

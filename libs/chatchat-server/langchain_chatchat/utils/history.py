@@ -3,7 +3,7 @@ import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Tuple, Union
 
-from langchain.prompts.chat import ChatMessagePromptTemplate
+from langchain_core.prompts.chat import ChatMessagePromptTemplate
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,

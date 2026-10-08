@@ -4,8 +4,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from typing import Any, List, Optional, Sequence
 
-from langchain.callbacks.manager import Callbacks
-from langchain.retrievers.document_compressors.base import BaseDocumentCompressor
+from langchain_core.runnables.config import Callbacks
+from langchain_core.documents.compressor import BaseDocumentCompressor
 from langchain_core.documents import Document
 from pydantic import Field, PrivateAttr
 from sentence_transformers import CrossEncoder

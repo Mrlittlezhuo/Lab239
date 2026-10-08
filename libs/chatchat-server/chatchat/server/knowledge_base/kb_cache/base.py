@@ -3,8 +3,8 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, List, Tuple, Union, Generator
 
-from langchain.embeddings.base import Embeddings
-from langchain.vectorstores.faiss import FAISS
+from langchain_core.embeddings import Embeddings
+from langchain_community.vectorstores.faiss import FAISS
 
 from chatchat.utils import build_logger
 

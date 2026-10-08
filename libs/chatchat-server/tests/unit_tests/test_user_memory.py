@@ -865,7 +865,7 @@ class TestPromptInjection:
             # 与 kb_chat.py 的 RAG 注入一致：每条记忆消息经
             # History(role=..., content=...).to_msg_template(False) 转为消息模板
             from chatchat.server.chat.utils import History
-            from langchain.prompts.chat import ChatPromptTemplate
+            from langchain_core.prompts.chat import ChatPromptTemplate
             mem_templates = [
                 History(role=m["role"], content=m["content"]).to_msg_template(False)
                 for m in msgs
