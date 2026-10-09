@@ -69,6 +69,9 @@ RAG 引用、检索分数、上传状态、错误提示和 Agent 可控性仍然
 - [任务 014：单 Agent 闭环迁移到 LangGraph](./Claude任务/014-单Agent闭环迁移到LangGraph.md)：已完成生产 Agent 状态图、持久化 checkpoint、断点恢复和 legacy 回退。
 - [任务 015：智能对话总图与统一入口](./Claude任务/015-智能对话总图与统一入口.md)：待 Claude 执行，将直接回答、知识库、单工具和多步骤 Agent 收敛为统一 LangGraph 智能对话入口。
 
+已确定后续本地可观测性采用 Arize Phoenix 与 OpenTelemetry/OpenInference：任务 015
+完成后先接入本地 Trace，再进入论文研究领域数据模型与业务闭环。
+
 ## 核心原则
 
 ### 身份来自服务端
