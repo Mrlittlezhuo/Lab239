@@ -21,6 +21,7 @@
 | 013 | [LangChain 1.x 与 LangGraph 1.x 迁移基线](./013-LangChain与LangGraph迁移基线.md) | `completed` | `2efa2eb8b76d2b75034869ffbf49cf14ebd0553d` |
 | 014 | [单 Agent 闭环迁移到 LangGraph](./014-单Agent闭环迁移到LangGraph.md) | `completed` | `4ec15730d529cd98e5f31721f43da5d98b3f099c` |
 | 015 | [智能对话总图与统一入口](./015-智能对话总图与统一入口.md) | `ready_for_claude` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
+| 016 | [Phoenix 本地可观测性](./016-Phoenix本地可观测性.md) | `ready_for_claude` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
 
 状态以具体任务文档为准。如果索引和任务文档不一致，Codex 应先核对 Git 历史和工作区，再修正索引。
 
@@ -41,6 +42,9 @@
 4. Codex 审查、修复和验证后填写审查记录，将状态改为 `completed`；
 5. `completed` 文档与最终代码进入同一个提交，远端是否已交付由 Git 分支状态判断；
 6. `git stash` 只存在于本机，不能作为跨电脑交接记录。
+
+任务 015 和 016 本次经用户确认串联执行：Claude 先完成 015，在保留其未提交改动的
+前提下继续 016，两者完成后由 Codex 一次性联合审查。
 
 ## 新建任务
 

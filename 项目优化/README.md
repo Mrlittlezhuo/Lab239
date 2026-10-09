@@ -68,9 +68,10 @@ RAG 引用、检索分数、上传状态、错误提示和 Agent 可控性仍然
 - [任务 013：LangChain 1.x 与 LangGraph 1.x 迁移基线](./Claude任务/013-LangChain与LangGraph迁移基线.md)：已完成现代依赖兼容、现有功能回归和最小 LangGraph 能力验证。
 - [任务 014：单 Agent 闭环迁移到 LangGraph](./Claude任务/014-单Agent闭环迁移到LangGraph.md)：已完成生产 Agent 状态图、持久化 checkpoint、断点恢复和 legacy 回退。
 - [任务 015：智能对话总图与统一入口](./Claude任务/015-智能对话总图与统一入口.md)：待 Claude 执行，将直接回答、知识库、单工具和多步骤 Agent 收敛为统一 LangGraph 智能对话入口。
+- [任务 016：Phoenix 本地可观测性](./Claude任务/016-Phoenix本地可观测性.md)：在任务 015 的统一入口上接入本地 Phoenix Trace，关联路由、LangGraph/Agent、工具、RAG 和 LLM，并在监控不可用时安全降级。
 
-已确定后续本地可观测性采用 Arize Phoenix 与 OpenTelemetry/OpenInference：任务 015
-完成后先接入本地 Trace，再进入论文研究领域数据模型与业务闭环。
+已确定本地可观测性采用 Arize Phoenix 与 OpenTelemetry/OpenInference。任务 015 和 016
+本次由 Claude 串联执行，之后由 Codex 统一审查；通过后再进入论文研究领域数据模型与业务闭环。
 
 ## 核心原则
 
