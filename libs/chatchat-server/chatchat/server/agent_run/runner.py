@@ -35,30 +35,20 @@ import time
 from collections import deque
 from typing import Any, AsyncIterator, Dict, Optional
 
-from sqlalchemy import text as _text
-
 from chatchat.server.db.models.agent_run_model import AgentRunModel  # noqa: F401  (注册表到 Base)
 from chatchat.server.db.models.agent_step_model import AgentStepModel  # noqa: F401
 from chatchat.server.agent_run import schema as S
+from chatchat.server.agent_run.common import (
+    converge_run_best_effort as _converge_common,
+    invoke_tool as _invoke_tool_common,
+    set_plan_text as _set_plan_text_common,
+)
+from chatchat.server.agent_run.common import step_payload as _step_payload
 from chatchat.server.db.repository import agent_run_repository as repo
 from chatchat.settings import Settings
 
 DEFAULT_MAX_STEPS = 8
 DEFAULT_TIMEOUT_SECONDS = 600
-
-
-def _step_payload(step) -> dict:
-    return {
-        "id": step.id,
-        "seq": step.seq,
-        "type": step.type,
-        "status": step.status,
-        "goal": step.goal,
-        "tool_name": step.tool_name,
-        "tool_input": step.tool_input,
-        "output_summary": step.output_summary,
-        "error_summary": step.error_summary,
-    }
 
 
 class AgentRunner:
@@ -130,19 +120,11 @@ class AgentRunner:
     async def _tool_invoke(self, tool, args: dict) -> str:
         """调用普通或异步工具，异常向上抛出。
 
-        LangChain ``BaseTool`` 和 MCP 工具都提供 ``ainvoke``，优先
-        使用它才能正确执行只支持异步的工具。少量项目内旧工具/
-        测试替身只有 ``invoke``，保留直接同步调用兼容。不强制
-        使用 ``asyncio.to_thread``：当前项目运行环境中该路径会导致
-        工具步骤与离线测试永久等待。
+        语义与 ``agent_run.common.invoke_tool`` 完全一致（优先 ``ainvoke``，
+        兼容只有同步 ``invoke`` 的旧工具/测试替身；不使用
+        ``asyncio.to_thread`` 以免离线环境死锁）。
         """
-        ainvoke = getattr(tool, "ainvoke", None)
-        if callable(ainvoke):
-            return await ainvoke(args)
-        invoke = getattr(tool, "invoke", None)
-        if not callable(invoke):
-            raise TypeError(f"工具 {getattr(tool, 'name', repr(tool))!r} 不可调用")
-        return invoke(args)
+        return await _invoke_tool_common(tool, args)
 
     def _terminal_event(self, status: str) -> dict:
         if status == "cancelled":
@@ -385,18 +367,7 @@ class AgentRunner:
     # -- 收敛辅助 --------------------------------------------------------
 
     def _set_plan_text(self, session, plan: S.Plan) -> None:
-        try:
-            session.execute(
-                _text(
-                    "UPDATE agent_run SET plan_text = :p "
-                    "WHERE id = :id AND owner_id = :owner"
-                ),
-                {"p": S.truncate_text(plan.to_json(), 8000),
-                 "id": self.run_id, "owner": self.owner_id},
-            )
-            session.commit()
-        except Exception:
-            session.rollback()
+        _set_plan_text_common(session, self.run_id, self.owner_id, plan)
 
     def _finish_completed(self, session, answer: str) -> None:
         self.final_result = answer
@@ -417,21 +388,8 @@ class AgentRunner:
         """用独立会话兜底收敛；任何异常都吞掉，绝不阻断中断/关闭路径。"""
         if self.run_id is None:
             return
-        fresh = self.session_factory()
-        try:
-            if repo.run_status(fresh, self.run_id, self.owner_id) not in (
-                None, *repo.RUN_TERMINAL_STATUSES
-            ):
-                repo.ensure_terminal(fresh, self.run_id, self.owner_id,
-                                     error="运行中断，未正常结束")
-                self._set_status("failed", error="运行中断，未正常结束")
-        except Exception:
-            pass
-        finally:
-            try:
-                fresh.close()
-            except Exception:
-                pass
+        if _converge_common(self.session_factory, self.run_id, self.owner_id):
+            self._set_status("failed", error="运行中断，未正常结束")
 
 
 __all__ = ["AgentRunner", "DEFAULT_MAX_STEPS", "DEFAULT_TIMEOUT_SECONDS"]

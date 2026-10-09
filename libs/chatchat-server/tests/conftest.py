@@ -1,4 +1,5 @@
 """Configuration for unit tests."""
+import asyncio
 import logging
 from importlib import util
 from typing import Dict, List, Sequence
@@ -10,6 +11,17 @@ from chatchat.utils import (
     get_timestamp_ms,
 )
 from pytest import Config, Function, Parser
+
+
+@pytest.fixture(scope="session", autouse=True)
+def close_agent_checkpoint_store_after_tests():
+    """关闭绕过 FastAPI lifespan 的服务层测试所惰性创建的连接。"""
+    yield
+    from chatchat.server.agent_run.runtime.checkpoint import (
+        shutdown_agent_checkpoint_store,
+    )
+
+    asyncio.run(shutdown_agent_checkpoint_store())
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -101,4 +113,3 @@ def logging_conf() -> dict:
         1024 * 1024 * 1024 * 3,
         1024 * 1024 * 1024 * 3,
     )
-

@@ -22,8 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from chatchat.server.agent_run.planner import LLMPlanner
-from chatchat.server.agent_run.runner import AgentRunner
+from chatchat.server.agent_run.runtime import create_agent_runtime, runtime_name
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
+from chatchat.server.db.repository import agent_run_repository as agent_run_repo
 from chatchat.server.db.repository import update_message
 from chatchat.server.db.repository.message_repository import filter_message
 from chatchat.server.memory import memory_service
@@ -244,7 +245,7 @@ def _event_to_sse(ev: dict, message_id: Optional[str], model_name: str) -> str:
     return out.model_dump_json()
 
 
-def _final_message_text(runner: AgentRunner) -> str:
+def _final_message_text(runner: Any) -> str:
     if runner.status == "completed":
         return runner.final_result or ""
     if runner.status == "cancelled":
@@ -255,7 +256,7 @@ def _final_message_text(runner: AgentRunner) -> str:
 def _persist_final_message(
     message_id: Optional[str],
     owner_id: str,
-    runner: AgentRunner,
+    runner: Any,
 ) -> None:
     """运行收敛后把最终可见文本写入来源消息；失败只记日志。"""
     if not message_id or not owner_id:
@@ -279,7 +280,7 @@ def _persist_final_message(
 
 
 def _aggregate_result(
-    events: List[dict], runner: AgentRunner, conversation_id: str
+    events: List[dict], runner: Any, conversation_id: str
 ) -> dict:
     """非流式模式：把事件聚合为一份运行结果。"""
     plan: Optional[dict] = None
@@ -359,7 +360,9 @@ async def agent_run_chat(
         )
 
         planner = _build_planner(model_name)
-        runner = AgentRunner(
+        # 任务 014：运行时由统一工厂创建（默认 LangGraph，legacy 仅回退）；
+        # Chat API / WebUI 不感知具体运行时，差异收敛在此处。
+        runner = create_agent_runtime(
             session_factory=_session_factory,
             owner_id=owner_id,
             planner=planner,
@@ -396,8 +399,132 @@ async def agent_run_chat(
         raise
 
 
+async def agent_run_resume(
+    *,
+    run_id: str,
+    owner_id: str,
+    model_name: Optional[str] = None,
+    tool_config: Optional[Dict[str, Any]] = None,
+    use_mcp: bool = False,
+    stream: bool = True,
+) -> Any:
+    """从 checkpoint 断点恢复一个中断的运行（任务 014 §7，仅后端）。
+
+    - ``run_id`` / ``owner_id`` 由服务端校验归属，非本人/不存在的运行
+      抛 ``LookupError``（路由层转 404）；
+    - 已终态运行：幂等空操作，只回报终态；
+    - 恢复后从上次 checkpoint 的下一节点继续，已完成工具步骤绝不重跑；
+    - 规划器/工具/历史/记忆按当前用户上下文重建（``tool_config`` 为
+      ``None`` 时使用完整工具注册表）；
+    - ``legacy`` 运行时（迁移期回退）不支持断点恢复，抛 ``RuntimeError``
+      由路由层给出明确状态（旧记录仅可查看/取消，绝不当作新图执行）。
+
+    流式返回 ``EventSourceResponse``；非流式返回聚合结果 dict。
+    """
+    if not owner_id:
+        raise ValueError("owner_id 不能为空（必须来自服务端认证上下文）")
+    if not run_id:
+        raise ValueError("run_id 不能为空")
+    if runtime_name() != "langgraph":
+        raise RuntimeError(
+            "当前运行时为 legacy（迁移期回退），不支持从 checkpoint 断点"
+            "恢复；该运行仅可查看或取消"
+        )
+
+    session = _session_factory()
+    try:
+        run = agent_run_repo.get_owned_run(session, run_id, owner_id)
+        if run is None:
+            # 跨用户/不存在的运行：统一 LookupError（路由层转 404，
+            # 与"不存在"不可区分）
+            raise LookupError("运行不存在或无权访问")
+        goal = run.goal or ""
+        conversation_id = run.conversation_id or ""
+        source_message_id = run.source_message_id
+        max_steps = run.max_steps
+    finally:
+        session.close()
+
+    tools: Dict[str, Any]
+    if tool_config:
+        tools = _build_tools(tool_config)
+    else:
+        # 未显式给出工具配置时恢复完整注册表（与运行当时一致的能力面）
+        tools = {name: t for name, t in get_tool().items() if t}
+    mcp_client = None
+    try:
+        if use_mcp:
+            mcp_tools, mcp_client = await _load_mcp_tools()
+            tools.update(mcp_tools)
+
+        history: List[Dict[str, str]] = []
+        memory_messages: List[Dict[str, str]] = []
+        ctx_session = _session_factory()
+        try:
+            if conversation_id:
+                history = _build_history(ctx_session, conversation_id, owner_id, None)
+            try:
+                memory_messages = [
+                    {"role": m.get("role", "system"), "content": m.get("content", "")}
+                    for m in (
+                        memory_service.memory_system_messages(
+                            ctx_session, owner_id, goal, conversation_id
+                        )
+                        or []
+                    )
+                ]
+            except Exception:
+                logger.warning("恢复时读取长期记忆失败（忽略）", exc_info=True)
+                memory_messages = []
+        finally:
+            try:
+                ctx_session.close()
+            except Exception:
+                pass
+
+        planner = _build_planner(model_name)
+        runner = create_agent_runtime(
+            session_factory=_session_factory,
+            owner_id=owner_id,
+            planner=planner,
+            tools=tools,
+            goal=goal,
+            conversation_id=conversation_id or None,
+            source_message_id=source_message_id,
+            history=history,
+            memory_messages=memory_messages,
+            max_steps=max_steps,
+            model_name=model_name or "",
+            existing_run_id=run_id,
+            forced="langgraph",
+        )
+
+        if not stream:
+            events: List[dict] = []
+            async for ev in runner.run():
+                events.append(ev)
+            _persist_final_message(source_message_id, owner_id, runner)
+            return _aggregate_result(events, runner, conversation_id)
+
+        from sse_starlette import EventSourceResponse
+
+        async def _stream() -> Any:
+            try:
+                async for ev in runner.run():
+                    yield _event_to_sse(ev, source_message_id, model_name or "")
+            finally:
+                await _close_mcp_client_async(mcp_client)
+                _persist_final_message(source_message_id, owner_id, runner)
+
+        return EventSourceResponse(_stream())
+    except Exception:
+        await _close_mcp_client_async(mcp_client)
+        raise
+
+
 __all__ = [
     "agent_run_chat",
+    "agent_run_resume",
     "_session_factory",
     "_build_planner",
     "_build_tools",

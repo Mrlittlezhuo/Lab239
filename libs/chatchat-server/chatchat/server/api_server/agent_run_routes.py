@@ -5,16 +5,18 @@
 - ``GET  /agent-runs``           当前用户的运行列表（可按会话过滤）；
 - ``GET  /agent-runs/{run_id}``  运行详情（含结构化计划与步骤轨迹）；
 - ``POST /agent-runs/{run_id}/cancel``  取消运行（pending/running 生效；
-  已终态保持原状）。
+  已终态保持原状）；
+- ``POST /agent-runs/{run_id}/resume``  从 checkpoint 断点恢复中断的运行
+  （任务 014；仅 langgraph 运行时支持，legacy 回退给出明确状态）。
 
 所有接口的 owner 只取自服务端认证上下文（``user.id``），不读取请求体中的
 任何用户身份；非本人/不存在的运行一律 404，不区分原因。
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -122,6 +124,42 @@ async def cancel_agent_run(
             detail="运行不存在或无权访问",
         )
     return {"run": _run_to_dict(run)}
+
+
+@agent_run_router.post("/{run_id}/resume", summary="从 checkpoint 断点恢复中断的运行（任务 014）")
+async def resume_agent_run(
+    run_id: str,
+    user: UserModel = Depends(require_password_changed),
+    stream: bool = Query(False, description="True 返回 SSE 事件流；False 返回聚合结果"),
+    tool_config: Optional[Dict[str, Any]] = Body(
+        None, description="工具配置；缺省时使用完整工具注册表"
+    ),
+    use_mcp: bool = Body(False, description="是否加载启用的 MCP 工具"),
+):
+    """恢复必须通过认证上下文校验运行归属（任务 014 §5/§7）。
+
+    - 非本人/不存在的运行：404；
+    - 当前运行时为 legacy（迁移期回退）：409 并给出明确状态
+      （旧记录仅可查看/取消，绝不当作新图执行）；
+    - 已终态运行：幂等，原样返回终态结果。
+    """
+    from chatchat.server.agent_run.service import agent_run_resume
+
+    try:
+        return await agent_run_resume(
+            run_id=run_id,
+            owner_id=user.id,
+            stream=stream,
+            tool_config=tool_config,
+            use_mcp=use_mcp,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="运行不存在或无权访问",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
 __all__ = ["agent_run_router"]

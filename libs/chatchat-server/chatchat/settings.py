@@ -330,6 +330,9 @@ class ApiModelSettings(BaseFileSettings):
     AGENT_RUN_TIMEOUT_SECONDS: int = 600
     """单 Agent 运行总超时（秒，任务 011）：超过后停止执行并收敛为 failed"""
 
+    AGENT_RUNTIME: str = "langgraph"
+    """单 Agent 闭环运行时（任务 014）：langgraph（默认，LangGraph 状态图 + 持久化 checkpoint）/ legacy（手写 AgentRunner 循环，仅用于迁移期回退排错）"""
+
     AUTO_ROUTE_TIMEOUT_SECONDS: int = 20
     """自动意图路由总超时（秒，任务 012）：超过后回退直接回答，不阻断对话"""
 

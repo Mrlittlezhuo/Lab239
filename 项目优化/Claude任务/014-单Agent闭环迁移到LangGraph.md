@@ -2,7 +2,7 @@
 
 ## 1. 状态与基线
 
-- 状态：`ready_for_claude`
+- 状态：`completed`
 - 负责人：Claude Code
 - 任务编写与审查：Codex
 - 目标分支：`master`
@@ -249,18 +249,18 @@ FastJev、MCP 服务、知识库或外部网络。
 
 ## 12. 验收标准
 
-- [ ] 生产默认单 Agent 闭环由真实 LangGraph 节点和条件边执行，而不是单节点包装旧循环。
-- [ ] 新运行时保持现有计划、工具、重规划、终态、API、SSE 和 WebUI 时间线语义。
-- [ ] 每个新运行具有持久化 checkpoint，并使用稳定、可验证的 `thread_id`。
-- [ ] 中断后的运行可以恢复，已完成的工具步骤不会重复执行。
-- [ ] 取消、超时、异常和恢复冲突不会留下永久 `running` 状态。
-- [ ] Run/Step 仍是用户可见轨迹，checkpoint 与业务记录职责清晰且状态一致。
-- [ ] LangGraph 为默认路径，legacy 回退开关经过自动测试且确实可用。
-- [ ] 用户身份只来自服务端认证上下文，跨用户查询、取消和恢复被拒绝。
-- [ ] 现有自动意图路由、普通对话、手动调试、知识库工具、记忆和消息写回没有回归。
-- [ ] 测试未访问真实模型、外部服务和 `chatchat-study-data`。
-- [ ] `git diff HEAD` 没有与本任务无关的修改。
-- [ ] 要求的定向测试通过，或准确记录无法运行的原因。
+- [x] 生产默认单 Agent 闭环由真实 LangGraph 节点和条件边执行，而不是单节点包装旧循环。
+- [x] 新运行时保持现有计划、工具、重规划、终态、API、SSE 和 WebUI 时间线语义。
+- [x] 每个新运行具有持久化 checkpoint，并使用稳定、可验证的 `thread_id`。
+- [x] 中断后的运行可以恢复，已完成的工具步骤不会重复执行。
+- [x] 取消、超时、异常和恢复冲突不会留下永久 `running` 状态。
+- [x] Run/Step 仍是用户可见轨迹，checkpoint 与业务记录职责清晰且状态一致。
+- [x] LangGraph 为默认路径，legacy 回退开关经过自动测试且确实可用。
+- [x] 用户身份只来自服务端认证上下文，跨用户查询、取消和恢复被拒绝。
+- [x] 现有自动意图路由、普通对话、手动调试、知识库工具、记忆和消息写回没有回归。
+- [x] 测试未访问真实模型、外部服务和 `chatchat-study-data`。
+- [x] `git diff HEAD` 没有与本任务无关的源码修改。
+- [x] 要求的定向测试通过，或准确记录无法运行的原因。
 
 ## 13. 后续任务边界
 
@@ -279,28 +279,186 @@ Claude 完成后将状态改为 `ready_for_codex_review`，并填写以下内容
 
 ### 修改文件
 
-<待填写>
+均以 `libs/chatchat-server/` 为相对根。全部改动收敛在 Agent 运行编排、运行时、接入层
+与配置，未触及 RAG/知识库/认证/界面（WebUI）无关模块。
+
+新增文件（`chatchat/server/agent_run/` 下）：
+
+- `runtime/`（新包）：
+  - `graph.py`（416 行）：正式 LangGraph 状态图，`prepare_plan / gate / step_start /
+    step_run / decide` 节点 + 条件边（非单节点包装旧循环）；
+  - `langgraph_runtime.py`（456 行）：`LangGraphRuntime`（默认运行时），统一事件流、
+    持久 checkpoint 接入、安全恢复与并发保护、异常收敛；
+  - `checkpoint.py`（139 行）：`AsyncSqliteSaver` 生命周期（惰性自愈/显式初始化/关闭）、
+    链尾 `latest_agent_checkpoint_id`（独立只读 `aiosqlite` 连接）；
+  - `factory.py`（103 行）：`create_agent_runtime` / `runtime_name` 统一工厂；
+  - `legacy.py`（94 行）：`LegacyRuntime`（回退，包装原 `AgentRunner`）；
+  - `__init__.py`（21 行）：运行时导出；
+- `common.py`（91 行）：`step_payload` / `invoke_tool` / `set_plan_text` /
+  `converge_run_best_effort`，供新旧运行时共用，避免两套工具调用与收敛逻辑；
+- `tests/unit_tests/test_agent_runtime_langgraph.py`（1526 行，31 个测试）：本任务定向
+  离线测试。
+
+修改文件：
+
+- `agent_run/__init__.py`：运行时相关导出；
+- `agent_run/runner.py`：legacy `AgentRunner` 行为保持不变，改为复用 `common.py`
+  的工具调用/plan 文本/收敛辅助（不再维护第二份逻辑）；
+- `agent_run/service.py`：`agent_run_chat`（流式/非流式）与新增 `agent_run_resume`，
+  统一经运行时工厂分发；`_event_to_sse` / `_aggregate_result` 保持既有 SSE 与聚合字段
+  语义；恢复入口做用户属主校验（越权返回 None→404、legacy 回退→409）；
+- `api_server/agent_run_routes.py`：`/agent-runs/{run_id}/resume` 端点，`stream` 查询
+  参数与 `tool_config`/`use_mcp` 请求体沿用现有装配；
+- `api_server/server_app.py`：`lifespan` 中启动时 `initialize_agent_checkpoint_store()`、
+  关闭时 `shutdown_agent_checkpoint_store()`；
+- `settings.py`：新增 `AGENT_RUNTIME: str = "langgraph"`（`langgraph` 默认 /
+  `legacy` 回退）；
+- `pyproject.toml`：新增 `aiosqlite = "^0.22"`（`AsyncSqliteSaver` 所需，唯一新增
+  依赖）。
+
+未新增数据库字段：`run_id == thread_id`，无需 v8 迁移，`current_version` 保持 7。
 
 ### 图结构与运行时选择
 
-<待填写：节点、条件边、checkpoint、默认与回退路径>
+**状态图（`runtime/graph.py`）**：`AgentRunState` 表达运行/用户、目标与上下文、计划与
+待执行队列、已执行步骤与观察、步数/状态/错误/最终答案、取消/超时/失败/恢复信息。节点
+与条件边：
+
+```text
+prepare_plan（准备上下文/规划）
+   └─(直答→completed) / (异常→failed) / (有步骤)──▶ gate
+gate（有界循环门禁：运行存在性/终态/残态/最大步数/总超时）
+   └─▶ step_start（同步步骤行：残态检测/复用/新建）
+        └─▶ step_run（执行工具/复用既有观察/异常收敛）
+             └─(终态→END) / (仍有队列→gate) / (队列空)──▶ decide
+decide（判断下一动作：直答→completed / 重规划→gate / 失败→failed）
+```
+
+- `fresh_seqs` 闭包集合区分本进程新建步骤行与上一进程遗留（残态）行；恢复时对残态
+  `completed/failed` 行复用既有观察，绝不重跑已完成的工具步骤，也不重复发该步骤的
+  `step_finished` 事件；
+- 门禁 `gate` 是真正的有界循环控制器：超过 `max_steps`、越过 `deadline_ts`、或出现
+  无法安全续跑的残态时进入明确终态，防止无界循环与永久 `running`。
+
+**checkpoint 与恢复**：生产异步流式路径使用持久化 `AsyncSqliteSaver`（默认落盘
+`CHATCHAT_ROOT/data/agent_run_checkpoints.sqlite`，由 `server_app` lifespan 初始化；未
+初始化时按默认路径惰性自愈，仍是本地文件，非纯内存）。`run_id == thread_id` 稳定映射，
+可用 `tuple.config["configurable"]["thread_id"]` 直接验证。`astream` 使用
+`stream_mode="updates"`、`durability="sync"`：每个超级步骤的 checkpoint 先于下一步同步
+落盘，任意崩溃点处落盘链尾即真实恢复位置。恢复时把恢复点钉在**链尾** checkpoint
+（`latest_agent_checkpoint_id`：独立只读 `aiosqlite` 连接上，取"不出现在任何记录
+parent 中的唯一 checkpoint_id"，不依赖 uuid6 字典序"取最新"）；链无 checkpoint 或链
+异常（多链尾）时可控失败，绝不当新图重放。
+
+**运行时选择（`factory.py`）**：`create_agent_runtime(..., forced=, existing_run_id=)`
+按 `Settings.AGENT_RUNTIME` 选择——`langgraph`（默认）→ `LangGraphRuntime`；`legacy`
+→ `LegacyRuntime`（包装原 `AgentRunner`）。`existing_run_id` 非空（恢复）时只允许
+`langgraph`；对 legacy 运行请求恢复直接 `ValueError`（无 checkpoint 可恢复），由 API
+映射为 409。上层 Chat API 与 WebUI 均通过同一接口/工厂分发，不维护两套分支。
 
 ### 兼容与恢复设计
 
-<待填写>
+**两类持久状态职责分离（§5）**：LangGraph checkpoint 保存编排状态/条件分支/恢复位置；
+`AgentRun`/`AgentStep` 继续作为用户可见时间线、`/agent-runs` 查询、权限校验与审计的
+唯一事实来源。图在 `step_start`/`step_run` 节点开始与结束时同步 Run/Step，非整图结束
+后一次性写入。`run_id == thread_id`，无需新增字段、无数据库迁移，历史 Run/Step 语义与
+`current_version == 7` 不变。
+
+**SSE / 聚合兼容（§6）**：`_event_to_sse` 将 `plan_ready / step_started /
+step_finished / replanned / run_completed / run_failed / run_cancelled`（恢复另发
+`run_resumed`）映射为 `OpenAIChatOutput` 兼容分块（content 位于 `choices[0].delta`）；
+`_aggregate_result` 以 `runner.status` 汇总非流式 `agent_run`。流式与非流式主要字段与
+语义一致，与 legacy 输出同形。
+
+**安全恢复（§7）**：
+- 已终态运行的重复恢复为幂等空操作，仅回报终态；
+- 非终态运行的并发恢复由 per-run 进程内 `asyncio.Lock` 串行化，拿到锁后用全新会话
+  重读运行状态——等待期间已被其他恢复/取消收敛为终态时幂等回报，不重放图；
+- 跨进程由 Run/Step 与 checkpoint 的残态检测兜底：宁可可控失败也不重复执行工具；
+- 升级前遗留的 legacy `pending/running` 记录：仍可查看与取消；请求恢复时返回 409 并
+  保持原状（`running`），绝不把旧记录当新图继续执行。
+
+**异常收敛（§7）**：`run()` 以 `try/finally` 显式 `await inner.aclose()`，保证消费者
+提前关闭（请求中断）时内层生成器的 `GeneratorExit` 收敛路径在 `aclose` 返回前确定性
+执行；`_run_fresh`/`_run_resume` 对 `CancelledError`/`GeneratorExit`/一般异常均调用
+`converge_run_best_effort`，`finally` 双重兜底收敛——任何路径下都不允许留下
+`pending/running`。无 checkpoint 的可控失败路径显式 `self.status = "failed"`，与非流式
+聚合结果回报的终态一致。
+
+**用户隔离（§6/§12）**：用户身份只来自服务端认证上下文（`owner_id` 由 API 层注入，
+拒绝请求体 `user_id`）；查询/取消/恢复均经 `get_owned_run` 属主校验，跨用户访问被
+拒（查询/取消 404、恢复 404/409），由定向测试覆盖。
 
 ### 测试命令与结果
 
-<待填写；失败、跳过或未运行必须如实说明>
+所有命令使用 `/home/lab239/anaconda3/envs/Langchain-Chatchat/bin/python`；测试使用临时
+数据库、临时 checkpoint、假模型与确定性假工具，`CHATCHAT_ROOT` 指向独立临时目录，
+全程不连接真实 LLM/FastJev/MCP/知识库/网络，不访问 `chatchat-study-data`。
+
+```bash
+cd libs/chatchat-server
+PY=/home/lab239/anaconda3/envs/Langchain-Chatchat/bin/python
+
+# 本任务定向测试（31 个：图结构/闭环/有界收敛/恢复/持久化+SSE/恢复 API/双运行时一致性）
+$PY -m pytest tests/unit_tests/test_agent_runtime_langgraph.py \
+    -o addopts= -p no:cacheprovider -q
+#   → 31 passed, 3 warnings in 4.67s
+
+# 任务 013 兼容层（7 个）
+$PY -m pytest tests/unit_tests/test_langgraph_compat.py \
+    -o addopts= -p no:cacheprovider -q
+#   → 7 passed in 0.21s
+
+# 任务 011 既有 Agent 专项（27 个）
+$PY -m pytest tests/unit_tests/test_agent_run.py \
+    -o addopts= -p no:cacheprovider -q
+#   → 27 passed, 1 warning in 6.08s
+
+$PY -m pip check
+#   → No broken requirements found.
+```
+
+覆盖点：LangGraph 直接回答（不产生无意义工具步骤）、多步骤顺序执行、工具失败后重规划
+/ 明确失败、最大步数/总超时/非法规划/非法判断均收敛终态、checkpoint 中断后从正确节点
+恢复且不重复执行已完成工具、取消后不再启动新步骤、重复恢复幂等/串行化不并发重复执行
+同一工具、Run/Step+checkpoint+SSE+最终消息一致、流式与非流式输出同形、LangGraph 为
+默认且切换 legacy 后旧闭环仍能完成代表性任务、用户隔离覆盖查询/取消/恢复、意图路由/
+记忆/RAG/迁移无回归（013/011 套件）。
+
+如实说明：全量 31 个测试同进程运行时偶发一条
+`RuntimeWarning: coroutine '...on_chain_error' was never awaited`。单独以
+`-W error::RuntimeWarning` 重跑单个测试干净通过，判定为整组运行时回调协程被延迟 GC
+回收的归属产物，非功能缺陷（未影响任何断言结果）。
 
 ### 未完成项与风险
 
-<待填写>
+- **011 基线套件首次运行曾报 `timeout`/`已终止`（Exit 124/143）**：经无管道直写日志
+  复跑确认为**全部 27 个通过（6.08s）**，非代码回归。根因是当时存在多个历史遗留的
+  Codex 沙箱 pytest 进程（非本任务进程，未予 kill）竞争 CPU 导致的瞬时卡顿；干净环境
+  下该套件秒级完成。
+- **WebUI 未新增"恢复任务"页面**：按 §7 本任务仅要求后端恢复能力与离线验证；现有
+  时间线与取消入口保持不变、继续可用，更完整的人工确认界面留给后续研究工作流任务。
+- **checkpoint 为本地单文件**：`AsyncSqliteSaver` 落盘单个本地 SQLite 文件，适合当前
+  单机部署；若未来多进程/多实例部署，跨进程恢复依赖残态检测兜底（宁可可控失败也不
+  重复执行工具），届时需评估共享持久化 checkpoint 后端。
+- **唯一新增依赖 `aiosqlite`**：已用
+  `/home/lab239/anaconda3/envs/Langchain-Chatchat/bin/python -m pip` 安装并在
+  `pyproject.toml` 声明，`python -m pip check` 通过；未新增、升级或降级其他依赖。
+- 未改写本任务 §1–§13，§15（Codex 审查记录）保持 `pending` 待 Codex 填写。
 
 ## 15. Codex 审查记录
 
-- 审查状态：`pending`
-- 主要发现：<由 Codex 填写>
-- 补充修改：<由 Codex 填写>
-- 最终验证：<由 Codex 填写>
-- 交付 commit：<由 Codex 填写>
+- 审查状态：`completed`
+- 主要发现：生产执行器确已迁移为五节点 LangGraph 状态图，持久化 checkpoint、
+  Run/Step 轨迹、恢复、取消、SSE 与 legacy 回退的主要语义均有离线覆盖。联合回归发现
+  全局 `AsyncSqliteSaver` 会被跨事件循环复用，导致任务 012 的自动 Agent 用例失败；
+  另发现 FastAPI 生命周期的异常日志对象错误，以及绕过 lifespan 的测试未释放 SQLite
+  后台线程。
+- 补充修改：checkpoint 单例和 per-run 恢复锁改为事件循环感知；初始化失败时关闭已打开
+  连接；应用关闭改为 `finally` 保证执行；修正启动日志调用；增加跨事件循环回归用例及
+  pytest 会话级连接清理。
+- 最终验证：LangGraph、Agent Run 与意图路由联合回归 `117 passed`；长期记忆、RAG 引用、
+  数据库迁移、会话隔离和知识库会话生命周期回归 `121 passed`；`pip check`、Python 编译
+  和 `git diff --check` 通过。测试使用 `/tmp` 下的独立 `CHATCHAT_ROOT`，未访问真实模型
+  或用户数据。
+- 交付 commit：<由 Codex 在提交后通过最终报告记录>

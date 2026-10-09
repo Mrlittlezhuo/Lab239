@@ -65,7 +65,8 @@ RAG 引用、检索分数、上传状态、错误提示和 Agent 可控性仍然
 - [任务 010：公开论文语料采集补全](./Claude任务/010-公开论文语料采集补全.md)：已完成，25 篇公开论文语料与可重复采集脚本通过验证。
 - [任务 011：第一版单 Agent 任务闭环](./Claude任务/011-第一版单Agent任务闭环.md)：已完成计划、多步执行、观察/重规划、Run/Step 持久化、取消 API 和 WebUI 执行时间线，待真实模型与界面人工验证。
 - [任务 012：智能意图路由与自动 Agent](./Claude任务/012-智能意图路由与自动Agent.md)：已完成自动判断直接回答、知识库/工具调用和多步骤 Agent Run，并为后续 FastJev 接入预留可替换路由接口。
-- [任务 013：LangChain 1.x 与 LangGraph 1.x 迁移基线](./Claude任务/013-LangChain与LangGraph迁移基线.md)：待Claude执行，先完成现代依赖兼容、现有功能回归和最小LangGraph能力验证，再迁移生产Agent运行器。
+- [任务 013：LangChain 1.x 与 LangGraph 1.x 迁移基线](./Claude任务/013-LangChain与LangGraph迁移基线.md)：已完成现代依赖兼容、现有功能回归和最小 LangGraph 能力验证。
+- [任务 014：单 Agent 闭环迁移到 LangGraph](./Claude任务/014-单Agent闭环迁移到LangGraph.md)：已完成生产 Agent 状态图、持久化 checkpoint、断点恢复和 legacy 回退。
 
 ## 核心原则
 

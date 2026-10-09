@@ -1,5 +1,6 @@
 import argparse
 import os
+from contextlib import asynccontextmanager
 from typing import Literal
 
 import uvicorn
@@ -10,6 +11,10 @@ from starlette.responses import RedirectResponse
 
 from chatchat import __version__
 from chatchat.settings import Settings
+from chatchat.server.agent_run.runtime.checkpoint import (
+    initialize_agent_checkpoint_store,
+    shutdown_agent_checkpoint_store,
+)
 from chatchat.server.api_server.agent_run_routes import agent_run_router
 from chatchat.server.api_server.chat_routes import chat_router
 from chatchat.server.api_server.conversation_routes import conversation_router
@@ -23,10 +28,32 @@ from chatchat.server.auth.routes_auth import auth_router
 from chatchat.server.auth.routes_admin import admin_router
 from chatchat.server.chat.completion import completion
 from chatchat.server.utils import MakeFastAPIOffline
+from chatchat.utils import build_logger
+
+
+logger = build_logger()
 
 
 def create_app(run_mode: str = None):
-    app = FastAPI(title="Langchain-Chatchat API Server", version=__version__)
+    # 任务 014：Agent 运行 checkpoint 存储（AsyncSqliteSaver）随应用生命周期
+    # 打开/关闭；初始化失败不阻塞应用启动（LangGraph 运行时会按需惰性
+    # 自愈，仍使用本地持久化文件）。
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            await initialize_agent_checkpoint_store()
+        except Exception:
+            logger.exception("初始化 Agent checkpoint 存储失败（忽略，运行时将惰性重试）")
+        try:
+            yield
+        finally:
+            await shutdown_agent_checkpoint_store()
+
+    app = FastAPI(
+        title="Langchain-Chatchat API Server",
+        version=__version__,
+        lifespan=lifespan,
+    )
     MakeFastAPIOffline(app)
     # Add CORS middleware to allow all origins
     # 在config.py中设置OPEN_DOMAIN=True，允许跨域
