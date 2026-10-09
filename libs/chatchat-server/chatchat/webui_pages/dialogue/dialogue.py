@@ -323,55 +323,65 @@ def dialogue_page(
         tab1, tab2 = st.tabs(["工具设置", "会话设置"])
 
         with tab1:
-            # 任务 012：三类对话模式。默认「自动 Agent」是面向普通用户的主
-            # 入口，无需手动选择工具；「普通对话」不做自动工具路由；
-            # 「手动调试」保留现有工具多选 / MCP / Agent Run 手动控件。
-            dialogue_mode = st.radio(
-                "对话模式",
-                ["自动 Agent（推荐）", "普通对话", "手动调试"],
-                index=0,
-                horizontal=True,
-                key="dialogue_mode",
-                help=(
-                    "自动 Agent：系统自动判断直接回答还是进入 Agent 执行（可调用工具）；"
-                    "普通对话：仅直接聊天，不做工具路由；"
-                    "手动调试：手动选择工具 / MCP / Agent Run，用于调试。"
-                ),
+            # 任务 015：统一对话入口「智能对话」为默认主入口，由系统自动判断
+            # 执行路径（直接回答 / 知识库任务 / 单工具任务 / 多步骤 Agent）；
+            # 用户无需再在「普通对话 / 自动 Agent」之间选择。强制模式（普通
+            # 直聊）与手动调试（工具多选 / MCP / Agent Run）收入高级设置
+            # （调试用），默认收起，不影响主入口的简洁性。
+            advanced = st.expander(
+                "高级设置（强制模式 / 手动调试）",
+                expanded=False,
             )
-            auto_agent = dialogue_mode == "自动 Agent（推荐）"
-            use_agent = dialogue_mode == "手动调试"
+            auto_agent = True
+            use_agent = False
             use_mcp = False
             use_agent_run = False
             # 选择工具
             tools = list_tools(api)
             tool_names = ["None"] + list(tools)
-            if auto_agent:
-                selected_tools = []
-                st.caption("自动模式会由系统判断是否使用工具，无需手动选择。")
-            elif use_agent:
-                use_mcp = st.checkbox("使用MCP", key="use_mcp")
-                use_agent_run = st.checkbox(
-                    "启用任务闭环执行（Agent Run）",
+            selected_tools = []
+            with advanced:
+                dialogue_mode = st.radio(
+                    "模式覆盖",
+                    ["智能对话（默认）", "普通直聊", "手动调试"],
+                    index=0,
+                    horizontal=True,
+                    key="dialogue_mode",
                     help=(
-                        "启用后按单 Agent 任务闭环执行：生成结构化计划 → 多步执行工具 → "
-                        "记录观察结果 → 判断完成或重新规划 → 生成最终回答，执行轨迹会持久化，"
-                        "运行中可用左侧“取消 Agent 运行”按钮取消。请确保所选模型具备规划与 "
-                        "JSON 输出能力。"
+                        "智能对话（默认）：系统自动判断直接回答、知识库任务、"
+                        "单工具任务或多步骤 Agent 执行；"
+                        "普通直聊：强制直接聊天，不做自动路由；"
+                        "手动调试：手动选择工具 / MCP / Agent Run，用于调试。"
                     ),
-                    key="use_agent_run",
                 )
-                # selected_tools = sac.checkbox(list(tools), format_func=lambda x: tools[x]["title"], label="选择工具",
-                # check_all=True, key="selected_tools")
-                selected_tools = st.multiselect(
-                    "选择工具",
-                    list(tools),
-                    format_func=lambda x: tools[x]["title"],
-                    key="selected_tools",
-                )
-            else:
-                # selected_tool = sac.buttons(list(tools), format_func=lambda x: tools[x]["title"], label="选择工具",
-             
-                selected_tools = []
+                auto_agent = dialogue_mode == "智能对话（默认）"
+                use_agent = dialogue_mode == "手动调试"
+                if auto_agent:
+                    st.caption("智能对话会由系统判断是否使用工具，无需手动选择。")
+                elif use_agent:
+                    use_mcp = st.checkbox("使用MCP", key="use_mcp")
+                    use_agent_run = st.checkbox(
+                        "启用任务闭环执行（Agent Run）",
+                        help=(
+                            "启用后按单 Agent 任务闭环执行：生成结构化计划 → 多步执行工具 → "
+                            "记录观察结果 → 判断完成或重新规划 → 生成最终回答，执行轨迹会持久化，"
+                            "运行中可用左侧“取消 Agent 运行”按钮取消。请确保所选模型具备规划与 "
+                            "JSON 输出能力。"
+                        ),
+                        key="use_agent_run",
+                    )
+                    # selected_tools = sac.checkbox(list(tools), format_func=lambda x: tools[x]["title"], label="选择工具",
+                    # check_all=True, key="selected_tools")
+                    selected_tools = st.multiselect(
+                        "选择工具",
+                        list(tools),
+                        format_func=lambda x: tools[x]["title"],
+                        key="selected_tools",
+                    )
+                else:
+                    # 普通直聊：强制直接聊天，不装配工具
+                    # selected_tool = sac.buttons(list(tools), format_func=lambda x: tools[x]["title"], label="选择工具",
+                    selected_tools = []
             selected_tool_configs = {
                 name: tool["config"]
                 for name, tool in tools.items()
@@ -625,7 +635,7 @@ def dialogue_page(
             use_mcp=use_mcp,
             # 任务 011：启用单 Agent 任务闭环（规划→多步执行→观察→判断→持久化轨迹）
             agent_run=use_agent_run,
-            # 任务 012：自动 Agent 模式触发服务端意图路由（直接回答 / Agent Run）
+            # 任务 015：智能对话主入口触发服务端意图路由与统一分发（智能对话总图）
             auto_agent=auto_agent,
         )
         stream = not is_vision_chat
@@ -696,20 +706,21 @@ def dialogue_page(
                         chat_box.update_msg("", streaming=False)
                         started = True
 
-                    # 任务 012：自动意图路由结果事件（流式响应首条）。
-                    # 只展示简短的路径与意图名称（如「Agent 执行 · 知识库检索」），
+                    # 任务 015：智能对话首条事件为路由 / 执行分支（RouteResult）。
+                    # 只展示执行分支与简短意图名称（如「知识库任务 · 知识库检索」），
                     # 不展示模型隐藏推理过程。
                     route_result = getattr(d, "route_result", None)
                     if route_result:
-                        _path = route_result.get("path_label") or route_result.get("path")
+                        _branch = (
+                            getattr(d, "execution_mode_label", None)
+                            or route_result.get("path_label")
+                            or route_result.get("path")
+                        )
                         _intent = (
-                            route_result.get("intent_label") or route_result.get("intent")
+                            route_result.get("intent_label")
+                            or route_result.get("intent")
                         )
-                        _summary = route_result.get("summary") or ""
-                        st.caption(
-                            f"🧭 {_path} · {_intent}"
-                            + (f"：{_summary}" if _summary else "")
-                        )
+                        st.caption(f"🧭 {_branch} · {_intent}")
                         continue
 
                     # 任务 011：单 Agent 任务闭环事件。Agent 事件的 status 为
@@ -885,11 +896,16 @@ def dialogue_page(
         else:
             try:
                 d =client.chat.completions.create(**params)
-                # 任务 012：非流式响应同样附带自动意图路由结果，展示简短提示
+                # 任务 015：非流式响应同样附带路由 / 执行分支信息，展示执行分支与简短意图
                 if getattr(d, "route_result", None):
                     _rr = d.route_result
+                    _branch = (
+                        getattr(d, "execution_mode_label", None)
+                        or _rr.get("path_label")
+                        or _rr.get("path")
+                    )
                     st.caption(
-                        f"🧭 {_rr.get('path_label') or _rr.get('path')} · "
+                        f"🧭 {_branch} · "
                         f"{_rr.get('intent_label') or _rr.get('intent')}"
                     )
                 if getattr(d, "class_name", None) == "AgentRunResult":

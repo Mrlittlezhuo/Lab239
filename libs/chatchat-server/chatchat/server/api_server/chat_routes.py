@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import uuid
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from langchain_core.prompts.prompt import PromptTemplate
-from sse_starlette import EventSourceResponse
 
 from chatchat.server.api_server.api_schemas import OpenAIChatInput
 from chatchat.server.auth.deps import require_password_changed
@@ -29,38 +27,9 @@ from chatchat.server.utils import (
 )
 from chatchat.settings import Settings
 from chatchat.utils import build_logger
-from .openai_routes import openai_request, OpenAIChatOutput
 
 
 logger = build_logger()
-
-
-def _attach_route_result(result, route_dict: dict, conversation_id: str):
-    """把自动意图路由结果附加到响应（任务 012）。
-
-    非流式：在结果 dict 上增加 ``route_result`` 扩展字段；
-    流式：在 SSE 流开头插入一条 ``RouteResult`` 事件，保持与现有
-    流式响应（OpenAIChatOutput 扩展字段）一致的风格。
-    """
-    if isinstance(result, dict):
-        result["conversation_id"] = conversation_id
-        result["route_result"] = route_dict
-        return result
-
-    async def _wrapped():
-        yield OpenAIChatOutput(
-            id=f"route{uuid.uuid4().hex}",
-            object="chat.completion.chunk",
-            content="",
-            role="assistant",
-            class_name="RouteResult",
-            route_result=route_dict,
-            conversation_id=conversation_id,
-        ).model_dump_json()
-        async for chunk in result.body_iterator:
-            yield chunk
-
-    return EventSourceResponse(_wrapped())
 
 chat_router = APIRouter(
     prefix="/chat",
@@ -177,56 +146,31 @@ async def chat_completions(
             result["conversation_id"] = conversation_id
         return result
 
-    # 任务 012：extra 显式开启 auto_agent（自动 Agent 模式）时，先做意图
-    # 路由，再按路由结果复用普通聊天或任务 011 的 Agent Run，且只把
-    # 候选工具交给 Agent Run 的规划器。路由失败/超时/非法结果/低置信度
-    # 统一回退普通聊天，不阻断用户对话。（同时显式给出 agent_run 时按
-    # 手动调试路径优先，保持任务 011 行为不变。）
+    # 任务 015：extra 显式开启 auto_agent（面向用户的"智能对话"主入口）时，
+    # 通过智能对话总图（真实 LangGraph 状态图）统一意图路由与分发：
+    # route → 直接回答 / 知识库任务 / 单工具任务 / 多步骤 Agent → 统一输出。
+    # 总图内部复用现有意图路由、普通聊天流程与任务 014 的 Agent Runtime；
+    # 知识库 / 单工具任务限制为一步工具任务；路由或执行准备失败在工具执行
+    # 开始前可控回退直接回答。流式首条事件为路由 / 执行分支事件。
+    # （同时显式给出 agent_run 时按手动调试路径优先，保持任务 011 行为不变。）
     if extra.get("auto_agent"):
-        from chatchat.server.intent_router import route_auto_agent
+        from chatchat.server.smart_conversation import run_smart_conversation
 
-        auto_use_mcp = bool(Settings.model_settings.AUTO_ROUTE_USE_MCP)
-        route = route_auto_agent(
-            body.messages[-1]["content"],
+        return await run_smart_conversation(
+            query=body.messages[-1]["content"],
+            conversation_id=conversation_id,
+            message_id=message_id,
+            session=session,
+            owner_id=user.id,
+            stream=body.stream,
+            model_name=body.model,
+            max_tokens=body.max_tokens,
+            history_len=Settings.model_settings.HISTORY_LEN,
+            metadata=extra.get("metadata", {}),
+            chat_model_config=extra.get("chat_model_config", chat_model_config),
+            auto_use_mcp=bool(Settings.model_settings.AUTO_ROUTE_USE_MCP),
             available_tools=get_tool(),
-            use_mcp=auto_use_mcp,
         )
-        if route.is_agent_run:
-            from chatchat.server.agent_run.service import agent_run_chat
-
-            auto_tool_config = {
-                name: get_tool_config(name) for name in route.candidate_tools
-            }
-            result = await agent_run_chat(
-                query=body.messages[-1]["content"],
-                conversation_id=conversation_id,
-                message_id=message_id,
-                session=session,
-                owner_id=user.id,
-                stream=body.stream,
-                tool_config=auto_tool_config,
-                use_mcp=auto_use_mcp,
-                model_name=body.model,
-                history_len=Settings.model_settings.HISTORY_LEN,
-            )
-        else:
-            # 直接回答：复用现有普通聊天流程，不装配任何工具、
-            # 不创建无意义的 Agent Run
-            result = await chat(
-                query=body.messages[-1]["content"],
-                metadata=extra.get("metadata", {}),
-                conversation_id=conversation_id,
-                message_id=message_id,
-                history_len=Settings.model_settings.HISTORY_LEN,
-                stream=body.stream,
-                chat_model_config=extra.get("chat_model_config", chat_model_config),
-                tool_config={},
-                use_mcp=False,
-                max_tokens=body.max_tokens,
-                session=session,
-                owner_id=user.id,
-            )
-        return _attach_route_result(result, route.to_dict(), conversation_id)
 
     result = await chat(
         query=body.messages[-1]["content"],

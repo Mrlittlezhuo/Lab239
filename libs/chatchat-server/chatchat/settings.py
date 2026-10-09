@@ -101,6 +101,22 @@ class BasicSettings(BaseFileSettings):
     OPEN_CROSS_DOMAIN: bool = False
     """API 是否开启跨域"""
 
+    # 任务 016：Phoenix 本地可观测性（默认关闭；关闭时不产生任何网络请求）
+    TRACE_ENABLED: bool = False
+    """是否开启 OpenTelemetry/Phoenix 本地可观测性（仅开发调试用途）"""
+
+    TRACE_PHOENIX_ENDPOINT: str = "http://localhost:6006"
+    """Phoenix OTLP collector endpoint（Phoenix 本地服务默认 UI/collector 地址）"""
+
+    TRACE_PROJECT_NAME: str = "chatchat"
+    """Trace 上报的 Phoenix project / 服务名称"""
+
+    TRACE_CAPTURE_CONTENT: bool = False
+    """是否记录 prompt、response 与工具输入输出内容。默认关闭，避免上报用户内容"""
+
+    TRACE_SAMPLE_RATIO: float = 1.0
+    """Trace 采样比例（0~1）。1.0 表示全量采样"""
+
     DEFAULT_BIND_HOST: str = "0.0.0.0" if sys.platform != "win32" else "127.0.0.1"
     """
     各服务器默认绑定host。如改为"0.0.0.0"需要修改下方所有XX_SERVER的host

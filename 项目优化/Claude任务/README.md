@@ -20,8 +20,8 @@
 | 012 | [智能意图路由与自动 Agent](./012-智能意图路由与自动Agent.md) | `completed` | `c7068b9a7de4cc5f9bdce721910d05f10222fb71` |
 | 013 | [LangChain 1.x 与 LangGraph 1.x 迁移基线](./013-LangChain与LangGraph迁移基线.md) | `completed` | `2efa2eb8b76d2b75034869ffbf49cf14ebd0553d` |
 | 014 | [单 Agent 闭环迁移到 LangGraph](./014-单Agent闭环迁移到LangGraph.md) | `completed` | `4ec15730d529cd98e5f31721f43da5d98b3f099c` |
-| 015 | [智能对话总图与统一入口](./015-智能对话总图与统一入口.md) | `ready_for_claude` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
-| 016 | [Phoenix 本地可观测性](./016-Phoenix本地可观测性.md) | `ready_for_claude` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
+| 015 | [智能对话总图与统一入口](./015-智能对话总图与统一入口.md) | `completed` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
+| 016 | [Phoenix 本地可观测性](./016-Phoenix本地可观测性.md) | `completed` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
 
 状态以具体任务文档为准。如果索引和任务文档不一致，Codex 应先核对 Git 历史和工作区，再修正索引。
 

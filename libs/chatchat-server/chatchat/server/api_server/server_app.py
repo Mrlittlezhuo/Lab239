@@ -15,6 +15,10 @@ from chatchat.server.agent_run.runtime.checkpoint import (
     initialize_agent_checkpoint_store,
     shutdown_agent_checkpoint_store,
 )
+from chatchat.server.observability import (
+    init_observability,
+    shutdown_observability,
+)
 from chatchat.server.api_server.agent_run_routes import agent_run_router
 from chatchat.server.api_server.chat_routes import chat_router
 from chatchat.server.api_server.conversation_routes import conversation_router
@@ -40,6 +44,9 @@ def create_app(run_mode: str = None):
     # 自愈，仍使用本地持久化文件）。
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # 任务 016：可观测性初始化（默认关闭为 no-op；失败只告警不阻塞启动）。
+        # 同一进程只注册一次，重复创建应用不会反复埋点。
+        init_observability()
         try:
             await initialize_agent_checkpoint_store()
         except Exception:
@@ -48,6 +55,7 @@ def create_app(run_mode: str = None):
             yield
         finally:
             await shutdown_agent_checkpoint_store()
+            shutdown_observability()
 
     app = FastAPI(
         title="Langchain-Chatchat API Server",

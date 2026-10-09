@@ -26,6 +26,16 @@ langgraph = "1.2.14"
 langgraph-checkpoint-sqlite = "3.1.1"
 # 任务014：AsyncSqliteSaver 所需的异步 SQLite 驱动（生产 Agent 运行 checkpoint 持久化）
 aiosqlite = "^0.22"
+# 任务016：Phoenix 本地可观测性（默认关闭；phoenix serve 提供本地 UI/collector）。
+# 12.6.1 是与既有 fastapi 0.109.2 / starlette 0.36.3 / pydantic 2.11.10 钉版
+# 相容的最新稳定版（更高版本要求升级 fastapi，违反任务边界）。
+arize-phoenix = "12.6.1"
+arize-phoenix-otel = "0.17.1"
+openinference-instrumentation-langchain = "0.1.78"
+# 兼容性钉版：arize-phoenix 12.6.1 需要 phoenix.evals.models（evals 3.x 已移除）；
+# strawberry-graphql 0.270.1 与 graphql-core 3.3+ 不兼容（ExecutionContext 移除）
+arize-phoenix-evals = "2.13.0"
+graphql-core = "3.2.7"
 openai = ">=3,<4"
 humanlayer= "0.7.6"
 nest_asyncio = "1.6.0"
