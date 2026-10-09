@@ -22,6 +22,7 @@
 | 014 | [单 Agent 闭环迁移到 LangGraph](./014-单Agent闭环迁移到LangGraph.md) | `completed` | `4ec15730d529cd98e5f31721f43da5d98b3f099c` |
 | 015 | [智能对话总图与统一入口](./015-智能对话总图与统一入口.md) | `completed` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
 | 016 | [Phoenix 本地可观测性](./016-Phoenix本地可观测性.md) | `completed` | `b85373b2b46dcd09f30a442e79d8294a0160469b` |
+| 017 | [论文研究项目与检索工作流](./017-论文研究项目与检索工作流.md) | `ready_for_claude` | `b9a6cfbd8748df0a1addd2a7c4f8367859d55851` |
 
 状态以具体任务文档为准。如果索引和任务文档不一致，Codex 应先核对 Git 历史和工作区，再修正索引。
 
