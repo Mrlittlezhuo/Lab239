@@ -67,6 +67,7 @@ RAG 引用、检索分数、上传状态、错误提示和 Agent 可控性仍然
 - [任务 012：智能意图路由与自动 Agent](./Claude任务/012-智能意图路由与自动Agent.md)：已完成自动判断直接回答、知识库/工具调用和多步骤 Agent Run，并为后续 FastJev 接入预留可替换路由接口。
 - [任务 013：LangChain 1.x 与 LangGraph 1.x 迁移基线](./Claude任务/013-LangChain与LangGraph迁移基线.md)：已完成现代依赖兼容、现有功能回归和最小 LangGraph 能力验证。
 - [任务 014：单 Agent 闭环迁移到 LangGraph](./Claude任务/014-单Agent闭环迁移到LangGraph.md)：已完成生产 Agent 状态图、持久化 checkpoint、断点恢复和 legacy 回退。
+- [任务 015：智能对话总图与统一入口](./Claude任务/015-智能对话总图与统一入口.md)：待 Claude 执行，将直接回答、知识库、单工具和多步骤 Agent 收敛为统一 LangGraph 智能对话入口。
 
 ## 核心原则
 
