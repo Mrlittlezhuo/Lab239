@@ -15,7 +15,6 @@ from typing import (
     Type,
     Union,
 )
-import os
 import sys
 from langchain_classic.agents import AgentExecutor
 from langchain_core.agents import AgentAction
@@ -132,20 +131,24 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
 
     @staticmethod
     async def create_mcp_client(connections: dict[str, StdioConnection | SSEConnection] = None) -> MultiServerMCPClient:
-        """
+        """为 stdio 连接补 env。
 
-        # 更新协议 transport == "stdio" 的 config，增加env变量
-        "env": {
-            **os.environ,
-            "PYTHONHASHSEED": "0",
-        },
-        """ 
-        for server_name, connection in connections.items(): 
-            if connection["transport"] == "stdio":
-                connection["env"] = {
-                    **os.environ,
-                    "PYTHONHASHSEED": "0",
-                }
+        以前这里写的是 `connection["env"] = {**os.environ, ...}`，两个后果：
+
+        1. 用户在 MCP 连接里配的 env 被整个丢掉，需要自带 env 的 server
+           （浏览器类 server 的 profile 路径、抓取类 server 的 API key）永远起不来；
+        2. 后端进程的全部环境变量（STRATA_API_KEY、CHATCHAT_AUTH_SECRET、
+           数据库连接串等）被塞进每一个 MCP 子进程。
+
+        mcp SDK 的 stdio_client 会把 env 与 get_default_environment()（只含
+        PATH/HOME 这类安全白名单）合并，MultiServerMCPClient 还会补 PATH，
+        所以这里只兜底 PYTHONHASHSEED，其余按用户配置原样传。
+        """
+        for connection in connections.values():
+            if connection.get("transport") == "stdio":
+                env = dict(connection.get("env") or {})
+                env.setdefault("PYTHONHASHSEED", "0")
+                connection["env"] = env
               
         # Create client without context manager to keep session alive
         client = MultiServerMCPClient(connections)

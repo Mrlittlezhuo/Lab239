@@ -1,9 +1,8 @@
 """
 source  https://github.com/langchain-ai/langchain-mcp-adapters
 """
-from typing import Any, Type, Dict
+from typing import Any, Dict, List, Type
 import inspect
-from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from mcp import ClientSession
@@ -25,6 +24,77 @@ class MCPStructuredTool(StructuredTool):
     server_name: str
 
 
+_JSON_SCALAR_TYPES = {"integer": int, "string": str, "number": float, "boolean": bool}
+
+
+def _enum_type_name(schema: Dict[str, Any]) -> str | None:
+    """enum 里所有值同种类型时返回对应的 JSON Schema 类型名，混合类型返回 None。"""
+    values = schema.get("enum") or []
+    kinds = {type(value) for value in values}
+    if kinds == {str}:
+        return "string"
+    if kinds == {int}:
+        return "integer"
+    if kinds == {float}:
+        return "number"
+    if kinds == {bool}:
+        return "boolean"
+    return None
+
+
+def _json_type_candidates(details: Dict[str, Any]) -> list[str]:
+    """收集一个属性上所有可能出现的 JSON Schema 类型名。
+
+    真实的 MCP server 经常不直接给 `type`：playwright-mcp 的 browser_emulate_media
+    用 anyOf，firecrawl-mcp 的 scrape.alexandria 也是 anyOf，还有只给 enum 的。
+    老代码写的是 `details['type']`，一个这样的属性就能让 KeyError 冒到连接层，
+    结果整个 server 一个工具都加载不出来。
+    """
+    candidates: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, str):
+            candidates.append(value)
+        elif isinstance(value, list):
+            candidates.extend(v for v in value if isinstance(v, str))
+
+    add(details.get("type"))
+    for key in ("anyOf", "oneOf", "allOf"):
+        for branch in details.get(key) or []:
+            if not isinstance(branch, dict):
+                continue
+            add(branch.get("type"))
+            if not branch.get("type"):
+                add(_enum_type_name(branch))
+    if not candidates:
+        add(_enum_type_name(details))
+    return candidates
+
+
+def _resolve_field_type(details: Dict[str, Any]) -> Any:
+    """把一个 JSON Schema 属性描述解析成能收下该值的 python 类型。"""
+    for name in _json_type_candidates(details):
+        if name == "null":
+            continue
+        if name in _JSON_SCALAR_TYPES:
+            return _JSON_SCALAR_TYPES[name]
+        if name == "array":
+            items = details.get("items")
+            item_type = Any
+            if isinstance(items, dict):
+                item_type = _JSON_SCALAR_TYPES.get(items.get("type"), Any)
+            return List[item_type]
+        if name == "object":
+            return Dict[str, Any]
+
+    # 一个类型名都没收集到：有子结构的按容器收，其余退化成 Any，绝不抛异常。
+    if "properties" in details or details.get("additionalProperties"):
+        return Dict[str, Any]
+    if "items" in details:
+        return List[Any]
+    return Any
+
+
 def schema_dict_to_model(schema: Dict[str, Any]) -> Any:
     """
     Convert JSON schema to Pydantic model with required field validation.
@@ -44,21 +114,10 @@ def schema_dict_to_model(schema: Dict[str, Any]) -> Any:
 
     model_fields = {}
     for field_name, details in fields.items():
-        field_type_str = details['type']
+        field_type = _resolve_field_type(details)
         
         # Add field description if available
         field_description = details.get('description', '')
-
-        if field_type_str == 'integer':
-            field_type = int
-        elif field_type_str == 'string':
-            field_type = str
-        elif field_type_str == 'number':
-            field_type = float
-        elif field_type_str == 'boolean':
-            field_type = bool
-        else:
-            field_type = Any  # 可扩展更多类型
 
         # For required fields, use Field with required=True
         if field_name in required_fields:
@@ -102,7 +161,11 @@ def _convert_call_tool_result(
     if call_tool_result.isError:
         raise ToolException(tool_content)
 
-    return tool_content
+    # convert_mcp_tool_to_langchain_tool 声明的是 response_format="content_and_artifact"，
+    # LangChain 要求这种工具必须返回 (content, artifact) 二元组；只返回 content 的话
+    # 每一次 MCP 工具调用都会在 pydantic 校验处抛 ValueError，工具等于完全不可用。
+    # 非文本内容（截图等）就是 artifact，交给上层展示。
+    return tool_content, non_text_contents or None
 
 
 def convert_mcp_tool_to_langchain_tool(
@@ -126,6 +189,10 @@ def convert_mcp_tool_to_langchain_tool(
     async def call_tool(
             **arguments: dict[str, Any],
     ) -> tuple[str | list[str], list[NonTextContent] | None]:
+        # args_schema 里的可选字段默认值是 None，LangChain 会把它们一并传进来。
+        # 服务端普遍按"字段没出现"当缺省，显式 null 会被拒（playwright-mcp 的
+        # browser_snapshot 就是这样：`expected string, received null → at target`）。
+        arguments = {k: v for k, v in arguments.items() if v is not None}
         call_tool_result = await session.call_tool(tool.name, arguments)
         return _convert_call_tool_result(call_tool_result)
 

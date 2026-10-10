@@ -3,6 +3,7 @@ source  https://github.com/langchain-ai/langchain-mcp-adapters
 """
 import os
 from contextlib import AsyncExitStack
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, Optional, cast
 from typing_extensions import TypedDict
@@ -12,7 +13,7 @@ from langchain_core.tools import BaseTool
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.types import Prompt
+from mcp.types import ListRootsResult, Prompt, Root
 
 from langchain_chatchat.agent_toolkits.mcp_kit.prompts import load_mcp_prompt
 from langchain_chatchat.agent_toolkits.mcp_kit.tools import load_mcp_tools
@@ -22,6 +23,27 @@ DEFAULT_ENCODING_ERROR_HANDLER = "strict"
 
 DEFAULT_HTTP_TIMEOUT = 5
 DEFAULT_SSE_READ_TIMEOUT = 60 * 5
+
+
+def _roots_callback(roots: list[str] | None):
+    """构造 `roots/list` 的应答回调。
+
+    MCP 允许 server 反过来问客户端"你可以在哪些目录里干活"，playwright-mcp 每次
+    建浏览器会话之前都会问这一次。SDK 自带的默认回调回的是
+    ErrorData("List roots not supported")，而 playwright-mcp 收到这个错误既不报错
+    也不继续——工具调用永远不返回（browser_navigate 挂到超时）。
+    所以这里必须回一个合法的 ListRootsResult，空列表也是合法应答。
+    """
+
+    async def _list_roots(context: Any) -> ListRootsResult:
+        return ListRootsResult(
+            roots=[
+                Root(uri=Path(path).absolute().as_uri(), name=Path(path).name)
+                for path in (roots or [])
+            ]
+        )
+
+    return _list_roots
 
 
 class StdioConnection(TypedDict):
@@ -47,6 +69,9 @@ class StdioConnection(TypedDict):
     explanations of possible values
     """
 
+    roots: list[str] | None = None
+    """Local directories to answer the server's `roots/list` request with."""
+
 
 class SSEConnection(TypedDict):
     transport: Literal["sse"]
@@ -62,6 +87,9 @@ class SSEConnection(TypedDict):
 
     sse_read_timeout: float
     """SSE read timeout"""
+
+    roots: list[str] | None = None
+    """Local directories to answer the server's `roots/list` request with."""
 
 
 class MultiServerMCPClient:
@@ -149,6 +177,7 @@ class MultiServerMCPClient:
                 headers=kwargs.get("headers"),
                 timeout=kwargs.get("timeout", DEFAULT_HTTP_TIMEOUT),
                 sse_read_timeout=kwargs.get("sse_read_timeout", DEFAULT_SSE_READ_TIMEOUT),
+                roots=kwargs.get("roots"),
             )
         elif transport == "stdio":
             if "command" not in kwargs:
@@ -164,6 +193,7 @@ class MultiServerMCPClient:
                 encoding_error_handler=kwargs.get(
                     "encoding_error_handler", DEFAULT_ENCODING_ERROR_HANDLER
                 ),
+                roots=kwargs.get("roots"),
             )
         else:
             raise ValueError(f"Unsupported transport: {transport}. Must be 'stdio' or 'sse'")
@@ -179,6 +209,7 @@ class MultiServerMCPClient:
             encoding_error_handler: Literal[
                 "strict", "ignore", "replace"
             ] = DEFAULT_ENCODING_ERROR_HANDLER,
+            roots: list[str] | None = None,
     ) -> None:
         """Connect to a specific MCP server using stdio
 
@@ -189,6 +220,8 @@ class MultiServerMCPClient:
             env: Environment variables for the command
             encoding: Character encoding
             encoding_error_handler: How to handle encoding errors
+            roots: Local directories the server may operate in. Answered back to
+                servers that ask `roots/list` (playwright-mcp always asks).
         """
         # NOTE: execution commands (e.g., `uvx` / `npx`) require PATH envvar to be set.
         # To address this, we automatically inject existing PATH envvar into the `env` value,
@@ -210,7 +243,9 @@ class MultiServerMCPClient:
         read, write = stdio_transport
         session = cast(
             ClientSession,
-            await self.exit_stack.enter_async_context(ClientSession(read, write)),
+            await self.exit_stack.enter_async_context(
+                ClientSession(read, write, list_roots_callback=_roots_callback(roots))
+            ),
         )
 
         await self._initialize_session_and_load_tools(server_name, session)
@@ -223,6 +258,7 @@ class MultiServerMCPClient:
             headers: dict[str, Any] | None = None,
             timeout: float = DEFAULT_HTTP_TIMEOUT,
             sse_read_timeout: float = DEFAULT_SSE_READ_TIMEOUT,
+            roots: list[str] | None = None,
     ) -> None:
         """Connect to a specific MCP server using SSE
 
@@ -232,6 +268,8 @@ class MultiServerMCPClient:
             headers: HTTP headers to send to the SSE endpoint
             timeout: HTTP timeout
             sse_read_timeout: SSE read timeout
+            roots: Local directories the server may operate in. Answered back to
+                servers that ask `roots/list`.
         """
         # Create and store the connection
         sse_transport = await self.exit_stack.enter_async_context(
@@ -240,7 +278,9 @@ class MultiServerMCPClient:
         read, write = sse_transport
         session = cast(
             ClientSession,
-            await self.exit_stack.enter_async_context(ClientSession(read, write)),
+            await self.exit_stack.enter_async_context(
+                ClientSession(read, write, list_roots_callback=_roots_callback(roots))
+            ),
         )
 
         await self._initialize_session_and_load_tools(server_name, session)
