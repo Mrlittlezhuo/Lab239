@@ -121,7 +121,8 @@ export function classifyFrame(payload: string): SseEvent {
     return { kind: "tool", status, toolCalls, conversationId };
   }
 
-  // token（含 status 1/2/3/5/null；空 content 也发，由消费方决定忽略）
+  // token（含 status 1/2/3/4/5/-999/null；空 content 也发，由消费方决定忽略。
+  // 3/4/5/-999 是 Agent 流的整段回放，追加与否由 applySseEvent 判定）
   return {
     kind: "token",
     content: extractContent(chunk),
@@ -163,13 +164,30 @@ function extractToolCalls(chunk: Record<string, unknown>): ToolCallData[] {
     const first = choices[0] as Record<string, unknown>;
     const delta = first.delta as Record<string, unknown> | undefined;
     if (Array.isArray(delta?.tool_calls) && delta!.tool_calls.length > 0) {
-      return delta!.tool_calls as ToolCallData[];
+      return (delta!.tool_calls as Record<string, unknown>[]).map(normalizeToolCall);
     }
     const message = first.message as Record<string, unknown> | undefined;
     if (Array.isArray(message?.tool_calls) && message!.tool_calls.length > 0) {
-      return message!.tool_calls as ToolCallData[];
+      return (message!.tool_calls as Record<string, unknown>[]).map(normalizeToolCall);
     }
   }
-  if (Array.isArray(chunk.tool_calls)) return chunk.tool_calls as ToolCallData[];
+  if (Array.isArray(chunk.tool_calls))
+    return (chunk.tool_calls as Record<string, unknown>[]).map(normalizeToolCall);
   return [];
+}
+
+/**
+ * 后端 status 7/8 发的是 OpenAI 风格的嵌套结构
+ * `{index, id, type, function: {name, arguments}, tool_output, is_error}`
+ * （见 chatchat/server/chat/chat.py），而 UI 用的是扁平的 name/args。
+ * 不摊平的话工具卡片拿不到名字和参数，只剩一句"工具调用"。
+ */
+function normalizeToolCall(raw: Record<string, unknown>): ToolCallData {
+  const fn = raw.function as Record<string, unknown> | undefined;
+  if (!fn) return raw as ToolCallData;
+  return {
+    ...raw,
+    name: typeof fn.name === "string" ? fn.name : (raw.name as string | undefined),
+    args: fn.arguments ?? raw.args ?? raw.input,
+  };
 }

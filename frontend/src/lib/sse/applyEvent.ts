@@ -2,6 +2,18 @@ import type { SseEvent } from "@/lib/sse/types";
 import type { UiAgentRun, UiMessage, UiToolCall } from "@/hooks/useChatStream";
 
 /**
+ * Agent 流（`/chat/chat/completions`）会把同一段文字重复推好几遍，`status` 取自
+ * 后端 `AgentStatus`（langchain_chatchat/callbacks/agent_callback_handler.py）：
+ *   2 llm_new_token 逐 token 正文；3 llm_end 本轮全文回放；4 agent_action 本轮 log；
+ *   5 agent_finish 最终答案全文；-999 chain_end 最终答案全文。
+ * 3/4 与已经流出来的 token 完全重复，一律当正文追加就会渲染出两三份同样的内容
+ * （库里只存一份，所以刷新后看起来恢复正常）。
+ */
+const REPLAY_STATUSES = new Set([3, 4]);
+/** 收尾块：正文一个字都没流出来时才拿来兜底，否则同样重复。 */
+const FINAL_STATUSES = new Set([5, -999]);
+
+/**
  * 把一条 SSE 事件应用到消息列表的最后一条 assistant 消息上（不可变更新）。
  * 聊天流与 RAG 流共用同一套 UiMessage 结构。
  */
@@ -12,13 +24,21 @@ export function applySseEvent(prev: UiMessage[], event: SseEvent): UiMessage[] {
   const copy = [...prev];
 
   switch (event.kind) {
-    case "token":
+    case "token": {
+      // 见上面 REPLAY_STATUSES / FINAL_STATUSES 的说明：只有逐 token 帧无条件追加。
+      // RAG 与直答流的 status 为 null，两个集合都不命中，行为不变。
+      let added = event.content;
+      if (event.status !== null && event.status !== undefined) {
+        if (REPLAY_STATUSES.has(event.status)) added = "";
+        else if (FINAL_STATUSES.has(event.status) && m.content) added = "";
+      }
       copy[idx] = {
         ...m,
-        content: m.content + event.content,
+        content: m.content + added,
         serverMessageId: event.messageId ?? m.serverMessageId,
       };
       break;
+    }
     case "route":
       copy[idx] = {
         ...m,

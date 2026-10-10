@@ -125,6 +125,37 @@ describe("classifyFrame", () => {
     expect(e).toMatchObject({ kind: "tool", status: 7, toolCalls: [{ name: "search_internet" }] });
   });
 
+  it("status 7 后端实发的 OpenAI 嵌套形状被摊平成 name/args", () => {
+    // chat.py 发的是 {index,id,type,function:{name,arguments},tool_output,is_error}
+    const e = classifyFrame(
+      chunk({
+        status: 7,
+        choices: [
+          {
+            delta: {
+              content: "",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "run1",
+                  type: "function",
+                  function: { name: "search_internet", arguments: '{"query":"x"}' },
+                  tool_output: null,
+                  is_error: false,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    expect(e).toMatchObject({
+      kind: "tool",
+      status: 7,
+      toolCalls: [{ name: "search_internet", args: '{"query":"x"}', id: "run1" }],
+    });
+  });
+
   it("status 8 工具结束带 tool_output/is_error", () => {
     const e = classifyFrame(
       chunk({
