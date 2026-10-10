@@ -30,7 +30,20 @@ search_internet:
     duckduckgo: {}
     searx:
       host: http://127.0.0.1:8010
-      engines: []
+      # 2026-10-10：SearXNG 容器已改为 --network host + 走本机 mihomo 代理
+      # (127.0.0.1:7897)，出口通了，但引擎质量差异很大，必须显式指定：
+      #   可用：bing / startpage / mojeek / ecosia / duckduckgo web / bing news / yahoo
+      #   不可用：google(access denied)、google cse(全是 SEO 垃圾)、baidu/qwant(CAPTCHA)、
+      #          brave(too many requests)、360search(垃圾)、wikipedia(0 条)
+      # 留空 [] 会用 SearXNG 默认全引擎，实测 20 条结果全部来自 google cse 的垃圾站。
+      engines:
+        - bing
+        - startpage
+        - mojeek
+        - ecosia
+        - duckduckgo web
+        - bing news
+        - yahoo
       categories: []
       language: zh-CN
   top_k: 5
