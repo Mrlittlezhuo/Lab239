@@ -185,6 +185,28 @@ def streamlit_webui_enabled() -> bool:
     )
 
 
+def print_auth_secret_warning() -> bool:
+    """启动自检：认证密钥配置不对时打印一行提示，返回是否打印了。
+
+    密钥缺失或过短时登录签发会失败关闭（见 ``server/auth/jwt.py``），但只有
+    用户点登录才撞得到 ``POST /auth/login`` 的 500，且该分支刻意不打印
+    traceback，现场只剩一行访问日志。这里在启动阶段就把原因说清楚。
+    只提示字节数，绝不回显密钥内容。
+    """
+    from chatchat.server.auth import jwt as auth_jwt
+
+    problem = auth_jwt.describe_secret_misconfig()
+    if not problem:
+        return False
+    print(f"    警告：{problem}")
+    print(
+        "      修复：生成随机密钥并持久化到运行环境，例如 "
+        "`conda env config vars set CHATCHAT_AUTH_SECRET=<不少于 32 字节的随机串> -n <env>`，"
+        "重新激活环境后重启服务"
+    )
+    return True
+
+
 def dump_server_info(after_start=False, args=None):
     import platform
 
@@ -206,6 +228,10 @@ def dump_server_info(after_start=False, args=None):
     print(f"当前使用的分词器：{Settings.kb_settings.TEXT_SPLITTER_NAME}")
 
     print(f"默认选用的 Embedding 名称： {Settings.model_settings.DEFAULT_EMBEDDING_MODEL}")
+
+    # 启动自检：只在真正要起 API 进程的那一次打印（after_start 那次不重复）
+    if args and getattr(args, "api", False) and not after_start:
+        print_auth_secret_warning()
 
     if after_start:
         print("\n")

@@ -510,6 +510,43 @@ def test_login_fails_closed_without_valid_secret(
     assert "too-short" not in short.text
 
 
+def test_describe_secret_misconfig_names_size_not_value(monkeypatch):
+    """启动自检要区分“未设置”与“过短”，且绝不回显密钥内容。"""
+    monkeypatch.delenv("CHATCHAT_AUTH_SECRET", raising=False)
+    missing = auth_jwt.describe_secret_misconfig()
+    assert missing and "未设置" in missing
+
+    monkeypatch.setenv("CHATCHAT_AUTH_SECRET", "too-short")
+    short = auth_jwt.describe_secret_misconfig()
+    assert short and "9 字节" in short and "too-short" not in short
+
+    monkeypatch.setenv("CHATCHAT_AUTH_SECRET", "0" * 32)
+    assert auth_jwt.describe_secret_misconfig() is None
+
+
+def test_get_secret_raises_what_the_startup_check_reports(monkeypatch):
+    """失败关闭的原因与启动自检的说法必须来自同一处，不能两套口径。"""
+    monkeypatch.delenv("CHATCHAT_AUTH_SECRET", raising=False)
+    with pytest.raises(auth_jwt.AuthConfigError) as exc:
+        auth_jwt.get_secret()
+    assert str(exc.value) == auth_jwt.describe_secret_misconfig()
+
+
+def test_startup_prints_auth_secret_warning(capsys, monkeypatch):
+    from chatchat.startup import print_auth_secret_warning
+
+    monkeypatch.delenv("CHATCHAT_AUTH_SECRET", raising=False)
+    assert print_auth_secret_warning() is True
+    out = capsys.readouterr().out
+    assert "CHATCHAT_AUTH_SECRET 未设置" in out
+    assert "POST /auth/login" in out
+    assert "conda env config vars set" in out
+
+    monkeypatch.setenv("CHATCHAT_AUTH_SECRET", "0" * 32)
+    assert print_auth_secret_warning() is False
+    assert capsys.readouterr().out == ""
+
+
 def test_change_password_invalidates_old_token(client, temp_user_db, secret):
     _mk_user(temp_user_db, "grace", "user")
     r = client.post(

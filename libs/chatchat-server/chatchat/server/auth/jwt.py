@@ -37,15 +37,30 @@ class TokenValidationError(jwt.PyJWTError):
     """Token 无效（过期、签名错误、issuer/claims 不符）。"""
 
 
+def describe_secret_misconfig() -> Optional[str]:
+    """返回 ``CHATCHAT_AUTH_SECRET`` 的配置问题说明；配置正确时返回 ``None``。
+
+    给 ``chatchat start`` 启动自检用：登录签发对密钥失败关闭，但只有用户点
+    登录才会撞 ``POST /auth/login`` 的 500，且该分支刻意不打印 traceback，
+    现场很难定位。这里把原因提前说清楚。只报告字节数，绝不回显密钥内容。
+    """
+    size = len((os.environ.get("CHATCHAT_AUTH_SECRET") or "").encode("utf-8"))
+    if not size:
+        return "CHATCHAT_AUTH_SECRET 未设置：登录签发已禁用，POST /auth/login 返回 500"
+    if size < MIN_SECRET_BYTES:
+        return (
+            f"CHATCHAT_AUTH_SECRET 只有 {size} 字节，不足 {MIN_SECRET_BYTES} 字节："
+            "登录签发已禁用，POST /auth/login 返回 500"
+        )
+    return None
+
+
 def get_secret() -> str:
     """读取 JWT 密钥；缺失或过短时失败关闭。"""
-    secret = os.environ.get("CHATCHAT_AUTH_SECRET")
-    if not secret or len(secret.encode("utf-8")) < MIN_SECRET_BYTES:
-        raise AuthConfigError(
-            "CHATCHAT_AUTH_SECRET 未设置或长度不足 32 字节，"
-            "登录签发已禁用"
-        )
-    return secret
+    problem = describe_secret_misconfig()
+    if problem:
+        raise AuthConfigError(problem)
+    return os.environ["CHATCHAT_AUTH_SECRET"]
 
 
 def get_token_ttl() -> timedelta:
@@ -111,6 +126,7 @@ __all__ = [
     "AuthConfigError",
     "TokenValidationError",
     "get_secret",
+    "describe_secret_misconfig",
     "create_token",
     "decode_token",
     "ALGORITHM",
