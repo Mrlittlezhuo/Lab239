@@ -2,7 +2,8 @@
 
 ## 1. 状态、基线与执行顺序
 
-- 状态：`ready_for_claude`
+- 状态：`ready_for_codex_review`（Claude 已按 §9 顺序完成阶段 A–E，
+  执行报告见 §13）
 - 负责人：Claude Code
 - 任务编写与审查：Codex
 - 目标分支：`master`
@@ -283,19 +284,192 @@ Claude 完成后将状态改为 `ready_for_codex_review`，并填写以下内容
 
 ### 修改文件
 
-<待填写>
+阶段 A（原文与可定位证据）：
+
+- 新增 `libs/chatchat-server/chatchat/server/research/fulltext.py`：原文单元
+  切分与定位（page/section/block_index/content_hash）、provider 链
+  （远程 PDF → 本地知识库 → 摘要降级）与失败隔离；
+- 新增 `chatchat/server/research/evidence.py`：`EvidenceDraft`/
+  `EvidenceExtraction`、`find_quote` 逐字核对、`parse_evidence_payload`、
+  默认提取器；
+- 新增 `chatchat/server/research/evidence_service.py`：`ingest_paper_fulltext`、
+  `extract_paper_evidence`、证据审核（确认/编辑/驳回/删除）、重新核对；
+- `chatchat/server/db/models/research_model.py`：`PaperUnitModel`，
+  `EvidenceCardModel` 追加 quote/locator/review_status/dedup_key 等，
+  `ProjectPaperModel` 追加 `fulltext_state/unit_count/fulltext_hash`；
+- `chatchat/server/db/migrate/migrations.py`：v9（`paper_unit` + 加列）。
+
+阶段 B（覆盖、比较、冲突、有界补充检索）：
+
+- 新增 `chatchat/server/research/comparison.py`（`EvidenceRef`、
+  `ComparisonDraft`、`ConflictDraft`、payload 解析与引用校验）；
+- 新增 `chatchat/server/research/comparison_service.py`（维度读写、
+  `generate_project_comparisons`、冲突裁决、`start_supplementary_run`）；
+- 新增 `chatchat/server/research/coverage.py`（covered/thin/missing 判定、
+  缺失维度、补充检索建议，纯计算可重现）；
+- `research_model.py`：`ComparisonUnitModel`、`ResearchConflictModel`，
+  `ResearchProjectModel.dimensions_json`，`ResearchRunModel.parent_run_id/round_no`；
+- `migrations.py`：v10。
+
+阶段 C（版本化报告与导出）：
+
+- 新增 `chatchat/server/research/report.py`（`[[e:<id>]]` 稳定引用标记、
+  `validate_report_body`、`render_markdown` 脚注、BibTeX 导出、无证据结论
+  降级为"证据不足与推测"）；
+- 新增 `chatchat/server/research/report_service.py`（`generate_project_report`、
+  `save_report_edit` 追加新版本、导出）；
+- `research_model.py`：`ResearchReportModel` 追加 `report_key/run_id/status/
+  citations_json/evidence_ids_json/unsupported/generated_by/error`；
+- `migrations.py`：v11（旧报告 `report_key` 回填为自身 id）。
+
+阶段 D（React SPA 研究界面，按用户决定不做 Streamlit 页面）：
+
+- `frontend/src/api/research.ts`：原文/单元/证据/维度/比较/冲突/覆盖/
+  补充检索/报告全部端点的类型化客户端；
+- 新增 `frontend/src/components/research/{labels.ts,reportText.ts,
+  EvidencePanel.tsx,ComparisonPanel.tsx,CoveragePanel.tsx,ReportPanel.tsx,
+  PaperSourceActions.tsx}`；
+- `frontend/src/pages/ResearchPage.tsx`（页签改为 URL 同步 `?tab=`，接入
+  证据/比较/覆盖/报告面板与逐篇"取原文/看单元/提取证据"）、
+  `frontend/src/pages/ResearchRunPage.tsx`（阶段徽章、两个人工复核门禁提示
+  与"前往复核"跳转、"生成证据与报告"按钮、阶段产物摘要与告警）；
+- `frontend/src/index.css`：`.markdown-body` 报告排版（Tailwind preflight
+  会清空默认样式）；
+- 新增 `frontend/src/components/research/reportText.test.ts`、
+  扩充 `frontend/src/api/research.test.ts`。
+
+阶段 E（研究 LangGraph 扩展与串联）：
+
+- `chatchat/server/research/graph.py`：新增
+  `read_selected_papers → extract_evidence → wait_for_evidence_review →
+  analyze_coverage_and_conflicts → build_comparison → generate_report →
+  wait_for_report_review → finalize_artifacts` 节点与条件边；017 既有节点
+  加"按阶段跳过"守卫；阶段产物先落库再推进；每阶段写入 Agent Run 步骤；
+- `chatchat/server/research/runtime.py`、`service.py`：注入
+  `extractor/unit_providers/kb_names/comparison_generator/report_generator`；
+  新增 `run_research_artifacts`（`completed → running` 重开产物阶段，
+  新建关联 Agent Run 时间线）；
+- `chatchat/server/db/repository/research_repository.py`：`RUN_STAGES` 扩展 +
+  `STAGE_ORDER`、`merge_run_summary`、`pause_run_for_review`、
+  `reopen_run_for_artifacts`；`set_stage` 改为**只前进不后退**并在失败时告警
+  （原生 SQL 后 `expire_all`，避免同会话读到过期阶段）；
+  `converge_run_best_effort` 不再把人工门禁挂起误判为 failed；
+- `chatchat/server/db/models/research_model.py`：`ck_research_run_stage`
+  取值扩展；
+- `chatchat/server/db/migrate/migrations.py`：**新增 v12
+  `research_run_stage_artifacts`**（SQLite 无法对已有表增删 CHECK，按官方
+  做法重建 `research_run`：列交集拷贝全部行 → 改名 → 重建索引；幂等，
+  遇到预期之外的列直接失败回滚，行 id = LangGraph thread_id 不变）；
+- `chatchat/server/api_server/research_routes.py`：A–E 全部端点
+  （含 `POST /research/runs/{rid}/artifacts`），owner 只取自认证上下文，
+  非本人统一 404、状态不允许 409、字段非法 400；
+- 新增 `tests/unit_tests/test_research_artifact_loop.py`（14 项，含 v12 迁移
+  保留数据/幂等/未知列中止三向验证）。
+
+因新增 v12 而同步的既有测试期望（仅版本号断言）：
+`test_db_migrate.py`、`test_research_project.py`、`test_research_papers.py`、
+`test_research_workflow.py`、`test_research_evidence.py`、
+`test_research_comparison.py`、`test_research_report.py`、`test_agent_run.py`、
+`test_agent_runtime_langgraph.py`、`test_user_memory.py`、
+`test_smart_conversation.py`、`test_intent_routing.py`。
 
 ### 关键设计选择
 
-<待填写：原文定位、证据校验、比较/冲突、引用、报告版本、研究图和 WebUI 状态>
+- 原文定位：`paper_unit` 保存用户私有的原文块与稳定定位，槽位
+  `(project_id, paper_id, unit_kind, block_index)` 唯一，重解析按内容哈希
+  幂等替换；摘要降级单元 `page=None`，UI 与脚注一律显示"摘要级证据"，
+  绝不显示页码。
+- 证据校验：模型输出的每条 `quote` 必须能在**实际喂给模型的单元**里
+  逐字定位（忽略空白差异），核对不上直接拒绝并回传原因，不入库为已核对
+  证据；`dedup_key` 部分唯一索引使重复提取只产生 `unchanged`；已人工审核
+  （confirmed/edited/rejected）的卡片不被重跑覆盖。
+- 比较与冲突：比较单元必须引用本项目真实证据且
+  `(project_id, paper_id, dimension_id)` 唯一；冲突两侧各自引用证据卡片，
+  `dedup_key` 去重，人工裁决写入结论；无效引用被拒绝并如实返回。
+- 覆盖与补充检索：covered/thin/missing 判定纯计算、可重现；建议复用 017
+  计划里的检索式；补充检索是**可见的新运行**（`parent_run_id/round_no`），
+  轮次有上限（超限 409），不自循环。
+- 引用与报告版本：报告正文用稳定标记 `[[e:<evidence_id>]]`，渲染成 `[^n]`
+  脚注并把映射持久化在 `citations_json`，引用可反查证据卡片；无证据结论
+  自动降级为"证据不足与推测"；BibTeX 只用真实论文元数据。版本按
+  `report_key` 只追加，编辑保存新版本，旧版本不覆盖。
+- 报告去噪（阶段 E 补强）：`generate_project_report` 在**正文与标题与现有
+  最新版本完全一致**时不再出版本，返回现有版本并标 `unchanged: true`，
+  使闭环重放/重复点击不会堆积噪声版本。
+- 研究图：沿用 017 的单一 LangGraph 与 014 checkpoint（`run_id ==
+  thread_id`），新增节点在同一图内；`stage` 是恢复与重放的事实来源，
+  节点按 `STAGE_ORDER` 跳过已完成阶段，因此门禁恢复/崩溃重放不会重复
+  联网检索、重复入库或重复出版本；`set_stage` 只前进不后退（重放已完成的
+  阶段不得把标记倒回，否则人工门禁会反复挂起）。
+- 人工确认点：证据复核与报告复核复用 017 的 `awaiting_confirmation`
+  状态（不新增状态值），由 `stage=evidence_review/report_review` 表明复核
+  对象；继续执行仍走 `POST /research/runs/{rid}/confirm`。崩溃发生在复核
+  之后时，重放不再要求用户重复复核。
+- 产物入口：`POST /research/runs/{rid}/artifacts` 仅允许 `completed` 重开
+  （`failed` 走 resume 重试，`cancelled` 尊重用户意图不复活），每次产物执行
+  关联一条新的 Agent Run 时间线，各阶段以 `tool_call` 步骤进入既有时间线。
+- WebUI 状态：研究页五个页签写进 URL，运行页门禁卡片可"前往复核"直达对应
+  页签；运行页显示阶段产物计数、缺证据维度与被拒绝/告警条目；报告经
+  `react-markdown + remark-gfm` 渲染（不启用 rehype-raw，模型输出不注入
+  HTML）。
 
 ### 测试命令与结果
 
-<待填写；失败或未运行必须如实说明>
+后端（固定 Conda 环境，临时 SQLite + 临时 `CHATCHAT_ROOT`，不触碰
+`chatchat-study-data`）：
+
+```bash
+cd libs/chatchat-server
+CHATCHAT_ROOT=<临时目录> \
+/home/lab239/anaconda3/envs/Langchain-Chatchat/bin/python -m pytest tests/unit_tests -q
+# 562 passed（018 开始前基线 476；新增 018 测试：阶段 A/B/C/E 共 86 项）
+```
+
+阶段 E 定向：`pytest tests/unit_tests/test_research_artifact_loop.py -q` →
+**14 passed**，覆盖：未纳入论文时如实收尾（不调模型）、完整闭环在
+`evidence_review`/`report_review` 两处挂起后完成、Agent Run 步骤时间线、
+Phoenix 业务 span 关联 run/project/agent_run、重放不重复检索/入库/出版本、
+门禁中取消后不能再打开、状态不允许 409、跨用户 404、报告失败 → failed
+且既有产物保留并可 resume 完成、原文取不到时降级为摘要级且不编造页码、
+v12 迁移保留旧行与索引 + 幂等 + 未知列失败回滚。
+
+任务 017 联合回归：`pytest tests/unit_tests/test_research_workflow.py -q` →
+**21 passed**（图扩展后行为不变）。
+
+前端：
+
+```bash
+cd frontend
+npm run typecheck   # 通过，无错误
+npm test            # 58 passed（含新增 runArtifacts 契约与 reportText 用例）
+npm run build       # 成功（dist 已重建；仅有 chunk >500kB 的既有体积告警）
+```
+
+未运行的测试：`tests/api/`（需要真实服务进程与模型，离线不可跑）；
+`pytest tests/unit_tests` 之外的集成/端到端套件本任务未新增。
 
 ### 未完成项与风险
 
-<待填写；包括尚未完成的真实模型/原文/浏览器手工验证>
+- 真实模型/真实原文未验证：全部证据/比较/报告测试用假提取器与假生成器，
+  未连真实 LLM、ArXiv、PDF 下载、本地知识库或 Phoenix。真实提取质量、
+  PDF 解析成功率、摘要降级的实际比例需在配置好模型与网络后手工验证。
+- 浏览器手工验收未做：SPA 研究页（取原文→提取证据→复核→比较→覆盖→
+  报告→导出）只由 vitest 契约测试与 typecheck/build 覆盖，未在浏览器里
+  跑通完整流程。
+- v12 迁移在真实库上未执行：本次只在临时库验证升级/幂等/失败回滚；
+  真实 `chatchat-study-data` 数据库未读取也未升级（按任务禁止项）。首次
+  启动真实服务时会执行 v12 重建 `research_run`，建议 Codex 在审查后按
+  协作流程先备份再升级验证。
+- 重放语义的取舍：用户显式再次"生成证据与报告"会重跑原文读取与证据提取
+  （幂等，计数为 `unchanged`），但报告在内容完全一致时不出版本；如果
+  期望"重跑也一定产生新版本"，需要产品层面确认。
+- 阶段跳过依赖 `stage` 单调：若将来新增阶段或允许回退阶段，必须同步
+  调整 `RUN_STAGES`/`STAGE_ORDER` 与守卫，否则会重复副作用；v12 的
+  CHECK 取值与 `RUN_STAGES` 是两处定义，已由测试钉住但需人工保持同步。
+- 报告内容一致性判据是"正文+标题完全相同"：极长标题（>500 字符被截断）
+  或仅元数据变化会被视为新内容并出版本。
+- 覆盖分析在每次进入该阶段时重算（阶段已完成则跳过）：若用户在报告复核
+  门禁回头改证据，需要重新走一次产物阶段才会刷新覆盖统计。
 
 ## 14. Codex 审查记录
 
