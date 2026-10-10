@@ -9,3 +9,8 @@ dist/
 !package-lock.json
 !tsconfig.json
 !tsconfig.*.json
+
+# 根 .gitignore 的标准 Python 规则 `lib/` 会连 `src/lib/` 一起吞掉
+# （SSE 帧解析、块分类、请求层、错误与导出工具都在里面），必须显式恢复
+!src/lib/
+!src/lib/**
