@@ -69,6 +69,15 @@ async def chat_completions(
     if body.max_tokens in [None, 0]:
         body.max_tokens = Settings.model_settings.MAX_TOKENS
 
+    # 本接口把最后一条消息的 content 当字符串用（会话标题、落库 query、
+    # prompt 模板），多模态数组会在写库时失败、也不会到达模型。
+    # 图片解析走 /v1/chat/completions（代理路由原样透传）。
+    if not isinstance(body.messages[-1].get("content"), str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该接口不支持多模态消息，图片解析请使用 /v1/chat/completions",
+        )
+
     extra = {**body.model_extra} or {}
     for key in list(extra):
         delattr(body, key)

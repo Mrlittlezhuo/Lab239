@@ -2,7 +2,8 @@
 
 - 密钥来自环境变量 ``CHATCHAT_AUTH_SECRET``，缺失或 UTF-8 长度 < 32 bytes
   时失败关闭（绝不使用弱默认值）；
-- 有效期固定 30 分钟；
+- 有效期由环境变量 ``CHATCHAT_AUTH_TTL_MINUTES`` 配置，默认 720 分钟（12
+  小时），clamp 到 5–10080 分钟（前端重构 B7）；
 - claims 含 ``sub``(user id)、``ver``(auth_version)、``iat``、``exp``、
   ``iss=langchain-chatchat``；
 - 解码时固定算法列表、校验 issuer 与必需 claims。
@@ -18,7 +19,10 @@ import jwt
 
 ALGORITHM = "HS256"
 ISSUER = "langchain-chatchat"
-TOKEN_TTL = timedelta(minutes=30)
+TOKEN_TTL_MINUTES_ENV = "CHATCHAT_AUTH_TTL_MINUTES"
+DEFAULT_TOKEN_TTL_MINUTES = 720  # 12 小时
+MIN_TOKEN_TTL_MINUTES = 5
+MAX_TOKEN_TTL_MINUTES = 10080  # 7 天
 MIN_SECRET_BYTES = 32
 
 _REQUIRED_CLAIMS = ("sub", "ver", "iat", "exp", "iss")
@@ -44,6 +48,20 @@ def get_secret() -> str:
     return secret
 
 
+def get_token_ttl() -> timedelta:
+    """读取令牌有效期（分钟）；非法值回落默认，越界值 clamp。"""
+    raw = os.environ.get(TOKEN_TTL_MINUTES_ENV, "").strip()
+    if not raw:
+        minutes = DEFAULT_TOKEN_TTL_MINUTES
+    else:
+        try:
+            minutes = int(raw)
+        except ValueError:
+            minutes = DEFAULT_TOKEN_TTL_MINUTES
+    minutes = max(MIN_TOKEN_TTL_MINUTES, min(MAX_TOKEN_TTL_MINUTES, minutes))
+    return timedelta(minutes=minutes)
+
+
 def create_token(
     user_id: str,
     auth_version: int,
@@ -60,7 +78,7 @@ def create_token(
         "ver": auth_version,
         "iss": ISSUER,
         "iat": int(now.timestamp()),
-        "exp": int((now + TOKEN_TTL).timestamp()),
+        "exp": int((now + get_token_ttl()).timestamp()),
     }
     return jwt.encode(payload, get_secret(), algorithm=ALGORITHM)
 
@@ -97,6 +115,10 @@ __all__ = [
     "decode_token",
     "ALGORITHM",
     "ISSUER",
-    "TOKEN_TTL",
+    "TOKEN_TTL_MINUTES_ENV",
+    "DEFAULT_TOKEN_TTL_MINUTES",
+    "MIN_TOKEN_TTL_MINUTES",
+    "MAX_TOKEN_TTL_MINUTES",
+    "get_token_ttl",
     "MIN_SECRET_BYTES",
 ]

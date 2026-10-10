@@ -197,6 +197,53 @@ def test_kb_is_shared_between_users(client, temp_user_db, kb_state):
     assert r2.status_code == 200
 
 
+def test_list_knowledge_bases_exposes_kb_info(client, temp_user_db, monkeypatch):
+    """前端重构 B9：列表接口必须带 kb_info（前端知识库卡片/介绍编辑依赖）。"""
+    from chatchat.server.db.base import Base
+    from chatchat.server.db.models.knowledge_base_model import (
+        KnowledgeBaseModel,
+        KnowledgeBaseSchema,
+    )
+
+    Base.metadata.create_all(temp_user_db["engine"], tables=[KnowledgeBaseModel.__table__])
+
+    S = temp_user_db["Session"]
+    s = S()
+    try:
+        s.add(
+            KnowledgeBaseModel(
+                kb_name="infokb",
+                kb_info="公共介绍",
+                vs_type="faiss",
+                embed_model="bge-m3",
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    def fake_list(min_file_count=-1):
+        s = S()
+        try:
+            rows = (
+                s.query(KnowledgeBaseModel)
+                .filter(KnowledgeBaseModel.file_count > min_file_count)
+                .all()
+            )
+            return [KnowledgeBaseSchema.model_validate(kb) for kb in rows]
+        finally:
+            s.close()
+
+    monkeypatch.setattr(kb_api, "list_kbs_from_db", fake_list)
+    u = _mk_user(temp_user_db, "viewer")
+    r = client.get("/knowledge_base/list_knowledge_bases", headers=_bearer(u))
+    assert r.status_code == 200
+    kb = next(k for k in r.json()["data"] if k["kb_name"] == "infokb")
+    assert kb["kb_info"] == "公共介绍"
+    assert kb["vs_type"] == "faiss"
+    assert kb["embed_model"] == "bge-m3"
+
+
 def test_log_kb_operation_format():
     """直接验证审计格式：操作者取自传入 user.username。"""
     records = []

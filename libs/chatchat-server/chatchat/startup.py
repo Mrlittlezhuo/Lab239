@@ -172,6 +172,19 @@ def run_webui(
     started_event.set()
 
 
+def streamlit_webui_enabled() -> bool:
+    """前端重构 B3：默认不再拉起 Streamlit webui 进程。
+
+    显式 ``-w/--webui`` 仍按旧行为启动；``-a`` 只有在设置
+    ``CHATCHAT_ENABLE_STREAMLIT_WEBUI=1`` 时才附带启动 webui。
+    """
+    return os.environ.get("CHATCHAT_ENABLE_STREAMLIT_WEBUI", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def dump_server_info(after_start=False, args=None):
     import platform
 
@@ -201,6 +214,17 @@ def dump_server_info(after_start=False, args=None):
             print(f"    Chatchat Api Server: {api_address()}")
         if args.webui:
             print(f"    Chatchat WEBUI Server: {webui_address()}")
+        elif args.api:
+            # 前端重构 B3：SPA 由 API 服务同源托管，这里打印其地址。
+            from chatchat.server.api_server.spa_static import resolve_web_dist
+
+            if resolve_web_dist() is not None:
+                print(f"    Chatchat Web UI (SPA): {api_address()}")
+            else:
+                print(
+                    "    前端 SPA 尚未构建（frontend/dist 缺失）；"
+                    f"在 frontend/ 执行 `npm run build` 后访问 {api_address()}"
+                )
     print("=" * 30 + "Langchain-Chatchat Configuration" + "=" * 30)
     print("\n")
 
@@ -248,7 +272,10 @@ async def start_main_server(args):
 
     if args.all:
         args.api = True
-        args.webui = True
+        # 前端重构 B3：`-a` 不再默认启动 Streamlit webui；
+        # 显式 `-w` 或 CHATCHAT_ENABLE_STREAMLIT_WEBUI=1 仍会启动。
+        if streamlit_webui_enabled():
+            args.webui = True
 
     dump_server_info(args=args)
 
@@ -331,7 +358,8 @@ async def start_main_server(args):
     "--all",
     "all",
     is_flag=True,
-    help="run api.py and webui.py",
+    help="run api.py（前端 SPA 由 API 服务同源托管；"
+    "CHATCHAT_ENABLE_STREAMLIT_WEBUI=1 附带启动旧 webui.py）",
 )
 @click.option(
     "--api",

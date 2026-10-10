@@ -65,7 +65,7 @@ def login(
             detail="服务端认证配置错误，无法签发 Token",
         )
     session.commit()
-    expires_in = int(math.ceil(jwt_mod.TOKEN_TTL.total_seconds()))
+    expires_in = int(math.ceil(jwt_mod.get_token_ttl().total_seconds()))
     return LoginResponse(
         token=token, token_type="Bearer", expires_in=expires_in, user=_user_out(user)
     )

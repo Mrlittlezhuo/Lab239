@@ -415,6 +415,41 @@ def test_chat_other_user_conversation_id_404_before_model(client, temp_user_db, 
     assert r.json().get("conversation_id") == ca
 
 
+def test_chat_rejects_multimodal_content_before_model(
+    client, temp_user_db, secret, monkeypatch
+):
+    """图片解析只能走 /v1：本接口的 content 是字符串语义（标题/落库/prompt），
+    收到多模态数组必须在写库和模型调用之前拒绝。"""
+    import chatchat.server.api_server.chat_routes as cr
+
+    model_called = {"n": 0}
+
+    async def fake_chat(*args, **kwargs):
+        model_called["n"] += 1
+        return {"choices": [{"message": "should-not-reach"}]}
+
+    monkeypatch.setattr(cr, "chat", fake_chat)
+
+    hdr, _ = _headers_of(temp_user_db, "vision-alice")
+    body = {
+        "model": "qwen:7b",
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "看这张图"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ],
+            }
+        ],
+    }
+    r = client.post("/chat/chat/completions", headers=hdr, json=body)
+    assert r.status_code == 400
+    assert "/v1/chat/completions" in r.json()["detail"]
+    assert model_called["n"] == 0
+
+
 # ---------------------------------------------------------------------------
 # owner 正确时消息创建和回答更新使用同一会话
 # ---------------------------------------------------------------------------
@@ -575,6 +610,39 @@ def test_unlogged_chat_completions_401(client):
         json={"model": "qwen:7b", "stream": False, "messages": [{"role": "user", "content": "hi"}]},
     )
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 前端重构 B8：历史消息接口返回反馈字段，供前端反馈 UI 显示当前状态
+# ---------------------------------------------------------------------------
+
+
+def test_messages_endpoint_exposes_feedback_fields(client, temp_user_db, secret):
+    hdr, a = _headers_of(temp_user_db, "carol")
+    cid = _create_conv(client, hdr, "fb")
+    s = temp_user_db["Session"]()
+    try:
+        mid = add_message(s, cid, a["id"], "llm_chat", "q", response="a")
+    finally:
+        s.close()
+
+    r = client.get(f"/conversations/{cid}/messages", headers=hdr)
+    assert r.status_code == 200
+    msg = r.json()["messages"][0]
+    assert msg["feedback_score"] == -1
+    assert msg["feedback_reason"] == ""
+
+    fb = client.post(
+        "/chat/feedback",
+        headers=hdr,
+        json={"message_id": mid, "score": 100, "reason": "很有帮助"},
+    )
+    assert fb.status_code == 200, fb.text
+
+    r = client.get(f"/conversations/{cid}/messages", headers=hdr)
+    msg = r.json()["messages"][0]
+    assert msg["feedback_score"] == 100
+    assert msg["feedback_reason"] == "很有帮助"
 
 
 if __name__ == "__main__":

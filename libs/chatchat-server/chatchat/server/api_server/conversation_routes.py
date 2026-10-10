@@ -55,6 +55,9 @@ class MessageOut(BaseModel):
     response: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     create_time: Optional[datetime] = None
+    # 前端反馈 UI 需要显示当前评分状态（-1 表示未反馈）
+    feedback_score: Optional[int] = -1
+    feedback_reason: Optional[str] = ""
 
 
 def _conv_out(c: ConversationModel) -> ConversationOut:
@@ -75,6 +78,8 @@ def _msg_out(m) -> MessageOut:
         response=m.response,
         metadata=m.meta_data or {},
         create_time=m.create_time,
+        feedback_score=m.feedback_score if m.feedback_score is not None else -1,
+        feedback_reason=m.feedback_reason or "",
     )
 
 

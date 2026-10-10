@@ -26,7 +26,9 @@ from chatchat.server.api_server.kb_routes import kb_router
 from chatchat.server.api_server.memory_routes import memory_router
 from chatchat.server.api_server.mcp_routes import mcp_router
 from chatchat.server.api_server.openai_routes import openai_router
+from chatchat.server.api_server.research_routes import research_router
 from chatchat.server.api_server.server_routes import server_router
+from chatchat.server.api_server.spa_static import install_spa, resolve_web_dist
 from chatchat.server.api_server.tool_routes import tool_router
 from chatchat.server.auth.routes_auth import auth_router
 from chatchat.server.auth.routes_admin import admin_router
@@ -75,9 +77,14 @@ def create_app(run_mode: str = None):
             allow_headers=["*"],
         )
 
-    @app.get("/", summary="swagger 文档", include_in_schema=False)
-    async def document():
-        return RedirectResponse(url="/docs")
+    # 前端重构 B2：有构建产物时 `/` 交给 SPA（在文件末尾挂载），
+    # 没有产物时保持旧的 `/` → `/docs` 行为。
+    spa_dist = resolve_web_dist()
+    if spa_dist is None:
+
+        @app.get("/", summary="swagger 文档", include_in_schema=False)
+        async def document():
+            return RedirectResponse(url="/docs")
 
     app.include_router(chat_router)
     app.include_router(conversation_router)
@@ -90,6 +97,7 @@ def create_app(run_mode: str = None):
     app.include_router(admin_router)
     app.include_router(memory_router)
     app.include_router(agent_run_router)
+    app.include_router(research_router)
 
     # 其它接口
     app.post(
@@ -104,6 +112,10 @@ def create_app(run_mode: str = None):
     # 项目相关图片
     img_dir = str(Settings.basic_settings.IMG_DIR)
     app.mount("/img", StaticFiles(directory=img_dir), name="img")
+
+    # 前端 SPA 必须最后挂载：`/` 挂载会匹配任意前缀，先注册会吞掉 API 路由。
+    if spa_dist is not None:
+        install_spa(app)
 
     return app
 

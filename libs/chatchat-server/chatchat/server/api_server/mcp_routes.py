@@ -32,11 +32,16 @@ from chatchat.server.db.repository.mcp_connection_repository import (
     reset_mcp_profile,
     delete_mcp_profile,
 )
+from chatchat.server.auth.deps import require_password_changed
 from chatchat.utils import build_logger
 
 
 logger = build_logger()
-mcp_router = APIRouter(prefix="/api/v1/mcp_connections", tags=["MCP Connections"])
+mcp_router = APIRouter(
+    prefix="/api/v1/mcp_connections",
+    tags=["MCP Connections"],
+    dependencies=[Depends(require_password_changed)],
+)
 
 
 # MCP Profile 相关路由 - 放在前面避免与 {connection_id} 冲突
@@ -337,7 +342,9 @@ async def update_mcp_connection_by_id(
         
         # 如果更新名称，检查是否与其他连接冲突
         if update_data.server_name and update_data.server_name != existing.server_name:
-            name_existing = get_connections_by_server_name(server_name=update_data.server_name)
+            name_existing = get_mcp_connections_by_server_name(
+                server_name=update_data.server_name
+            )
             if name_existing:
                 logger.error(f"服务器名称 '{update_data.server_name}' 已存在")
                 return MCPConnectionStatusResponse(

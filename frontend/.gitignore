@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.local
+.env.local
+.vite/
+
+# 根 .gitignore 的全局 `*.json` 会吞掉前端清单与配置，必须显式恢复
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.*.json

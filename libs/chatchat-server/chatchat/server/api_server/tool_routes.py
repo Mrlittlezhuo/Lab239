@@ -3,15 +3,20 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Depends, Request
 
+from chatchat.server.auth.deps import require_password_changed
 from chatchat.server.utils import BaseResponse, get_tool, get_tool_config
 from chatchat.utils import build_logger
 
 
 logger = build_logger()
 
-tool_router = APIRouter(prefix="/tools", tags=["Toolkits"])
+tool_router = APIRouter(
+    prefix="/tools",
+    tags=["Toolkits"],
+    dependencies=[Depends(require_password_changed)],
+)
 
 
 @tool_router.get("", response_model=BaseResponse)

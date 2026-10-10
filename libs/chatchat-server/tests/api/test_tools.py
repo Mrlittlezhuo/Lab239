@@ -9,11 +9,14 @@ import requests
 
 from chatchat.server.utils import api_address
 
+from api_auth import login_headers
+
 api_base_url = f"{api_address()}/tools"
 
 
 def test_tool_list():
-    resp = requests.get(api_base_url)
+    headers = login_headers()
+    resp = requests.get(api_base_url, headers=headers)
     assert resp.status_code == 200
     data = resp.json()["data"]
     pprint(data)
@@ -21,11 +24,12 @@ def test_tool_list():
 
 
 def test_tool_call():
+    headers = login_headers()
     data = {
         "name": "calculate",
-        "kwargs": {"a": 1, "b": 2, "operator": "+"},
+        "tool_input": {"a": 1, "b": 2, "operator": "+"},
     }
-    resp = requests.post(f"{api_base_url}/call", json=data)
+    resp = requests.post(f"{api_base_url}/call", json=data, headers=headers)
     assert resp.status_code == 200
     data = resp.json()["data"]
     pprint(data)

@@ -353,12 +353,46 @@ def test_login_success_returns_token_and_masked_user(client, temp_user_db, secre
     assert r.status_code == 200
     data = r.json()
     assert data["token_type"] == "Bearer"
-    assert data["expires_in"] == int(auth_jwt.TOKEN_TTL.total_seconds())
+    assert data["expires_in"] == int(auth_jwt.get_token_ttl().total_seconds())
     u = data["user"]
     assert u["username"] == "alice" and u["role"] == "user"
     assert "password_hash" not in u and "password" not in u
     claims = _pyjwt.decode(data["token"], secret, algorithms=["HS256"])
     assert claims["sub"] == u["id"] and claims["iss"] == auth_jwt.ISSUER
+
+
+def test_token_ttl_env_default_and_clamp(monkeypatch):
+    """B7：CHATCHAT_AUTH_TTL_MINUTES 可配，默认 720 分钟，越界 clamp。"""
+    env = auth_jwt.TOKEN_TTL_MINUTES_ENV
+    monkeypatch.delenv(env, raising=False)
+    assert auth_jwt.get_token_ttl() == timedelta(minutes=720)
+
+    monkeypatch.setenv(env, "45")
+    assert auth_jwt.get_token_ttl() == timedelta(minutes=45)
+
+    monkeypatch.setenv(env, "1")
+    assert auth_jwt.get_token_ttl() == timedelta(minutes=auth_jwt.MIN_TOKEN_TTL_MINUTES)
+
+    monkeypatch.setenv(env, "99999")
+    assert auth_jwt.get_token_ttl() == timedelta(minutes=auth_jwt.MAX_TOKEN_TTL_MINUTES)
+
+    monkeypatch.setenv(env, "not-a-number")
+    assert auth_jwt.get_token_ttl() == timedelta(minutes=auth_jwt.DEFAULT_TOKEN_TTL_MINUTES)
+
+
+def test_login_expires_in_follows_ttl_env(client, temp_user_db, secret, monkeypatch):
+    """登录响应的 expires_in 与令牌 exp 必须跟随环境变量。"""
+    _mk_user(temp_user_db, "ttl-alice", "user")
+    monkeypatch.setenv(auth_jwt.TOKEN_TTL_MINUTES_ENV, "45")
+    r = client.post(
+        "/auth/login",
+        json={"username": "ttl-alice", "password": "password1234"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["expires_in"] == 45 * 60
+    claims = _pyjwt.decode(data["token"], secret, algorithms=["HS256"])
+    assert claims["exp"] - claims["iat"] == 45 * 60
 
 
 def test_login_wrong_password_and_unknown_user_same_401(client, temp_user_db, secret):

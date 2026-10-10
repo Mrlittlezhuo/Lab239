@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import UploadFile
 from openai.types.chat import (
-    ChatCompletionMessageParam,
     ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
     completion_create_params,
@@ -33,7 +32,13 @@ class OpenAIBaseInput(BaseModel):
 
 
 class OpenAIChatInput(OpenAIBaseInput):
-    messages: List[ChatCompletionMessageParam]
+    # 消息用宽松的 dict 结构，保证代理语义（`/v1/chat/completions` 把
+    # messages 原样透传给模型平台，结构由上游校验）。
+    # openai SDK 的 `ChatCompletionMessageParam` 把 content 声明为
+    # `Union[str, Iterable[...]]`，pydantic 会把多模态 content 校验成惰性
+    # ValidatorIterator、`model_dump()` 又序列化成 SerializationIterator
+    # （`mode="json"` 下甚至变成 []），图片片段会在代理转发时被丢掉。
+    messages: List[Dict[str, Any]]
     model: str = get_default_llm()
     frequency_penalty: Optional[float] = None
     function_call: Optional[completion_create_params.FunctionCall] = None

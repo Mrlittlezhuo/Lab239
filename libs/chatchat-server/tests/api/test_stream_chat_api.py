@@ -9,6 +9,7 @@ from pprint import pprint
 
 from chatchat.server.utils import api_address
 
+from api_auth import login_headers
 
 api_base_url = api_address()
 api="/chat/chat/completions"
@@ -28,10 +29,14 @@ def dump_output(r, title):
         print(line, end="", flush=True)
 
 
-headers = {
-    "accept": "application/json",
-    "Content-Type": "application/json",
-}
+def headers():
+    """登录取 Token。必须在测试运行时调用，不能在模块导入时（否则未启动
+    API 服务时收集阶段就会失败）。"""
+    return {
+        "accept": "application/json",
+        "Content-Type": "application/json",
+        **login_headers(),
+    }
 
 
 def test_llm_chat():
@@ -47,13 +52,13 @@ def test_llm_chat():
     }
 
     dump_input(data, "LLM Chat")
-    response = requests.post(url, headers=headers, json=data, stream=True)
+    response = requests.post(url, headers=headers(), json=data, stream=True)
     dump_output(response, "LLM Chat")
     assert response.status_code == 200
 
 
 def test_agent_chat():
-    tools = list(requests.get(f"{api_base_url}/tools").json()["data"])
+    tools = list(requests.get(f"{api_base_url}/tools", headers=headers()).json()["data"])
     data = {
         "model": "qwen1.5-chat",
         "messages": [
@@ -65,7 +70,7 @@ def test_agent_chat():
     }
 
     dump_input(data, "Agent Chat")
-    response = requests.post(url, headers=headers, json=data, stream=True)
+    response = requests.post(url, headers=headers(), json=data, stream=True)
     dump_output(response, "Agent Chat")
     assert response.status_code == 200
 
@@ -80,7 +85,7 @@ def test_kb_chat_auto():
         "stream": True,
     }
     dump_input(data, "KB Chat (auto parameters)")
-    response = requests.post(url, headers=headers, json=data, stream=True)
+    response = requests.post(url, headers=headers(), json=data, stream=True)
     print("\n")
     print("=" * 30 + "KB Chat (auto parameters)" + "  output" + "=" * 30)
     for line in response.iter_content(None, decode_unicode=True):
@@ -101,7 +106,7 @@ def test_kb_chat_mannual():
         "stream": True,
     }
     dump_input(data, "KB Chat (auto parameters)")
-    response = requests.post(url, headers=headers, json=data, stream=True)
+    response = requests.post(url, headers=headers(), json=data, stream=True)
     print("\n")
     print("=" * 30 + "KB Chat (auto parameters)" + "  output" + "=" * 30)
     for line in response.iter_content(None, decode_unicode=True):
