@@ -6,3 +6,4 @@ from .human_message_event_repository import *
 from .memory_repository import *
 from .session_summary_repository import *
 from .agent_run_repository import *
+from .research_repository import *

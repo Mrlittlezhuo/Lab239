@@ -18,15 +18,39 @@
 - v7（任务 011）：新增单 Agent 运行表 ``agent_run`` 与步骤表 ``agent_step``；
   运行/步骤按 ``owner_id`` 隔离，仅保存结构化计划、工具行为、观察摘要与
   用户可见状态，不保存模型隐藏思维链。
+- v8（任务 017）：新增论文研究领域表：私有 ``research_project`` /
+  ``research_run`` / ``project_paper`` / ``evidence_card`` /
+  ``research_report`` 与公开可复用的 ``paper_record``；私有资源按
+  ``owner_id`` 隔离（子资源经项目继承），公开论文元数据以 DOI/ArXiv ID
+  部分唯一索引保证规范复用。
+- v9（任务 018）：新增用户私有的论文原文单元表 ``paper_unit``（带
+  page/section/block_index 稳定定位，槽位唯一以支持幂等重解析），为
+  ``evidence_card`` 追加子问题/证据类型/可核对原文/单元指针/校验标记/
+  审核状态/幂等键等列，为 ``project_paper`` 追加全文可得性列；只加表加列，
+  不改列不删表，v8 已有证据与论文数据完整保留。
+- v10（任务 018）：新增 ``comparison_unit``（论文在某比较维度上的结论，
+  必须引用具体证据卡片）与 ``research_conflict``（冲突两侧各自引用证据，
+  幂等键去重）；为 ``research_project`` 追加可调整的比较维度，为
+  ``research_run`` 追加 ``parent_run_id``/``round_no``，使补充检索成为
+  轮次有界的可见新运行。
+- v11（任务 018）：为 ``research_report`` 追加 ``report_key``（版本链：
+  编辑保存新版本，不覆盖旧版本）、``citations_json``/``evidence_ids_json``
+  （报告事实与证据卡片、论文的稳定引用映射）以及生成状态与生成模型；
+  旧报告行的 ``report_key`` 回填为自身 id。
+- v12（任务 018）：放宽 ``research_run.stage`` 取值以支持证据闭环阶段
+  （读原文/提取证据/证据复核/覆盖分析/比较/报告/报告复核）；SQLite 无法
+  对已有表增删 CHECK 约束，故按官方做法重建表并按列交集拷贝全部行，
+  幂等、失败整体回滚，行 id（= LangGraph thread_id）不变。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
 from __future__ import annotations
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, inspect, text
 
 from chatchat.server.db.migrate.base import (
     Migration,
+    MigrationError,
     MigrationRegistry,
     VERSION_TABLE,
 )
@@ -356,6 +380,505 @@ def _v7_agent_run(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+_RESEARCH_PROJECT_TABLE = """
+CREATE TABLE IF NOT EXISTS research_project (
+    id VARCHAR(32) PRIMARY KEY,
+    owner_id VARCHAR(32) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    research_question VARCHAR(2000) NOT NULL,
+    scope VARCHAR(2000) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    current_stage VARCHAR(32) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    CHECK (status IN ('active', 'archived'))
+)
+"""
+
+_RESEARCH_RUN_TABLE = """
+CREATE TABLE IF NOT EXISTS research_run (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    plan_json VARCHAR(8000) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    stage VARCHAR(32) NOT NULL DEFAULT 'draft',
+    agent_run_id VARCHAR(32),
+    sources_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    summary_json VARCHAR(8000) NOT NULL DEFAULT '',
+    error VARCHAR(1000),
+    create_time TIMESTAMP,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    update_time TIMESTAMP,
+    CHECK (status IN ('pending', 'awaiting_confirmation', 'running',
+                      'completed', 'failed', 'cancelled')),
+    CHECK (stage IN ('draft', 'plan', 'retrieval', 'dedup', 'screening',
+                     'persist', 'done'))
+)
+"""
+
+_PAPER_RECORD_TABLE = """
+CREATE TABLE IF NOT EXISTS paper_record (
+    id VARCHAR(32) PRIMARY KEY,
+    title VARCHAR(1000) NOT NULL,
+    authors VARCHAR(2000) NOT NULL DEFAULT '',
+    year INTEGER,
+    abstract VARCHAR(8000) NOT NULL DEFAULT '',
+    doi VARCHAR(200),
+    arxiv_id VARCHAR(100),
+    url VARCHAR(1000),
+    source VARCHAR(50) NOT NULL DEFAULT '',
+    sources_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    fulltext_status VARCHAR(16) NOT NULL DEFAULT 'unknown',
+    title_key VARCHAR(200),
+    create_time TIMESTAMP,
+    update_time TIMESTAMP
+)
+"""
+
+_PROJECT_PAPER_TABLE = """
+CREATE TABLE IF NOT EXISTS project_paper (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    paper_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    source VARCHAR(50) NOT NULL DEFAULT '',
+    relevance FLOAT,
+    screening_status VARCHAR(16) NOT NULL DEFAULT 'pending_review',
+    screening_reason VARCHAR(1000) NOT NULL DEFAULT '',
+    first_run_id VARCHAR(32),
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, paper_id),
+    CHECK (screening_status IN ('pending_review', 'included', 'excluded'))
+)
+"""
+
+_EVIDENCE_CARD_TABLE = """
+CREATE TABLE IF NOT EXISTS evidence_card (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    paper_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    run_id VARCHAR(32),
+    content VARCHAR(8000) NOT NULL DEFAULT '',
+    locator_json VARCHAR(2000) NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP
+)
+"""
+
+_RESEARCH_REPORT_TABLE = """
+CREATE TABLE IF NOT EXISTS research_report (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    title VARCHAR(500) NOT NULL DEFAULT '',
+    content VARCHAR(10000) NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP
+)
+"""
+
+_RESEARCH_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_research_project_owner_id ON research_project (owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_project_owner_update ON research_project (owner_id, update_time)",
+    "CREATE INDEX IF NOT EXISTS ix_research_run_project ON research_run (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_run_owner_create ON research_run (owner_id, create_time)",
+    # 稳定标识的部分唯一索引：同一 DOI / ArXiv ID 只保留一条规范记录
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_record_doi ON paper_record (doi) "
+    "WHERE doi IS NOT NULL AND doi <> ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_record_arxiv_id ON paper_record (arxiv_id) "
+    "WHERE arxiv_id IS NOT NULL AND arxiv_id <> ''",
+    "CREATE INDEX IF NOT EXISTS ix_paper_record_title_key ON paper_record (title_key)",
+    "CREATE INDEX IF NOT EXISTS ix_project_paper_owner ON project_paper (owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_project_paper_project_screen "
+    "ON project_paper (project_id, screening_status)",
+    "CREATE INDEX IF NOT EXISTS ix_evidence_card_project ON evidence_card (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_evidence_card_paper ON evidence_card (paper_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_report_project ON research_report (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_report_owner ON research_report (owner_id)",
+]
+
+
+def _v8_research(conn: Connection) -> None:
+    """v8：新增论文研究领域表（任务 017）。
+
+    - 私有资源（项目/运行/项目论文/证据/报告）带 ``owner_id``，鉴权
+      一律 id + owner 双条件；子资源经项目继承所有权。
+    - ``paper_record`` 为公开论文元数据规范表，可跨项目复用；DOI 与
+      ArXiv ID 用部分唯一索引去重，不保存用户私有文件信息。
+    - 仅 schema，不动既有 user/conversation/message/记忆/agent_run/
+      知识库表，不重建向量索引；重复执行安全（IF NOT EXISTS）。
+    - 失败即回滚且版本不记录（由迁移框架保证）。
+    """
+    conn.execute(text(_RESEARCH_PROJECT_TABLE))
+    conn.execute(text(_RESEARCH_RUN_TABLE))
+    conn.execute(text(_PAPER_RECORD_TABLE))
+    conn.execute(text(_PROJECT_PAPER_TABLE))
+    conn.execute(text(_EVIDENCE_CARD_TABLE))
+    conn.execute(text(_RESEARCH_REPORT_TABLE))
+    for stmt in _RESEARCH_INDEXES:
+        conn.execute(text(stmt))
+
+
+# --- v9（任务 018 阶段 A）：论文原文单元 + 可核对证据卡片 ---
+
+_PAPER_UNIT_TABLE = """
+CREATE TABLE IF NOT EXISTS paper_unit (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    paper_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    run_id VARCHAR(32),
+    unit_kind VARCHAR(16) NOT NULL DEFAULT 'block',
+    page INTEGER,
+    section VARCHAR(200) NOT NULL DEFAULT '',
+    block_index INTEGER NOT NULL DEFAULT 0,
+    text VARCHAR(8000) NOT NULL DEFAULT '',
+    char_count INTEGER NOT NULL DEFAULT 0,
+    content_hash VARCHAR(64) NOT NULL DEFAULT '',
+    source_kind VARCHAR(32) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, paper_id, unit_kind, block_index),
+    CHECK (unit_kind IN ('block', 'abstract'))
+)
+"""
+
+_PAPER_UNIT_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_paper_unit_project_paper "
+    "ON paper_unit (project_id, paper_id)",
+    "CREATE INDEX IF NOT EXISTS ix_paper_unit_owner ON paper_unit (owner_id)",
+]
+
+# evidence_card 追加列（SQLite 支持常量默认值的 NOT NULL 追加，旧行自动回填）
+_EVIDENCE_CARD_ADD_COLUMNS = [
+    "sub_question_id VARCHAR(64) NOT NULL DEFAULT ''",
+    "evidence_type VARCHAR(32) NOT NULL DEFAULT ''",
+    "summary VARCHAR(2000) NOT NULL DEFAULT ''",
+    "quote VARCHAR(4000) NOT NULL DEFAULT ''",
+    "unit_id VARCHAR(32)",
+    "quote_verified INTEGER NOT NULL DEFAULT 0",
+    "level VARCHAR(16) NOT NULL DEFAULT 'fulltext'",
+    "source_kind VARCHAR(32) NOT NULL DEFAULT ''",
+    "extraction_model VARCHAR(200) NOT NULL DEFAULT ''",
+    "extraction_mode VARCHAR(16) NOT NULL DEFAULT 'llm'",
+    "review_status VARCHAR(16) NOT NULL DEFAULT 'pending'",
+    "review_note VARCHAR(1000) NOT NULL DEFAULT ''",
+    "reviewed_at TIMESTAMP",
+    "dedup_key VARCHAR(64) NOT NULL DEFAULT ''",
+]
+
+_PROJECT_PAPER_ADD_COLUMNS = [
+    "fulltext_state VARCHAR(16) NOT NULL DEFAULT 'unknown'",
+    "unit_count INTEGER NOT NULL DEFAULT 0",
+    "fulltext_hash VARCHAR(64) NOT NULL DEFAULT ''",
+    "fulltext_time TIMESTAMP",
+]
+
+_V9_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_evidence_card_project_subq "
+    "ON evidence_card (project_id, sub_question_id)",
+    "CREATE INDEX IF NOT EXISTS ix_evidence_card_review "
+    "ON evidence_card (project_id, review_status)",
+    # 提取重试幂等：同一 (项目, 论文, 子问题, 类型, 原文) 只保留一张卡片。
+    # 空串不参与唯一约束，因此旧行（无 dedup_key）不会被误判重复。
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_evidence_card_dedup ON evidence_card (dedup_key) "
+    "WHERE dedup_key IS NOT NULL AND dedup_key <> ''",
+]
+
+
+def _add_missing_columns(
+    conn: Connection, table: str, definitions: list
+) -> None:
+    """按列名补齐缺失列；已存在的列不动，旧行的既有值不被覆盖。"""
+    from sqlalchemy import inspect
+
+    inspector = inspect(conn)
+    if table not in inspector.get_table_names():
+        # 业务表尚未创建（只跑迁移的空库）；由 create_all 用新版模型创建
+        return
+    existing = {c["name"] for c in inspector.get_columns(table)}
+    for definition in definitions:
+        column = definition.split()[0]
+        if column not in existing:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {definition}"))
+
+
+def _v9_research_evidence(conn: Connection) -> None:
+    """v9：新增 ``paper_unit``，为 ``evidence_card`` / ``project_paper`` 补列（任务 018 阶段 A）。
+
+    - ``paper_unit`` 保存**用户私有**的论文原文块及其稳定定位
+      （page/section/block_index/content_hash）；同一槽位唯一，重跑解析
+      按内容哈希幂等替换，不产生重复单元。
+    - ``evidence_card`` 追加子问题、证据类型、可核对原文 ``quote``、
+      单元指针、校验标记、提取方式、审核状态与幂等键；**只加列不改列、
+      不删表、不重建**，v8 已有证据行的 content/locator/version 全部保留
+      （新列取默认值，``review_status='pending'``）。
+    - ``project_paper`` 追加本项目内该论文的全文可得性；公开
+      ``paper_record`` 不新增任何用户私有内容。
+    - 重复执行安全：``IF NOT EXISTS`` + 列存在性检查；失败即回滚且版本
+      不记录（由迁移框架保证）。
+    """
+    conn.execute(text(_PAPER_UNIT_TABLE))
+    for stmt in _PAPER_UNIT_INDEXES:
+        conn.execute(text(stmt))
+    _add_missing_columns(conn, "evidence_card", _EVIDENCE_CARD_ADD_COLUMNS)
+    _add_missing_columns(conn, "project_paper", _PROJECT_PAPER_ADD_COLUMNS)
+    for stmt in _V9_INDEXES:
+        conn.execute(text(stmt))
+
+
+# --- v10（任务 018 阶段 B）：比较单元、冲突记录与有界补充检索 ---
+
+_COMPARISON_UNIT_TABLE = """
+CREATE TABLE IF NOT EXISTS comparison_unit (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    paper_id VARCHAR(32) NOT NULL,
+    dimension_id VARCHAR(64) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    run_id VARCHAR(32),
+    content VARCHAR(4000) NOT NULL DEFAULT '',
+    evidence_ids_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    level VARCHAR(16) NOT NULL DEFAULT 'fulltext',
+    version INTEGER NOT NULL DEFAULT 1,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, paper_id, dimension_id)
+)
+"""
+
+_RESEARCH_CONFLICT_TABLE = """
+CREATE TABLE IF NOT EXISTS research_conflict (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    run_id VARCHAR(32),
+    sub_question_id VARCHAR(64) NOT NULL DEFAULT '',
+    dimension_id VARCHAR(64) NOT NULL DEFAULT '',
+    topic VARCHAR(500) NOT NULL DEFAULT '',
+    description VARCHAR(4000) NOT NULL DEFAULT '',
+    side_a_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    side_b_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    status VARCHAR(16) NOT NULL DEFAULT 'open',
+    resolution VARCHAR(1000) NOT NULL DEFAULT '',
+    dedup_key VARCHAR(64) NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    CHECK (status IN ('open', 'resolved'))
+)
+"""
+
+_V10_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_comparison_unit_project ON comparison_unit (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_comparison_unit_owner ON comparison_unit (owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_conflict_project ON research_conflict (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_conflict_owner ON research_conflict (owner_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_research_conflict_dedup "
+    "ON research_conflict (dedup_key) WHERE dedup_key IS NOT NULL AND dedup_key <> ''",
+]
+
+_RESEARCH_PROJECT_ADD_COLUMNS_V10 = ["dimensions_json VARCHAR(4000) NOT NULL DEFAULT ''"]
+
+_RESEARCH_RUN_ADD_COLUMNS_V10 = [
+    "parent_run_id VARCHAR(32)",
+    "round_no INTEGER NOT NULL DEFAULT 1",
+]
+
+
+def _v10_research_comparison(conn: Connection) -> None:
+    """v10：新增比较单元与冲突记录，为补充检索加轮次边界（任务 018 阶段 B）。
+
+    - ``comparison_unit``：某论文在某比较维度上的结论，**必须**带
+      ``evidence_ids_json``（依据的证据卡片），使比较结果可反查原文；
+      ``(project_id, paper_id, dimension_id)`` 唯一，重新生成幂等替换。
+    - ``research_conflict``：冲突两侧各自保存证据引用，``dedup_key``
+      部分唯一索引保证重复检测不产生重复记录。
+    - ``research_project.dimensions_json``：用户可调整的比较维度；
+      ``research_run.parent_run_id``/``round_no``：补充检索是可见的新运行，
+      轮次有上限，不会无限自循环。
+    - 只加表加列，不改列不删表；v8/v9 已有研究数据完整保留；
+      重复执行安全（``IF NOT EXISTS`` + 列存在性检查）。
+    """
+    conn.execute(text(_COMPARISON_UNIT_TABLE))
+    conn.execute(text(_RESEARCH_CONFLICT_TABLE))
+    _add_missing_columns(conn, "research_project", _RESEARCH_PROJECT_ADD_COLUMNS_V10)
+    _add_missing_columns(conn, "research_run", _RESEARCH_RUN_ADD_COLUMNS_V10)
+    for stmt in _V10_INDEXES:
+        conn.execute(text(stmt))
+
+
+# --- v11（任务 018 阶段 C）：版本化报告与引用映射 ---
+
+_RESEARCH_REPORT_ADD_COLUMNS_V11 = [
+    "report_key VARCHAR(32) NOT NULL DEFAULT ''",
+    "run_id VARCHAR(32)",
+    "status VARCHAR(16) NOT NULL DEFAULT 'generated'",
+    "citations_json VARCHAR(8000) NOT NULL DEFAULT '[]'",
+    "evidence_ids_json VARCHAR(8000) NOT NULL DEFAULT '[]'",
+    "unsupported VARCHAR(4000) NOT NULL DEFAULT ''",
+    "generated_by VARCHAR(200) NOT NULL DEFAULT ''",
+    "error VARCHAR(1000)",
+]
+
+
+def _v11_research_report(conn: Connection) -> None:
+    """v11：为 ``research_report`` 追加版本链与引用映射列（任务 018 阶段 C）。
+
+    - ``report_key`` + ``version``：同一逻辑报告的每个版本都是独立行，
+      用户编辑保存新版本，**不覆盖**旧版本；用唯一索引代替表内约束
+      （SQLite 无法对已有表追加 UNIQUE 约束）。
+    - ``citations_json``/``evidence_ids_json``：报告事实与证据卡片、论文
+      的稳定关联，使引用可反查、导出可核对。
+    - 只加列不改列不删表；v8 已有报告行保留（``report_key`` 回填为其
+      自身 ``id``，``version`` 保持原值，因此旧报告自成一条版本链）。
+    - 重复执行安全（列存在性检查 + ``IF NOT EXISTS``）。
+    """
+    _add_missing_columns(conn, "research_report", _RESEARCH_REPORT_ADD_COLUMNS_V11)
+    # 旧报告没有版本链：把 report_key 回填为自身 id，保持"一行一版本"
+    conn.execute(
+        text("UPDATE research_report SET report_key = id WHERE report_key IS NULL OR report_key = ''")
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_research_report_key_version "
+            "ON research_report (report_key, version)"
+        )
+    )
+
+
+# --- v12（任务 018 阶段 E）：研究运行阶段扩展（证据闭环） ---
+
+#: 证据闭环新增的阶段：读原文→提取证据→证据复核→覆盖分析→比较→
+#: 报告→报告复核。人工复核点复用 ``awaiting_confirmation`` 状态，靠
+#: ``stage`` 表明正在复核什么，因此不新增状态值。
+_RESEARCH_RUN_STAGES_V12 = (
+    "draft",
+    "plan",
+    "retrieval",
+    "dedup",
+    "screening",
+    "persist",
+    "fulltext",
+    "evidence",
+    "evidence_review",
+    "coverage",
+    "comparison",
+    "report",
+    "report_review",
+    "done",
+)
+
+#: 重建后 ``research_run`` 的全部列（必须与下面的 DDL 一致；用于校验旧表
+#: 列集，遇到预期之外的列直接失败，绝不静默丢数据）
+_RESEARCH_RUN_COLUMNS_V12 = (
+    "id",
+    "project_id",
+    "owner_id",
+    "plan_json",
+    "status",
+    "stage",
+    "agent_run_id",
+    "sources_json",
+    "summary_json",
+    "error",
+    "create_time",
+    "start_time",
+    "end_time",
+    "update_time",
+    "parent_run_id",
+    "round_no",
+)
+
+_RESEARCH_RUN_TABLE_V12 = f"""
+CREATE TABLE research_run__v12 (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    plan_json VARCHAR(8000) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    stage VARCHAR(32) NOT NULL DEFAULT 'draft',
+    agent_run_id VARCHAR(32),
+    sources_json VARCHAR(4000) NOT NULL DEFAULT '[]',
+    summary_json VARCHAR(8000) NOT NULL DEFAULT '',
+    error VARCHAR(1000),
+    create_time TIMESTAMP,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    update_time TIMESTAMP,
+    parent_run_id VARCHAR(32),
+    round_no INTEGER NOT NULL DEFAULT 1,
+    CHECK (status IN ('pending', 'awaiting_confirmation', 'running',
+                      'completed', 'failed', 'cancelled')),
+    CHECK (stage IN ({", ".join(repr(s) for s in _RESEARCH_RUN_STAGES_V12)}))
+)
+"""
+
+_RESEARCH_RUN_INDEXES_V12 = [
+    "CREATE INDEX IF NOT EXISTS ix_research_run_project ON research_run (project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_research_run_owner_create "
+    "ON research_run (owner_id, create_time)",
+]
+
+
+def _v12_research_run_stage(conn: Connection) -> None:
+    """v12：放宽 ``research_run.stage`` 取值，支持证据闭环阶段（任务 018 阶段 E）。
+
+    SQLite 不能对已有表增删 ``CHECK`` 约束，因此按官方做法重建表：
+    建新表 → 按列交集拷贝全部行 → 删旧表 → 改名 → 重建索引。
+
+    - **保留旧数据**：按旧表实际列名拷贝，行内容与 id/thread_id 不变
+      （checkpoint 以 ``run_id`` 为 thread_id，绝不因重建而失效）；
+    - **幂等**：旧表 DDL 已包含新阶段时直接返回，重复执行不改动；
+    - **失败可恢复**：整个过程在迁移框架的单个事务内，任何异常（含未知
+      列）都回滚全部变更且不记录版本，旧表保持原样；
+    - 不新增/删除列，不改其它表，不动知识库与向量索引。
+    """
+    row = conn.execute(
+        text(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_run'"
+        )
+    ).first()
+    if row is None:
+        # 该库还没有 research_run（v8 未执行过）：无需重建
+        return
+    ddl = row[0] or ""
+    if "evidence_review" in ddl:
+        return  # 已是扩展后的约束
+
+    old_columns = [c["name"] for c in inspect(conn).get_columns("research_run")]
+    new_columns = {
+        c["name"] for c in inspect(conn).get_columns("research_run__v12")
+    } if inspect(conn).has_table("research_run__v12") else set()
+    unknown = [c for c in old_columns if c not in _RESEARCH_RUN_COLUMNS_V12]
+    if unknown:
+        raise MigrationError(
+            "research_run 存在预期之外的列，拒绝重建以免丢数据："
+            f"{unknown}。请先人工确认该库的来源。"
+        )
+    if new_columns and not set(old_columns).issubset(new_columns):
+        # 上一次尝试留下的半成品表（同事务内不会发生，防御性检查）
+        raise MigrationError("research_run__v12 列集与旧表不匹配，中止重建")
+
+    cols = ", ".join(old_columns)
+    conn.execute(text(_RESEARCH_RUN_TABLE_V12))
+    conn.execute(
+        text(
+            f"INSERT INTO research_run__v12 ({cols}) SELECT {cols} FROM research_run"
+        )
+    )
+    conn.execute(text("DROP TABLE research_run"))
+    conn.execute(text("ALTER TABLE research_run__v12 RENAME TO research_run"))
+    for stmt in _RESEARCH_RUN_INDEXES_V12:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -364,6 +887,11 @@ _MIGRATIONS = [
     (5, "legacy_conversation_owner", _v5_legacy_conversation_owner),
     (6, "user_memory", _v6_user_memory),
     (7, "agent_run", _v7_agent_run),
+    (8, "research", _v8_research),
+    (9, "research_evidence", _v9_research_evidence),
+    (10, "research_comparison", _v10_research_comparison),
+    (11, "research_report", _v11_research_report),
+    (12, "research_run_stage_artifacts", _v12_research_run_stage),
 ]
 
 
