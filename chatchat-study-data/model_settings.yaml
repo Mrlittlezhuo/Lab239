@@ -1,8 +1,15 @@
 # 模型配置项
 
 
-# 默认选用的 LLM 名称
-DEFAULT_LLM_MODEL: qwen2:7b
+# 默认选用的 LLM 名称。
+# 2026-10-10 切到本机 Strata 网关（127.0.0.1:8081，见 MODEL_PLATFORMS/strata）：
+# strata 引擎把两张卡的显存吃满（GPU0 剩 175MiB、GPU1 剩 343MiB），ollama 的
+# qwen2:7b 在 llama_init_from_model 阶段 cudaMalloc 失败，LLM 全线 500。改接
+# 已经在跑的网关不再新增显存占用。实测：/v1/models 正常、stream=true 正常、
+# tools 函数调用返回合法 tool_calls。
+# Embedding 仍走 ollama 的 bge-m3：它只有 1.2GB 还能加载，且 strata 是生成模型、
+# 不提供嵌入。
+DEFAULT_LLM_MODEL: qwen3.8-flash-next-iq3_s
 
 # 默认选用的 Embedding 名称
 DEFAULT_EMBEDDING_MODEL: bge-m3
@@ -29,6 +36,7 @@ AUTO_ROUTE_PROVIDER: fastjev
 
 # 支持的Agent模型
 SUPPORT_AGENT_MODELS:
+  - qwen3.8-flash-next-iq3_s
   - qwen2:7b
   - chatglm3-6b
   - glm-4
@@ -119,6 +127,25 @@ LLM_MODEL_CONFIG:
 # # 该平台支持的 TTS 模型列表，auto_detect_model 设为 True 时自动检测
 # text2speech_models: []
 MODEL_PLATFORMS:
+  # 本机 Strata 网关（serve/server.py --port 8081），OpenAI 兼容。
+  # api_key 写成 `${VAR}` 引用：本文件随仓库版本控制，密钥只存在于运行环境
+  # （conda env config vars set STRATA_API_KEY=… -n Langchain-Chatchat）。
+  # 变量未设置时服务仍能启动，启动信息会点名是哪个平台缺哪个变量。
+  - platform_name: strata
+    platform_type: openai
+    api_base_url: http://127.0.0.1:8081/v1
+    api_key: ${STRATA_API_KEY}
+    api_proxy: ''
+    api_concurrencies: 5
+    auto_detect_model: false
+    llm_models:
+      - qwen3.8-flash-next-iq3_s
+    embed_models: []
+    text2image_models: []
+    image2text_models: []
+    rerank_models: []
+    speech2text_models: []
+    text2speech_models: []
   - platform_name: xinference
     platform_type: xinference
     api_base_url: http://127.0.0.1:9997/v1
