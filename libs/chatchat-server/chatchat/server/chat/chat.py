@@ -7,7 +7,7 @@ from typing import AsyncIterable, List, Union, Tuple
 from sqlalchemy.orm import Session
 from langchain_core.load import dumpd, dumps, load, loads
 
-from fastapi import Body
+from fastapi import Body, HTTPException
 from langchain_classic.chains import LLMChain
 from langchain_core.prompts.chat import ChatPromptTemplate
 
@@ -100,9 +100,45 @@ def create_models_from_config(configs, callbacks, stream, max_tokens):
     return models, prompts
 
 
+def build_mcp_connections() -> dict:
+    """把库里启用的 MCP 连接转成 ``MultiServerMCPClient`` 需要的连接字典。
+
+    单独拆出来是因为连接必须在消费流的那个协程里建立、也必须在同一个任务里关闭
+    （anyio 的 cancel scope 只能在进入它的那个任务里退出）。以前连接是在
+    ``create_agent_executor`` 内部用 ``run_until_complete`` 建的，建完就把 client
+    丢了：关不掉，每条消息留下一个常驻的 MCP 子进程。
+    """
+    connections = get_enabled_mcp_connections() or []
+
+    # 转换为MCP连接格式，支持StdioConnection和SSEConnection类型
+    mcp_connections = {}
+    for conn in connections:
+        if conn["transport"] == "stdio":
+            # StdioConnection类型
+            mcp_connections[conn["server_name"]] = {
+                "transport": "stdio",
+                "command": conn["config"].get("command", conn["args"][0] if conn["args"] else ""),
+                "args": conn["args"][1:] if len(conn["args"]) > 1 else [],
+                "env": conn["env"],
+                "encoding": "utf-8",
+                "encoding_error_handler": "strict"
+            }
+        elif conn["transport"] == "sse":
+            # SSEConnection类型
+            mcp_connections[conn["server_name"]] = {
+                "transport": "sse",
+                "url": conn["config"].get("url", ""),
+                "headers": conn["config"].get("headers", {}),
+                "timeout": conn.get("timeout", 30.0),
+                "sse_read_timeout": conn.get("sse_read_timeout", 60.0)
+            }
+    return mcp_connections
+
+
 def create_models_chains(
     history_len, prompts, models, tools, callbacks, conversation_id,
-    session, owner_id, metadata, use_mcp: bool = False, query: str = ""
+    session, owner_id, metadata, use_mcp: bool = False, query: str = "",
+    mcp_client=None
 ):
 
     # 从数据库获取conversation_id对应的 intermediate_steps 、 mcp_connections
@@ -143,31 +179,7 @@ def create_models_chains(
     )
     llm = models["action_model"]
     llm.callbacks = callbacks
-    connections = get_enabled_mcp_connections()
-    
-    # 转换为MCP连接格式，支持StdioConnection和SSEConnection类型
-    mcp_connections = {}
-    for conn in connections:
-        if conn["transport"] == "stdio":
-            # StdioConnection类型
-            mcp_connections[conn["server_name"]] = {
-                "transport": "stdio",
-                "command": conn["config"].get("command", conn["args"][0] if conn["args"] else ""),
-                "args": conn["args"][1:] if len(conn["args"]) > 1 else [],
-                "env": conn["env"],
-                "encoding": "utf-8",
-                "encoding_error_handler": "strict"
-            }
-        elif conn["transport"] == "sse":
-            # SSEConnection类型
-            mcp_connections[conn["server_name"]] = {
-                "transport": "sse",
-                "url": conn["config"].get("url", ""),
-                "headers": conn["config"].get("headers", {}),
-                "timeout": conn.get("timeout", 30.0),
-                "sse_read_timeout": conn.get("sse_read_timeout", 60.0)
-            }
-    
+
     agent_executor = PlatformToolsRunnable.create_agent_executor(
         agent_type="platform-knowledge-mode",
         agents_registry=agents_registry,
@@ -175,7 +187,10 @@ def create_models_chains(
         tools=tools,
         history=history,
         intermediate_steps=intermediate_steps,
-        mcp_connections=mcp_connections if use_mcp else {}
+        # 传了 mcp_client 就只取工具，连接的生命周期由调用方（同一个任务）负责；
+        # 没传才走遗留的自建路径（会漏子进程，仅集成测试用）。
+        mcp_connections=build_mcp_connections() if (use_mcp and mcp_client is None) else {},
+        mcp_client=mcp_client,
     )
 
     full_chain = {"chat_input": lambda x: x["input"]} | agent_executor
@@ -205,6 +220,7 @@ async def chat(
 
     async def chat_iterator_event() -> AsyncIterable[OpenAIChatOutput]:
         current_message_id = message_id
+        mcp_client = None
         try:
             callbacks = []
 
@@ -250,6 +266,14 @@ async def chat(
                     )
             except Exception:
                 pass
+            if use_mcp:
+                mcp_connections = build_mcp_connections()
+                if mcp_connections:
+                    # 连接必须建在消费这条流的同一个任务里，收尾也在同一个任务里
+                    # 关掉；换任务关会在 anyio 的 cancel scope 处炸
+                    # "Attempted to exit cancel scope in a different task"。
+                    mcp_client = await PlatformToolsRunnable.create_mcp_client(
+                        mcp_connections)
             full_chain, agent_executor = create_models_chains(
                 prompts=prompts,
                 models=models,
@@ -262,6 +286,7 @@ async def chat(
                 metadata=metadata,
                 use_mcp = use_mcp,
                 query=query,
+                mcp_client=mcp_client,
             )
             chat_iterator = full_chain.invoke({
                 "input": query
@@ -379,6 +404,15 @@ async def chat(
             # SSE 与非流式 json.loads 两种消费方式都无法正确处理）。
             yield json.dumps({"error": str(e)}, ensure_ascii=False)
             return
+        finally:
+            # 每条消息一套 MCP 连接：不关就是每轮常驻一个 server 子进程
+            # （浏览器类 server 还会带起一整串 Chrome）。放在 finally 才能覆盖
+            # 正常收尾、异常、客户端断流（GeneratorExit/CancelledError）三种出口。
+            if mcp_client is not None:
+                try:
+                    await mcp_client.__aexit__(None, None, None)
+                except Exception:
+                    logger.warning("关闭 MCP 连接失败", exc_info=True)
 
     if stream:
         return EventSourceResponse(chat_iterator_event())
@@ -397,6 +431,11 @@ async def chat(
 
         async for chunk in chat_iterator_event():
             data = json.loads(chunk)
+            if "error" in data:
+                # 出错时 yield 出来的是 {"error": ...}，不是 OpenAI 帧，没有
+                # choices 键。之前直接下标取会抛 KeyError('choices')，把真正的
+                # 失败原因盖成一个看不懂的键名。
+                raise HTTPException(status_code=500, detail=str(data["error"]))
             if text := data["choices"][0]["delta"]["content"]:
                 ret.content += text
             if data["status"] == AgentStatus.tool_end:

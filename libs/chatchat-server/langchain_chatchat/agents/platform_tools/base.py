@@ -184,10 +184,23 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
                 Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]
             ] = None,
             mcp_connections: dict[str, StdioConnection | SSEConnection] = None,
+            mcp_client: Optional[MultiServerMCPClient] = None,
             callbacks: List[BaseCallbackHandler] = None,
             **kwargs: Any,
     ) -> "PlatformToolsRunnable":
-        """Create an ZhipuAI Assistant and instantiate the Runnable."""
+        """Create an ZhipuAI Assistant and instantiate the Runnable.
+
+        MCP 连接有两种给法，必须选对：
+
+        - ``mcp_client``（推荐，产品路径）：调用方已经 ``await
+          create_mcp_client(...)`` 连好的 client。这里只取它的工具，不拥有它，
+          也就无所谓关闭 —— 关闭责任留在建立连接的那个任务里。
+        - ``mcp_connections``（遗留）：在本方法内部用 ``run_until_complete`` 连。
+          连完 client 就没人引用了，既关不掉也数不清，每条消息都会留下一个常驻的
+          MCP 子进程；而且 anyio 的 cancel scope 要求在进入它的那个任务里退出，
+          换个任务去关就会炸 ``Attempted to exit cancel scope in a different
+          task``。只有集成测试这么用，聊天路径不要再走这里。
+        """
         if not isinstance(llm, ChatPlatformAI):
             raise ValueError
 
@@ -221,20 +234,25 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
             temp_tools.extend(assistants_builtin_tools)
 
 
-        import nest_asyncio
-        nest_asyncio.apply()
-        if sys.version_info < (3, 10):
-            loop = asyncio.get_event_loop()
-        else:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
+        if mcp_client is not None:
+            mcp_tools = mcp_client.get_tools()
+        elif mcp_connections:
+            import nest_asyncio
+            nest_asyncio.apply()
+            if sys.version_info < (3, 10):
+                loop = asyncio.get_event_loop()
+            else:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
 
-            asyncio.set_event_loop(loop)
-        client = loop.run_until_complete(cls.create_mcp_client(mcp_connections))
-        # Get tools
-        mcp_tools = client.get_tools()
+                asyncio.set_event_loop(loop)
+            client = loop.run_until_complete(cls.create_mcp_client(mcp_connections))
+            # Get tools
+            mcp_tools = client.get_tools()
+        else:
+            mcp_tools = []
         agent_executor = agents_registry(
             agent_type=agent_type,
             llm=llm,

@@ -249,13 +249,25 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     break
             
             if mcp_tool:
-                observation = mcp_tool.run(
-                    agent_action.tool_input,
-                    verbose=self.verbose,
-                    color="blue",
-                    callbacks=run_manager.get_child() if run_manager else None,
-                    **tool_run_kwargs,
-                )
+                try:
+                    observation = mcp_tool.run(
+                        agent_action.tool_input,
+                        verbose=self.verbose,
+                        color="blue",
+                        callbacks=run_manager.get_child() if run_manager else None,
+                        **tool_run_kwargs,
+                    )
+                except NotImplementedError:
+                    # MCPStructuredTool 只有协程实现（_arun），LangChain 的同步
+                    # run() 对它一律抛 NotImplementedError。产品的两条聊天路径
+                    # （chat / agent_run）都走 ainvoke → _aperform_agent_action，
+                    # 落到这里说明执行器被当同步驱动了；把原因写成可行动的观察，
+                    # 而不是让整轮崩在一句 "does not support sync invocation" 上。
+                    observation = (
+                        f"MCP tool '{agent_action.tool}' from server "
+                        f"'{agent_action.server_name}' only supports async invocation; "
+                        f"this agent was driven synchronously, so it cannot be run here."
+                    )
             else:
                 observation = f"MCP tool '{agent_action.tool}' from server '{agent_action.server_name}' not found in available MCP tools"
 
