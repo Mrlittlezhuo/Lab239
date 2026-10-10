@@ -135,11 +135,9 @@ class PlatformToolsMessageChunk(AIMessage, BaseMessageChunk):
 
     def __add__(self, other: Any) -> BaseMessageChunk:  # type: ignore
         if isinstance(other, PlatformToolsMessageChunk):
-            if self.example != other.example:
-                raise ValueError(
-                    "Cannot concatenate PlatformToolsMessageChunks with different example values."
-                )
-
+            # 本类没有 `example` 字段：老版本 langchain_core 的 AIMessageChunk 带这个
+            # 字段、这段代码是从它抄来的，升级到 langchain 1.x 后基类去掉了它，于是
+            # 任何两个 chunk 相加都会 AttributeError（流式 Agent 必崩）。
             content = merge_content(self.content, other.content)
             additional_kwargs = merge_dicts(
                 self.additional_kwargs, other.additional_kwargs
@@ -170,7 +168,6 @@ class PlatformToolsMessageChunk(AIMessage, BaseMessageChunk):
                 tool_call_chunks = []
 
             return self.__class__(
-                example=self.example,
                 content=content,
                 additional_kwargs=additional_kwargs,
                 tool_call_chunks=tool_call_chunks,
