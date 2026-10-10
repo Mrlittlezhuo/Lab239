@@ -9,6 +9,10 @@
 !/libs/chatchat-server/chatchat/data/nltk_data
 # 本地运行期数据：agent checkpoint sqlite、日志、temp 文件、本地知识库
 /libs/chatchat-server/data/
+# 同一类东西在 CHATCHAT_ROOT 下的位置（SQLite WAL 模式会额外产生 -shm/-wal）
+/chatchat-study-data/data/*.sqlite
+/chatchat-study-data/data/*.sqlite-shm
+/chatchat-study-data/data/*.sqlite-wal
 config/
 .vscode/
 
