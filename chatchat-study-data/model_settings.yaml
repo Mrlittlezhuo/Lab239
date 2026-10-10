@@ -20,10 +20,12 @@ MAX_TOKENS:
 TEMPERATURE: 0.7
 
 # 自动模式（extra.auto_agent）意图路由 provider：llm / fastjev。
-# 2026-10-08 临时改回 llm 观察：fastjev 4B 分类器把"联网搜索一下什么是X"
-# 判成 general 直接回答（工具答案被短路丢弃），未走搜索工具。
-# 确认 llm 路由效果后再决定是否回 fastjev 或改代码。
-AUTO_ROUTE_PROVIDER: llm
+# 2026-10-08 回归并切回 fastjev：本机 FastJev 服务（127.0.0.1:8811，GPU1，
+# llama-cpp backend）+ 两项代码修复（超时 8→12s；工具头提升规则 + 工具头置信度
+# 托底）后，31 条对比基准 fastjev 31/31（联网搜索 5/5 命中，无误报），优于
+# llm 29/31。此前 fastjev 把"联网搜索X"判成 general 的系统性误判已被工具头
+# 提升/托底规则修复。若后续 FastJev 服务不可用，会自动回退 llm 路由。
+AUTO_ROUTE_PROVIDER: fastjev
 
 # 支持的Agent模型
 SUPPORT_AGENT_MODELS:
