@@ -1099,6 +1099,11 @@ class TestChatCompletionsAgentRun:
         monkeypatch.setattr(
             chat_routes_mod, "get_OpenAIClient", lambda **k: None
         )
+        # 测试模型名不在本机 model_settings.yaml 里：不打桩的话，路由的模型
+        # 校验会先返回 400，测试结果就取决于 CHATCHAT_ROOT 指向哪里。
+        monkeypatch.setattr(
+            chat_routes_mod, "get_model_info", lambda **k: {"platform_name": "test"}
+        )
         kb = FakeTool(
             "search_local_knowledgebase", "本地知识库检索（mock）",
             result=_kb_result,

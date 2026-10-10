@@ -39,6 +39,20 @@ export interface ChatCompletionRequest {
   agent_max_steps?: number;
 }
 
+/** 实际发出去的请求体：model 可以整个缺席。 */
+export type ChatRequestBody = Omit<ChatCompletionRequest, "model"> & {
+  model?: string;
+};
+
+/**
+ * `model: ""` 在本应用里表示“用服务端默认模型”，但服务端 pydantic 会把空串
+ * 当成显式值，模型查找失败后请求直接 500。因此空模型必须整个省略 key。
+ */
+export function toChatRequestBody(req: ChatCompletionRequest): ChatRequestBody {
+  const { model, ...rest } = req;
+  return model && model.trim() ? { ...rest, model } : rest;
+}
+
 export function streamChatCompletion(
   req: ChatCompletionRequest,
   onEvent: (event: SseEvent) => void,
@@ -46,7 +60,7 @@ export function streamChatCompletion(
 ): Promise<void> {
   return streamSse({
     path: "/chat/chat/completions",
-    body: { ...req, stream: true },
+    body: { ...toChatRequestBody(req), stream: true },
     onEvent,
     signal,
   });
@@ -60,7 +74,7 @@ export async function chatCompletion(
   conversation_id?: string;
   message_id?: string;
 }> {
-  return postJson("/chat/chat/completions", { ...req, stream: false });
+  return postJson("/chat/chat/completions", { ...toChatRequestBody(req), stream: false });
 }
 
 /**

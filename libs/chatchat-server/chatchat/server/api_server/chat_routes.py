@@ -21,6 +21,9 @@ from chatchat.server.db.repository import (
 )
 from chatchat.server.utils import (
     get_OpenAIClient,
+    get_config_models,
+    get_default_llm,
+    get_model_info,
     get_prompt_template,
     get_tool,
     get_tool_config,
@@ -52,6 +55,26 @@ chat_router.post("/kb_chat", summary="知识库对话")(kb_chat)
 chat_router.post("/file_chat", summary="文件对话")(file_chat)
 
 
+def _require_configured_model(body: OpenAIChatInput) -> None:
+    """把模型名收敛成已配置的那个，配置问题给 400 而不是 500。
+
+    - 空 ``model`` 是前端“用服务端默认模型”的哨兵值：pydantic 不把 ``""``
+      当成缺省，必须自己回落，否则 ``get_OpenAIClient`` 里的 assert 会把
+      请求变成 500；
+    - 未配置的模型同样会在 ``get_OpenAIClient`` 里 assert 崩掉
+      （``get_model_info`` 对未知模型返回空 dict，不是 ``None``），这里提前
+      拦下并附上可用清单，客户端不用猜。
+    """
+    if not (body.model or "").strip():
+        body.model = get_default_llm()
+    if not get_model_info(model_name=body.model):
+        available = ", ".join(sorted(get_config_models(model_type="llm")))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"模型 {body.model} 未配置。可用模型：{available}",
+        )
+
+
 @chat_router.post("/chat/completions", summary="兼容 openai 的统一 chat 接口")
 async def chat_completions(
     request: Request,
@@ -68,6 +91,12 @@ async def chat_completions(
     # 当调用本接口且 body 中没有传入 "max_tokens" 参数时, 默认使用配置中定义的值
     if body.max_tokens in [None, 0]:
         body.max_tokens = Settings.model_settings.MAX_TOKENS
+
+    if not body.messages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="messages 不能为空",
+        )
 
     # 本接口把最后一条消息的 content 当字符串用（会话标题、落库 query、
     # prompt 模板），多模态数组会在写库时失败、也不会到达模型。
@@ -107,7 +136,12 @@ async def chat_completions(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="会话不存在或无权访问",
             )
-    else:
+
+    # 模型校验排在越权检查之后、建会话之前：跨用户访问仍然是 404，不能被
+    # 400 掩盖；模型名错误则不会留下只有用户问题的空会话。
+    _require_configured_model(body)
+
+    if not conversation_id:
         # 为当前用户创建默认会话；响应中保留会话 ID 供客户端取得
         conversation_id = create_conversation(
             session,

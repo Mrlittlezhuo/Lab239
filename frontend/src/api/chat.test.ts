@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildVisionContent,
   chatCompletion,
+  streamChatCompletion,
   visionChatCompletion,
 } from "@/api/chat";
 import { clearAuth } from "@/stores/auth";
@@ -83,5 +84,47 @@ describe("vision chat contract", () => {
     const body = JSON.parse(String(init.body));
     expect(body.conversation_id).toBe("c1");
     expect(body.upload_image).toBeUndefined();
+  });
+
+  // 空 model 是“用服务端默认模型”的哨兵。发 "" 会被服务端当成显式模型名，
+  // 模型查找失败后请求直接 500，因此必须省略 key。
+  it("model 为空串时不带 model key", async () => {
+    const fetchMock = mockFetch(async () => jsonResponse(200, completion));
+    await chatCompletion({
+      messages: [{ role: "user", content: "hi" }],
+      model: "",
+      stream: false,
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect("model" in body).toBe(false);
+    expect(body.stream).toBe(false);
+  });
+
+  it("model 有值时照常带上", async () => {
+    const fetchMock = mockFetch(async () => jsonResponse(200, completion));
+    await chatCompletion({
+      messages: [{ role: "user", content: "hi" }],
+      model: "qwen2:7b",
+      stream: false,
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.model).toBe("qwen2:7b");
+  });
+
+  it("流式请求同样省略空 model", async () => {
+    const fetchMock = mockFetch(
+      async () =>
+        new Response('data: {"text":"ok"}\n\n', {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    );
+    await streamChatCompletion(
+      { messages: [{ role: "user", content: "hi" }], model: "", stream: true },
+      () => {},
+    );
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect("model" in body).toBe(false);
+    expect(body.stream).toBe(true);
   });
 });

@@ -108,6 +108,20 @@ def client(app):
         yield test_client
 
 
+@pytest.fixture(autouse=True)
+def _model_lookup_is_stable(monkeypatch):
+    """把模型查找固定为可用，聊天测试不再依赖本机 model_settings.yaml。
+
+    否则 `qwen:7b` 这类测试模型名在配置了真实平台的机器上会被判成未配置，
+    `get_OpenAIClient` 里的 assert 直接把请求变成 500，测试结果取决于
+    CHATCHAT_ROOT 指向哪里。要验证拒绝路径的用例自行覆盖它。
+    """
+    import chatchat.server.api_server.chat_routes as cr
+
+    monkeypatch.setattr(cr, "get_model_info", lambda **kwargs: {"platform_name": "test"})
+    monkeypatch.setattr(cr, "get_OpenAIClient", lambda **kwargs: None)
+
+
 class _ApiBridge(TestClient):
     """TestClient 子类：兼容 ApiRequest 的 get/post/patch/delete 调用签名。
 
@@ -448,6 +462,95 @@ def test_chat_rejects_multimodal_content_before_model(
     assert r.status_code == 400
     assert "/v1/chat/completions" in r.json()["detail"]
     assert model_called["n"] == 0
+
+
+def test_chat_blank_model_falls_back_to_server_default(
+    client, temp_user_db, secret, monkeypatch
+):
+    """空 model 是前端“用服务端默认模型”的哨兵，必须回落而不是撞 500。"""
+    import chatchat.server.api_server.chat_routes as cr
+
+    seen = {}
+
+    async def fake_chat(*args, **kwargs):
+        return {"choices": [{"message": "ok"}]}
+
+    def fake_client(**kwargs):
+        seen["model_name"] = kwargs.get("model_name")
+        return None
+
+    monkeypatch.setattr(cr, "chat", fake_chat)
+    monkeypatch.setattr(cr, "get_OpenAIClient", fake_client)
+    monkeypatch.setattr(cr, "get_default_llm", lambda: "default-llm")
+
+    hdr, _ = _headers_of(temp_user_db, "blank-model-alice")
+    r = client.post(
+        "/chat/chat/completions",
+        headers=hdr,
+        json={
+            "model": "",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert r.status_code == 200
+    assert seen["model_name"] == "default-llm"
+
+
+def test_chat_unknown_model_returns_400_before_touching_the_model(
+    client, temp_user_db, secret, monkeypatch
+):
+    """未配置的模型过去会在 get_OpenAIClient 里 assert 崩成 500，还留下空会话。"""
+    import chatchat.server.api_server.chat_routes as cr
+
+    called = {"n": 0}
+
+    async def fake_chat(*args, **kwargs):
+        called["n"] += 1
+        return {"choices": [{"message": "should-not-reach"}]}
+
+    monkeypatch.setattr(cr, "chat", fake_chat)
+    monkeypatch.setattr(cr, "get_model_info", lambda **kwargs: {})
+    monkeypatch.setattr(
+        cr, "get_config_models", lambda **kwargs: {"qwen2:7b": {}, "glm-4": {}}
+    )
+
+    hdr, user = _headers_of(temp_user_db, "unknown-model-alice")
+    r = client.post(
+        "/chat/chat/completions",
+        headers=hdr,
+        json={
+            "model": "not-configured",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "未配置" in detail and "qwen2:7b" in detail
+    assert called["n"] == 0
+
+    # 校验发生在建会话之前，不能留下只有用户问题的空会话
+    with temp_user_db["Session"]() as session:
+        count = session.execute(
+            text("SELECT COUNT(*) FROM conversation WHERE owner_id = :o"),
+            {"o": user["id"]},
+        ).scalar()
+    assert count == 0
+
+
+def test_chat_rejects_empty_messages(
+    client, temp_user_db, secret, monkeypatch
+):
+    """空 messages 会在取 messages[-1] 时 IndexError，属于 400 不是 500。"""
+    hdr, _ = _headers_of(temp_user_db, "empty-messages-alice")
+    r = client.post(
+        "/chat/chat/completions",
+        headers=hdr,
+        json={"model": "qwen:7b", "stream": False, "messages": []},
+    )
+    assert r.status_code == 400
+    assert "messages" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
