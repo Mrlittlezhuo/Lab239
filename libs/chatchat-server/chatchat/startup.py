@@ -207,6 +207,28 @@ def print_auth_secret_warning() -> bool:
     return True
 
 
+def print_model_secret_warning() -> bool:
+    """启动自检：模型平台的 api_key 引用了未设置的环境变量时打印提示。
+
+    `${VAR}` 写法把密钥留在运行环境里而不是入库（见 ``settings.py``）。变量未设置
+    时配置加载刻意不报错——没跑该服务的机器也得能启动——代价是只有真正调用那个
+    平台才撞得到远端 401。这里在启动阶段点名平台和变量名，不回显取到的值。
+    """
+    from chatchat.settings import Settings, describe_unresolved_secret_refs
+
+    problems = describe_unresolved_secret_refs(Settings.model_settings.MODEL_PLATFORMS)
+    if not problems:
+        return False
+    for problem in problems:
+        print(f"    警告：{problem}")
+    print(
+        "      修复：把密钥持久化到运行环境，例如 "
+        "`conda env config vars set <变量名>=<密钥> -n <env>`，"
+        "重新激活环境后重启服务"
+    )
+    return True
+
+
 def dump_server_info(after_start=False, args=None):
     import platform
 
@@ -232,6 +254,7 @@ def dump_server_info(after_start=False, args=None):
     # 启动自检：只在真正要起 API 进程的那一次打印（after_start 那次不重复）
     if args and getattr(args, "api", False) and not after_start:
         print_auth_secret_warning()
+        print_model_secret_warning()
 
     if after_start:
         print("\n")

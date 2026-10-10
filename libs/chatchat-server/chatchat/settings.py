@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import sys
 import typing as t
 
 import nltk
+from pydantic import field_validator
 
 from chatchat import __version__
 from chatchat.pydantic_settings_file import *
@@ -271,6 +273,38 @@ class KBSettings(BaseFileSettings):
     """Embedding模型定制词语的词表文件"""
 
 
+_ENV_VAR_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_env_var_ref(value: str) -> str:
+    """把 `${VAR}` 展开成同名环境变量的值，变量未设置时原样保留。
+
+    密钥不写进 `model_settings.yaml`：该文件随仓库版本控制，明文 api_key 会被
+    提交并推到远端。这里刻意不抛异常——同一份配置会被没跑该服务的机器克隆，
+    配置加载失败会让整个服务起不来；未解析的引用由
+    ``describe_unresolved_secret_refs`` 在启动时点名，真用到的时候远端也只会
+    返回 401。
+    """
+    if "${" not in value:
+        return value
+    return _ENV_VAR_REF.sub(lambda m: os.environ.get(m.group(1)) or m.group(0), value)
+
+
+def describe_unresolved_secret_refs(platforms: t.Iterable["PlatformConfig"]) -> t.List[str]:
+    """列出 api_key 中仍未解析的 `${VAR}` 引用，供启动自检点名。
+
+    只报平台名和变量名，绝不回显取到的值。
+    """
+    problems = []
+    for platform in platforms:
+        for match in _ENV_VAR_REF.finditer(platform.api_key or ""):
+            problems.append(
+                f"平台 {platform.platform_name} 的 api_key 引用了未设置的环境变量 "
+                f"{match.group(1)}，该平台当前不可用"
+            )
+    return problems
+
+
 class PlatformConfig(MyBaseModel):
     """模型加载平台配置"""
 
@@ -315,6 +349,14 @@ class PlatformConfig(MyBaseModel):
 
     text2speech_models: t.Union[t.Literal["auto"], t.List[str]] = []
     """该平台支持的 TTS 模型列表，auto_detect_model 设为 True 时自动检测"""
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _api_key_from_env(cls, value: t.Any) -> t.Any:
+        """api_key 支持 `${VAR}` 环境变量引用，避免密钥明文入库。"""
+        if isinstance(value, str):
+            return _expand_env_var_ref(value)
+        return value
 
 
 class ApiModelSettings(BaseFileSettings):
