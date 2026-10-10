@@ -522,13 +522,17 @@ class ChatPlatformAI(BaseChatModel):
                         )
 
                         for chunk_tool in invalid_tool_calls:
+                            # 这段只是为了把工具参数里的 "input" 提前当 token 推给
+                            # 回调（UI 边流边显示），解析失败不该终止整条流：工具参数
+                            # 是分片流式过来的，中途经常不是合法 JSON。
                             if isinstance(chunk_tool["args"], str):
-                                args_ = parse_partial_json(chunk_tool["args"])
+                                try:
+                                    args_ = parse_partial_json(chunk_tool["args"])
+                                except Exception:
+                                    args_ = {"input": chunk_tool["args"]}
                             else:
                                 args_ = chunk_tool["args"]
-                            if not isinstance(args_, dict):
-                                raise ValueError("Malformed args.")
-                            if "input" in args_:
+                            if isinstance(args_, dict) and "input" in args_:
                                 run_manager.on_llm_new_token(
                                     cast(str, args_["input"]), chunk=chunk
                                 )
@@ -623,7 +627,10 @@ class ChatPlatformAI(BaseChatModel):
                         else:
                             args_ = chunk_tool["args"]
                         if not isinstance(args_, dict):
-                            raise ValueError("Malformed args.")
+                            # 参数分片还没流全、或根本不是对象：这一帧没有可展示的
+                            # 内容，跳过即可。抛 ValueError 会让整条流在
+                            # `on_llm_error` 里断掉，用户看到的是对话直接失败。
+                            continue
                         if "input" in args_:
                             await run_manager.on_llm_new_token(
                                 cast(str, args_["input"]), chunk=chunk

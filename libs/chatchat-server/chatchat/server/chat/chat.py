@@ -293,13 +293,17 @@ async def chat(
                 elif isinstance(item, PlatformToolsFinish):
                     data["text"] = item.log
 
-                    last_tool.update(
-                        tool_output=item.return_values["output"],
-                    )
-                    data["tool_calls"].append(last_tool)
+                    # Agent 失败收尾时 return_values 里没有 "output"（也可能整轮没起过
+                    # 工具，last_tool 还是 {}）：直接下标取会抛 KeyError('output')，把
+                    # 真正的失败原因盖成一个看不懂的键名；空 last_tool 还会往 tool_calls
+                    # 里塞一条没有 function/id 的脏记录。
+                    finish_output = item.return_values.get("output")
+                    if last_tool:
+                        last_tool.update(tool_output=finish_output)
+                        data["tool_calls"].append(last_tool)
 
                     try:
-                        tool_output = json.loads(item.return_values["output"])
+                        tool_output = json.loads(finish_output)
                         if message_type := tool_output.get("message_type"):
                             data["message_type"] = message_type
                     except:
