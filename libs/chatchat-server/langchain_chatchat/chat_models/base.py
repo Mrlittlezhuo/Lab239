@@ -395,8 +395,19 @@ class ChatPlatformAI(BaseChatModel):
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate that api key and python package exists in environment."""
 
+        # `values` 到这里已经是校验过的字段值，`chatchat_api_key` 是 SecretStr；
+        # 直接丢给 `get_from_dict_or_env` 会被它 `str()` 成掩码 `**********`，
+        # 密钥就没了。之前从不暴露，是因为 ollama/xinference 收 `EMPTY`、根本不校验
+        # key；换成真正鉴权的平台（本机 Strata 网关）才现形成 401。先取真值再走 env 兜底。
+        api_key = values.get("chatchat_api_key")
+        if hasattr(api_key, "get_secret_value"):
+            api_key = api_key.get_secret_value()
         values["chatchat_api_key"] = convert_to_secret_str(
-            get_from_dict_or_env(values, "chatchat_api_key", "CHATCHAT_API_KEY")
+            get_from_dict_or_env(
+                {**values, "chatchat_api_key": api_key},
+                "chatchat_api_key",
+                "CHATCHAT_API_KEY",
+            )
         )
 
         values["chatchat_api_base"] = values["chatchat_api_base"] or os.getenv(
