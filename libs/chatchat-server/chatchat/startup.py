@@ -195,7 +195,7 @@ def dump_server_info(after_start=False, args=None):
     from chatchat.server.utils import api_address, webui_address
 
     print("\n")
-    print("=" * 30 + "Langchain-Chatchat Configuration" + "=" * 30)
+    print("=" * 30 + "Lab239 工作台 Configuration" + "=" * 30)
     print(f"操作系统：{platform.platform()}.")
     print(f"python版本：{sys.version}")
     print(f"项目版本：{__version__}")
@@ -211,21 +211,21 @@ def dump_server_info(after_start=False, args=None):
         print("\n")
         print(f"服务端运行信息：")
         if args.api:
-            print(f"    Chatchat Api Server: {api_address()}")
+            print(f"    Lab239 Api Server: {api_address()}")
         if args.webui:
-            print(f"    Chatchat WEBUI Server: {webui_address()}")
+            print(f"    Lab239 WEBUI Server: {webui_address()}")
         elif args.api:
             # 前端重构 B3：SPA 由 API 服务同源托管，这里打印其地址。
             from chatchat.server.api_server.spa_static import resolve_web_dist
 
             if resolve_web_dist() is not None:
-                print(f"    Chatchat Web UI (SPA): {api_address()}")
+                print(f"    Lab239 Web UI (SPA): {api_address()}")
             else:
                 print(
                     "    前端 SPA 尚未构建（frontend/dist 缺失）；"
                     f"在 frontend/ 执行 `npm run build` 后访问 {api_address()}"
                 )
-    print("=" * 30 + "Langchain-Chatchat Configuration" + "=" * 30)
+    print("=" * 30 + "Lab239 工作台 Configuration" + "=" * 30)
     print("\n")
 
 

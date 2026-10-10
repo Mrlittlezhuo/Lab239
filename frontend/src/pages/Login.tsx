@@ -52,7 +52,7 @@ export function LoginPage() {
     <div className="flex h-screen items-center justify-center bg-muted/30">
       <Card className="w-96">
         <CardHeader>
-          <CardTitle className="text-xl">Chatchat 登录</CardTitle>
+          <CardTitle className="text-xl">Lab239 工作台登录</CardTitle>
           <CardDescription>请使用管理员创建的账号登录</CardDescription>
         </CardHeader>
         <CardContent>

@@ -5,7 +5,7 @@
 - 有效期由环境变量 ``CHATCHAT_AUTH_TTL_MINUTES`` 配置，默认 720 分钟（12
   小时），clamp 到 5–10080 分钟（前端重构 B7）；
 - claims 含 ``sub``(user id)、``ver``(auth_version)、``iat``、``exp``、
-  ``iss=langchain-chatchat``；
+  ``iss=lab239-workbench``；
 - 解码时固定算法列表、校验 issuer 与必需 claims。
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 import jwt
 
 ALGORITHM = "HS256"
-ISSUER = "langchain-chatchat"
+ISSUER = "lab239-workbench"
 TOKEN_TTL_MINUTES_ENV = "CHATCHAT_AUTH_TTL_MINUTES"
 DEFAULT_TOKEN_TTL_MINUTES = 720  # 12 小时
 MIN_TOKEN_TTL_MINUTES = 5

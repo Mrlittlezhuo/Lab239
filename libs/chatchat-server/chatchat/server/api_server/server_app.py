@@ -60,7 +60,7 @@ def create_app(run_mode: str = None):
             shutdown_observability()
 
     app = FastAPI(
-        title="Langchain-Chatchat API Server",
+        title="Lab239 工作台 API Server",
         version=__version__,
         lifespan=lifespan,
     )

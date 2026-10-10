@@ -1,4 +1,4 @@
-# Chatchat 前端（React SPA）
+# Lab239 工作台前端（React SPA）
 
 替换旧 Streamlit webui 的单页应用。所有数据都走后端 FastAPI HTTP/SSE 接口，
 构建产物由后端同源托管，因此默认不需要额外的 Web 服务器，也不涉及 CORS。

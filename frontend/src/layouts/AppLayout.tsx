@@ -56,7 +56,7 @@ export function AppLayout() {
   return (
     <div className="flex h-screen overflow-hidden">
       <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/30">
-        <div className="px-4 py-4 text-lg font-semibold">Chatchat 工作台</div>
+        <div className="px-4 py-4 text-lg font-semibold">Lab239 工作台</div>
         <nav className="flex-1 space-y-1 px-2">
           {NAV_ITEMS.filter((item) => !item.adminOnly || user?.role === "admin").map(
             ({ to, label, icon: Icon }) => (
