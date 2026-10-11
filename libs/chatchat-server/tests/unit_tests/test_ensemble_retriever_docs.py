@@ -8,7 +8,9 @@
 id 其实就是这张 docstore 的 key，只是没被带上。
 
 修完 BM25 那步后又撞到第二处：langchain_core 1.x 的 retriever 只剩 `invoke`，
-`get_relevant_documents` 已移除。
+`get_relevant_documents` 已移除。`vectorstore.py` 里的
+`VectorstoreRetrieverService`（pg / es / chromadb / zilliz 的 kb_service 用它）
+是同一个坑，一起钉在这里。
 """
 from typing import List
 
@@ -16,6 +18,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from chatchat.server.file_rag.retrievers.ensemble import EnsembleRetrieverService
+from chatchat.server.file_rag.retrievers.vectorstore import VectorstoreRetrieverService
 
 
 class StubVectorRetriever(BaseRetriever):
@@ -105,5 +108,22 @@ class TestRetrieval:
         )
 
         docs = service.get_relevant_documents("任意问题")
+
+        assert [d.page_content for d in docs] == ["向量侧命中"]
+
+
+class TestVectorstoreRetrieverService:
+    """pg / es / chromadb / zilliz 的 kb_service 走的是这个包装类，同一个坑。"""
+
+    def test_inner_retriever_has_no_get_relevant_documents(self):
+        # 钉住前提：langchain_core 1.x 的 retriever 只剩 invoke
+        assert not hasattr(StubVectorRetriever(), "get_relevant_documents")
+
+    def test_wrapped_search_uses_invoke(self):
+        service = VectorstoreRetrieverService.from_vectorstore(
+            StubVectorStore(_kb_docs()), top_k=2, score_threshold=0.4
+        )
+
+        docs = service.get_relevant_documents("红烧肉怎么做")
 
         assert [d.page_content for d in docs] == ["向量侧命中"]

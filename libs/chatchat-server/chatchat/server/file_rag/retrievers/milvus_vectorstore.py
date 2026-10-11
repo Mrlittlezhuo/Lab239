@@ -119,4 +119,6 @@ class MilvusVectorstoreRetrieverService(BaseRetrieverService):
         return MilvusVectorstoreRetrieverService(retriever=retriever, top_k=top_k)
 
     def get_relevant_documents(self, query: str):
-        return self.retriever.get_relevant_documents(query)[: self.top_k]
+        # langchain_core 1.x 的 retriever 只剩 `invoke`（`get_relevant_documents`
+        # 已移除），这里的方法名是上层（milvus_kb_service.do_search）在调，保持不变
+        return self.retriever.invoke(query)[: self.top_k]
