@@ -26,7 +26,29 @@ from langchain_chatchat.agents.platform_tools import PlatformToolsAction, Platfo
 from chatchat.server.chat.utils import History
 from chatchat.server.db.repository import add_message, update_message
 
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_classic.agents.output_parsers.tools import ToolAgentAction
 from langchain_chatchat import ChatPlatformAI, PlatformToolsRunnable
+from langchain_chatchat.agents.output_parsers.platform_knowledge_output_parsers import (
+    MCPToolAction,
+)
+from langchain_chatchat.agents.output_parsers.tools_output.code_interpreter import (
+    CodeInterpreterAgentAction,
+)
+from langchain_chatchat.agents.output_parsers.tools_output.drawing_tool import (
+    DrawingToolAgentAction,
+)
+from langchain_chatchat.agents.output_parsers.tools_output.web_browser import (
+    WebBrowserAgentAction,
+)
+from langchain_chatchat.agent_toolkits.all_tools.code_interpreter_tool import (
+    CodeInterpreterToolOutput,
+)
+from langchain_chatchat.agent_toolkits.all_tools.drawing_tool import DrawingToolOutput
+from langchain_chatchat.agent_toolkits.all_tools.tool import BaseToolOutput
+from langchain_chatchat.agent_toolkits.all_tools.web_browser_tool import (
+    WebBrowserToolOutput,
+)
 from chatchat.server.memory import memory_service
 from chatchat.server.utils import (
     MsgType,
@@ -40,6 +62,34 @@ from chatchat.server.utils import (
 )
 
 logger = build_logger()
+
+
+# intermediate_steps 里可能出现的类，反序列化白名单。
+#
+# `loads` 的 `valid_namespaces` 只决定"能不能 import 这个命名空间"，真正决定放行
+# 哪个类的是 `allowed_objects`；它的默认值 'core' 只认 langchain-core 自己的类，
+# 于是本项目自己的 MCPToolAction / *ToolOutput 会被直接拒掉（ValueError），
+# 上一轮的工具上下文每轮都丢 —— 手动模式第二轮永远从零开始重跑工具。
+#
+# 不用 allowed_objects='all'：manifest 存在库里，'all' 会放行带 base_url/headers 的
+# 模型类，等于给反序列化开 SSRF。新增工具时如果 observation/action 换了类，要同步
+# 加进这里，否则会退回"解析失败 → 忽略"的老行为。
+_STEP_CLASSES = [
+    # core
+    AgentAction,
+    AgentFinish,
+    ToolAgentAction,
+    # 本项目自定义 action
+    MCPToolAction,
+    WebBrowserAgentAction,
+    CodeInterpreterAgentAction,
+    DrawingToolAgentAction,
+    # 本项目自定义 observation 包装
+    BaseToolOutput,
+    WebBrowserToolOutput,
+    CodeInterpreterToolOutput,
+    DrawingToolOutput,
+]
 
 
 def _load_intermediate_steps(last_metadata):
@@ -57,6 +107,7 @@ def _load_intermediate_steps(last_metadata):
     try:
         return loads(
             raw,
+            allowed_objects=_STEP_CLASSES,
             valid_namespaces=["langchain_chatchat", "agent_toolkits", "all_tools", "tool"],
         )
     except Exception:

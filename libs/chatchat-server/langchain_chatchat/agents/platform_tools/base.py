@@ -390,6 +390,26 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
             self.history.append(
                 {"role": "assistant", "content": self.callback.outputs["output"]}
             )
-            self.intermediate_steps.extend(self.callback.intermediate_steps)
+            self.intermediate_steps = self.merge_intermediate_steps(
+                self.intermediate_steps, self.callback.intermediate_steps
+            )
 
         return chat_iterator()
+
+    @staticmethod
+    def merge_intermediate_steps(
+            existing: List[Tuple[AgentAction, Union[BaseToolOutput, str]]],
+            returned: List[Tuple[AgentAction, Union[BaseToolOutput, str]]],
+    ) -> List[Tuple[AgentAction, Union[BaseToolOutput, str]]]:
+        """本轮结束后的工具上下文。
+
+        ``return_intermediate_steps=True`` 时 AgentExecutor 是把自己的
+        ``intermediate_steps`` 列表原样放进 outputs 的，而那个列表就是我们通过
+        inputs 传进去的同一个对象 —— 上一轮的上下文已经在里面了，本轮新增也追加在
+        同一个列表上。所以必须按对象判断，不能无条件 extend：原来的写法是
+        ``L.extend(L)``，每轮把上下文翻一倍（实测第一轮 2 次工具调用存成 4 步、
+        第二轮 8 步），第二轮起 prompt 里的工具记录成倍膨胀。
+        """
+        if not returned or returned is existing:
+            return existing
+        return list(returned)
