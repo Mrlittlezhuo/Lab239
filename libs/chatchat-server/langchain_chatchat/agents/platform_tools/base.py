@@ -298,6 +298,12 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
                 )
             )
 
+            # 本轮最后一次工具/模型报错的原文，以及收尾时拿到的最终回答。
+            # 收尾时如果两处都是空的，说明这一轮其实失败了：用它把真实原因带出去，
+            # 而不是抛一个看不懂的 KeyError。
+            last_error: Optional[str] = None
+            final_answer: Optional[str] = None
+
             async for chunk in self.callback.aiter():
                 data = json.loads(chunk)
                 class_status = None
@@ -349,6 +355,10 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
                         tool_output=str(data["tool_output"]),
                     )
                 elif data["status"] == AgentStatus.agent_finish:
+                    # on_agent_finish 不写 callback.outputs（只有 on_chain_end 写），
+                    # 所以正常收尾的回答要从这里留一份
+                    return_values = (data.get("finish") or {}).get("return_values") or {}
+                    final_answer = return_values.get("output") or final_answer
                     class_status = PlatformToolsFinish(
                         run_id=data["run_id"],
                         status=data["status"],
@@ -363,6 +373,14 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
                     )
 
                 elif data["status"] == AgentStatus.error:
+                    # on_tool_error 放 tool_output，on_chain_error 放 error，
+                    # on_llm_error 放 text
+                    last_error = (
+                        data.get("tool_output")
+                        or data.get("error")
+                        or data.get("text")
+                        or last_error
+                    )
                     class_status = PlatformToolsLLMStatus(
                         run_id=data.get("run_id", "abc"),
                         status=data["status"],
@@ -386,10 +404,18 @@ class PlatformToolsRunnable(RunnableSerializable[Dict, OutputType]):
             await task
 
             # if self.callback.out:
+            # callback.outputs 只在 on_chain_end 带 intermediate_steps 时才赋值，
+            # 工具或模型报错时它是空的：直接下标取会抛 KeyError('output')，把真正的
+            # 失败原因（比如 MCP 连不上 Chrome）盖成一个看不懂的键名；history 也会
+            # 只写进半轮，chat.py 那边的 history[-1] 取到的就是用户自己的提问。
+            final_output = self.callback.outputs.get("output") or final_answer
+            if final_output is None:
+                raise RuntimeError(
+                    "工具调用失败，本轮未能生成回答"
+                    + (f"：{last_error}" if last_error else "")
+                )
             self.history.append({"role": "user", "content": chat_input})
-            self.history.append(
-                {"role": "assistant", "content": self.callback.outputs["output"]}
-            )
+            self.history.append({"role": "assistant", "content": final_output})
             self.intermediate_steps = self.merge_intermediate_steps(
                 self.intermediate_steps, self.callback.intermediate_steps
             )
