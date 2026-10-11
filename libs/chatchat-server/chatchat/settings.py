@@ -641,9 +641,12 @@ class ToolSettings(BaseFileSettings):
     text2images: dict = {
         "use": False,
         "model": "sd-turbo",
-        "size": "256*256",
+        # 模型没指定尺寸时用它。历史值 "256*256" 不在文生图接口支持的尺寸里，
+        # 而且工具过去从不读这个键（死配置），现在会归一化成 1024x1024 这类支持值。
+        "size": "1024x1024",
     }
-    '''图片生成工具配置项。model 必须是在 model_settings.yaml/MODEL_PLATFORMS 中配置过的。'''
+    '''图片生成工具配置项。model 必须是在 model_settings.yaml/MODEL_PLATFORMS 中配置过的。
+    size 支持的取值为 1024x1024、768x1344、864x1152、1344x768、1152x864、1440x720、720x1440。'''
 
     text2sql: dict = {
         # 该工具需单独指定使用的大模型，与用户前端选择使用的模型无关

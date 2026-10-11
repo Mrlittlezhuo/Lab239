@@ -44,12 +44,16 @@ def _section(name: str) -> Dict[str, Any]:
     return Settings.tool_settings.model_dump().get(name) or {}
 
 
-def _is_placeholder(value: Any) -> bool:
-    """空值，或者还是那句中文占位符。"""
+def is_configured(value: Any) -> bool:
+    """这个配置值是否像真的填过：非空，且不是留着的中文占位符。
+
+    工具自己也要用它：把 `api_key: 高德地图 API KEY` 原样发给第三方，
+    换回来的是 HTTP 200 + `INVALID_USER_KEY`，错误里完全看不出是配置问题。
+    """
     if value is None:
-        return True
+        return False
     text = str(value).strip()
-    return not text or bool(_PLACEHOLDER.search(text))
+    return bool(text) and not _PLACEHOLDER.search(text)
 
 
 def tool_block_reason(name: str, is_admin: bool = False) -> Optional[str]:
@@ -72,7 +76,7 @@ def tool_block_reason(name: str, is_admin: bool = False) -> Optional[str]:
     config_key = _REQUIRED_CONFIG.get(name)
     if config_key:
         section, field = config_key
-        if _is_placeholder(_section(section).get(field)):
+        if not is_configured(_section(section).get(field)):
             return (
                 f"工具「{name}」未配置：请在 tool_settings.yaml 的 "
                 f"{section}.{field} 填入真实值（当前是空值或占位符）"

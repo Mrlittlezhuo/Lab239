@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
+from chatchat.server.agent.tools_access import is_configured
 from chatchat.server.pydantic_v1 import Field
 from chatchat.server.utils import get_tool_config, get_ChatOpenAI
 # from chatchat.server.api_server.chat_routes import global_model_name
@@ -21,6 +22,8 @@ from langchain_chatchat.agent_toolkits.all_tools.tool import (
     BaseToolOutput,
 )
 logger = logging.getLogger()
+
+TIMEOUT = 30
 
 # Prompt for the prom_chain
 PROMETHEUS_PROMPT_TEMPLATE = """ You are an expert in Prometheus, a powerful time-series monitoring service. 
@@ -43,20 +46,29 @@ Question: {query}
 
 def execute_promql_request(url: str, params: dict, auth: Optional[HTTPBasicAuth], promql: str) -> str:
     try:
-        response = requests.get(url, params=params, auth=auth)
+        response = requests.get(url, params=params, auth=auth, timeout=TIMEOUT)
     except requests.exceptions.RequestException as e:
-        return f"PromQL: {promql} 的错误: {e}\n"
+        return f"PromQL: {promql} 的错误: {type(e).__name__}: {e}\n（请确认 {url} 可访问）"
 
     if response.status_code == 200:
-        return f"PromQL: {promql} 的查询结果: {response.json()}\n"
+        try:
+            return f"PromQL: {promql} 的查询结果: {response.json()}\n"
+        except ValueError:
+            return f"PromQL: {promql} 的错误: 响应不是 JSON：{response.text[:200]}\n"
     else:
-        return f"PromQL: {promql} 的错误: {response.text}\n"
+        return f"PromQL: {promql} 的错误: HTTP {response.status_code} {response.text[:200]}\n"
 
 
 def query_prometheus(query: str, config: dict) -> str:
     prometheus_endpoint = config["prometheus_endpoint"]
     username = config["username"]
     password = config["password"]
+
+    if not is_configured(prometheus_endpoint):
+        return (
+            "未配置 Prometheus 地址：请在 tool_settings.yaml 的 "
+            "text2promql.prometheus_endpoint 填入真实地址（当前是空值或占位符）"
+        )
 
     llm = get_ChatOpenAI(
         # model_name=global_model_name,
@@ -66,6 +78,11 @@ def query_prometheus(query: str, config: dict) -> str:
         # verbose=True,
         # max_tokens=MAX_TOKENS,
     )
+    if llm is None:
+        return (
+            "无法初始化对话模型：text2promql 使用默认对话模型，"
+            "请确认 model_settings.yaml 里的默认模型已配置且可用"
+        )
 
     prometheus_prompt = ChatPromptTemplate.from_template(PROMETHEUS_PROMPT_TEMPLATE)
     output_parser = StrOutputParser()
@@ -80,7 +97,11 @@ def query_prometheus(query: str, config: dict) -> str:
     # 根据用户名和密码是否存在来设置 auth 参数
     auth = HTTPBasicAuth(username, password) if username and password else None
 
-    promql = prometheus_chain.invoke(query)
+    try:
+        promql = prometheus_chain.invoke(query)
+    except Exception as exc:
+        # 大模型侧失败（模型没配、超时、限流）以前会直接穿透成接口 500
+        return f"生成 PromQL 失败：{type(exc).__name__}: {exc}\n"
     logger.info(f"PromQL: {promql}")
 
     # debug
