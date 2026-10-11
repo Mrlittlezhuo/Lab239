@@ -949,6 +949,9 @@ def update_search_local_knowledgebase_tool():
         search_local_knowledgebase_tool.description = " ".join(
             re.split(r"\n+\s*", template_knowledge)
         )
+        # 注意：BaseTool.args 是 property，但它返回的是 pydantic 缓存下来的
+        # JSON schema dict，所以这里改的是那份缓存 —— 清单确实会进模型看到的 schema
+        # （靠缓存生效，不是靠重新生成，比较脆；工具自身在调用时还会再校验一次名字）。
         search_local_knowledgebase_tool.args["database"]["choices"] = [
             kb.kb_name for kb in kbs
         ]
