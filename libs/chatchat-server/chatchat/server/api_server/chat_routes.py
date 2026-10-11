@@ -75,6 +75,40 @@ def _require_configured_model(body: OpenAIChatInput) -> None:
         )
 
 
+def _resolve_tool_names(tools, registry: Dict) -> List[str]:
+    """把请求体里的 ``tools`` 收敛成工具名列表，配置/拼写问题给 400 而不是 500。
+
+    两种形状都要支持：前端（``frontend/src/api/chat.ts``）发的是名字数组
+    ``["calculate"]``，OpenAI 兼容客户端发的是
+    ``{"type": "function", "function": {"name": ...}}``。旧写法只认后者，
+    名字数组里任何没被前面那段代码换成 dict 的项（拼错、未注册、被角色过滤掉）
+    会留在原地，到 ``x["function"]["name"]`` 变成
+    ``TypeError: string indices must be integers`` —— 一个 500，
+    用户只看到"工具没生效"，猜不到是名字的问题。
+    """
+    names: List[str] = []
+    for item in tools or []:
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = (item.get("function") or {}).get("name") or item.get("name")
+        else:
+            name = None
+        if not name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"tools 中有无法识别的项：{item!r}",
+            )
+        if name not in registry:
+            available = "、".join(sorted(registry)) or "无"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"工具「{name}」不可用。本轮可选工具：{available}",
+            )
+        names.append(name)
+    return names
+
+
 @chat_router.post("/chat/completions", summary="兼容 openai 的统一 chat 接口")
 async def chat_completions(
     request: Request,
@@ -162,8 +196,8 @@ async def chat_completions(
 
     chat_model_config = {}  # TODO: 前端支持配置模型
     tool_config = {}
-    if body.tools:
-        tool_names = [x["function"]["name"] for x in body.tools]
+    tool_names = _resolve_tool_names(body.tools, get_tool())
+    if tool_names:
         tool_config = {name: get_tool_config(name) for name in tool_names}
 
     # 任务 011：extra 中显式开启 agent_run 时，走新的单 Agent 任务闭环
