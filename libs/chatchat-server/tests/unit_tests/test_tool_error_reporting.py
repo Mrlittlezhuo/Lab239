@@ -14,11 +14,13 @@
 但工具自己先返回可读错误更有用：模型能据此换路子，用户能据此改配置。
 """
 import importlib.util
+import json
 import sys
 import types
 
 import pytest
 import requests
+import wikipedia
 
 # tools_factory 的 __init__ 在导入期查知识库，换成只带 __path__ 的桩后单独导子模块。
 _pkg_name = "chatchat.server.agent.tools_factory"
@@ -31,10 +33,13 @@ if _pkg_name not in sys.modules:
 from chatchat.server.agent.tools_factory import (  # noqa: E402
     amap_poi_search,
     amap_weather,
+    arxiv,
+    search_youtube,
     text2image,
     text2promql,
     text2sql,
     weather_check,
+    wikipedia_search,
     wolfram,
 )
 
@@ -401,6 +406,105 @@ class TestText2Promql:
         out = text2promql.text2promql.invoke({"query": "up 有多少"})
 
         assert "模型服务未启动" in out.data
+
+
+# ---------------------------------------------------------------- arxiv / wikipedia / youtube
+# 这三个工具的依赖过去根本没装：调用期 ImportError 穿透成接口 500，
+# 注册表和错误信息里都看不出是缺包。现在装上（pyproject），并给出安装命令。
+
+class TestArxiv:
+    def test_missing_package_names_the_package_and_the_pin(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "langchain_community.tools.arxiv.tool", None)
+
+        out = arxiv.arxiv.invoke({"query": "RAG"})
+
+        assert "pip install 'arxiv<3'" in out.data["error"]
+
+    def test_query_failure_is_returned_as_text(self, monkeypatch):
+        class Tool:
+            def run(self, tool_input):
+                raise ConnectionError("export.arxiv.org 连不上")
+
+        fake = types.ModuleType("langchain_community.tools.arxiv.tool")
+        fake.ArxivQueryRun = lambda: Tool()
+        monkeypatch.setitem(sys.modules, "langchain_community.tools.arxiv.tool", fake)
+
+        out = arxiv.arxiv.invoke({"query": "RAG"})
+
+        assert "ConnectionError" in out.data["error"]
+        assert "export.arxiv.org" in out.data["error"]
+
+
+class TestWikipediaSearch:
+    def test_missing_package_names_the_package(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "wikipedia", None)
+
+        out = wikipedia_search.wikipedia_search.invoke({"query": "RAG"})
+
+        assert "pip install wikipedia" in out.data["error"]
+
+    def test_jsondecoderror_is_explained_as_a_rejected_request(self, monkeypatch):
+        # wikipedia 包把 Wikimedia 的 403 纯文本当 JSON 解析，以前只剩
+        # JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+        class Tool:
+            def run(self, tool_input):
+                raise json.JSONDecodeError("Expecting value", "", 0)
+
+        monkeypatch.setattr(wikipedia_search, "WikipediaAPIWrapper",
+                            lambda **kwargs: object())
+        monkeypatch.setattr(wikipedia_search, "WikipediaQueryRun",
+                            lambda api_wrapper: Tool())
+
+        out = wikipedia_search.wikipedia_search.invoke({"query": "RAG"})
+
+        assert "JSONDecodeError" in out.data["error"]
+        assert "403" in out.data["error"]
+
+    def test_user_agent_is_set_before_the_request(self, monkeypatch):
+        # Wikimedia 的 robot policy 会拒掉包自带的默认 UA，这是上面那个 403 的根因
+        seen = {}
+
+        def fake_set_user_agent(ua):
+            seen["ua"] = ua
+
+        class Tool:
+            def run(self, tool_input):
+                assert seen["ua"], "必须先设置 UA 再发请求"
+                return "检索增强生成"
+
+        monkeypatch.setattr(wikipedia, "set_user_agent", fake_set_user_agent)
+        monkeypatch.setattr(wikipedia_search, "WikipediaAPIWrapper",
+                            lambda **kwargs: object())
+        monkeypatch.setattr(wikipedia_search, "WikipediaQueryRun",
+                            lambda api_wrapper: Tool())
+
+        out = wikipedia_search.wikipedia_search.invoke({"query": "RAG"})
+
+        assert "chatchat" in seen["ua"]
+        assert out.data == "检索增强生成"
+
+
+class TestSearchYoutube:
+    def test_missing_package_names_the_package(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "langchain_community.tools", None)
+
+        out = search_youtube.search_youtube.invoke({"query": "cat"})
+
+        assert "pip install youtube-search" in out.data["error"]
+
+    def test_network_failure_is_returned_as_text(self, monkeypatch):
+        fake_pkg = types.ModuleType("langchain_community.tools")
+
+        class Tool:
+            def run(self, tool_input):
+                raise ConnectionError("Connection to www.youtube.com timed out")
+
+        fake_pkg.YouTubeSearchTool = lambda: Tool()
+        monkeypatch.setitem(sys.modules, "langchain_community.tools", fake_pkg)
+
+        out = search_youtube.search_youtube.invoke({"query": "cat"})
+
+        assert "timed out" in out.data["error"]
 
 
 # ---------------------------------------------------------------- text2images
