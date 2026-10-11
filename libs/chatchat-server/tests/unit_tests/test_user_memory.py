@@ -776,7 +776,9 @@ class TestPromptInjection:
             monkeypatch.setattr(PlatformToolsRunnable, "create_agent_executor",
                                 staticmethod(_fake_create_agent_executor))
             # create_models_chains 内部以无参方式调用 MCP 查询
-            monkeypatch.setattr(chat_mod, "get_enabled_mcp_connections",
+            # 连接字典的构造已收敛到 chatchat.server.mcp_connections
+            import chatchat.server.mcp_connections as mcp_connections_mod
+            monkeypatch.setattr(mcp_connections_mod, "get_enabled_mcp_connections",
                                 lambda *a, **k: [])
 
             class _StubLLM:
@@ -833,7 +835,9 @@ class TestPromptInjection:
 
             monkeypatch.setattr(PlatformToolsRunnable, "create_agent_executor",
                                 staticmethod(_fake_create_agent_executor))
-            monkeypatch.setattr(chat_mod, "get_enabled_mcp_connections",
+            # 连接字典的构造已收敛到 chatchat.server.mcp_connections
+            import chatchat.server.mcp_connections as mcp_connections_mod
+            monkeypatch.setattr(mcp_connections_mod, "get_enabled_mcp_connections",
                                 lambda *a, **k: [])
 
             chat_mod.create_models_chains(

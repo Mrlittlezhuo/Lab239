@@ -2,7 +2,7 @@
 
 把运行器接入现有对话流程：
 
-- 复用现有工具注册表（``get_tool``）与 MCP 连接（``get_enabled_mcp_connections``
+- 复用现有工具注册表（``get_tool``）与 MCP 连接（``mcp_connections.build_mcp_connections``
   + 本项目自带的 ``MultiServerMCPClient``），不引入第二套工具/记忆系统；
 - 复用现有会话历史（``filter_message``）与长期记忆服务（``memory_service``
   的自动提取 / 会话摘要 / 记忆注入）；
@@ -81,33 +81,11 @@ async def _load_mcp_tools() -> Tuple[Dict[str, Any], Optional[Any]]:
     返回 ``(tools, client)``：client 在运行期间必须保持存活（工具调用依赖
     其会话），调用方负责在运行结束后关闭。
     """
-    from chatchat.server.db.repository.mcp_connection_repository import (
-        get_enabled_mcp_connections,
-    )
+    from chatchat.server.mcp_connections import build_mcp_connections
     from langchain_chatchat.agents.platform_tools.base import PlatformToolsRunnable
 
-    connections = get_enabled_mcp_connections() or []
-    mcp_connections: Dict[str, Any] = {}
-    for conn in connections:
-        if conn["transport"] == "stdio":
-            mcp_connections[conn["server_name"]] = {
-                "transport": "stdio",
-                "command": conn["config"].get(
-                    "command", conn["args"][0] if conn["args"] else ""
-                ),
-                "args": conn["args"][1:] if len(conn["args"]) > 1 else [],
-                "env": conn["env"],
-                "encoding": "utf-8",
-                "encoding_error_handler": "strict",
-            }
-        elif conn["transport"] == "sse":
-            mcp_connections[conn["server_name"]] = {
-                "transport": "sse",
-                "url": conn["config"].get("url", ""),
-                "headers": conn["config"].get("headers", {}),
-                "timeout": conn.get("timeout", 30.0),
-                "sse_read_timeout": conn.get("sse_read_timeout", 60.0),
-            }
+    # 连接字典的构造收敛在 mcp_connections（含 MCP 通用配置），两条路径共用
+    mcp_connections = build_mcp_connections()
     if not mcp_connections:
         return {}, None
     client = await PlatformToolsRunnable.create_mcp_client(mcp_connections)

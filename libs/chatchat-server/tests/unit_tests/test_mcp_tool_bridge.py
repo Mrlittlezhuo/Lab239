@@ -230,3 +230,28 @@ async def test_roots_callback_without_roots_still_answers():
 
     assert isinstance(result, ListRootsResult)
     assert result.roots == []
+
+
+# ---------------------------------------------------------------- stdio 连接参数
+
+
+async def test_stdio_cwd_reaches_the_connection_method():
+    """MCP 通用配置里的 working_dir 要有落点。
+
+    SDK 的 stdio_client 读 StdioServerParameters.cwd，但桥接层以前不转发 cwd，
+    所以页面上填的工作目录是摆设。
+    """
+    from langchain_chatchat.agent_toolkits.mcp_kit.client import MultiServerMCPClient
+
+    client = MultiServerMCPClient()
+    captured = {}
+
+    async def _capture(server_name, **kwargs):
+        captured.update(kwargs)
+
+    client.connect_to_server_via_stdio = _capture  # type: ignore[method-assign]
+    await client.connect_to_server(
+        "x", transport="stdio", command="node", args=["a"], cwd="/srv/mcp"
+    )
+
+    assert captured["cwd"] == "/srv/mcp"

@@ -320,14 +320,14 @@ def create_mcp_profile(
 ):
     """
     创建 MCP 通用配置
+
+    种子值留空：通用配置现在会真的下发给每个 stdio server（见
+    ``chatchat/server/mcp_connections.py``），以前那组 PATH/PYTHONPATH/HOME
+    是上游镜像时代的默认值，在这台机器上会把 node/conda 从 PATH 里抹掉。
     """
     if env_vars is None:
-        env_vars = {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "PYTHONPATH": "/app",
-            "HOME": "/tmp"
-        }
-    
+        env_vars = {}
+
     # 检查是否已存在配置
     existing_profile = session.query(MCPProfileModel).first()
     if existing_profile:
@@ -389,11 +389,7 @@ def reset_mcp_profile(session):
     if profile is not None:
         profile.timeout = 30
         profile.working_dir = "/tmp"
-        profile.env_vars = {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "PYTHONPATH": "/app",
-            "HOME": "/tmp"
-        }
+        profile.env_vars = {}
         
         session.add(profile)
         session.commit()

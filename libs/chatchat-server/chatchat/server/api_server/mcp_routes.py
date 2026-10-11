@@ -63,15 +63,12 @@ async def get_mcp_profile_endpoint():
             )
         else:
             logger.info("MCP 通用配置不存在，返回默认配置")
-            # 如果不存在配置，返回默认配置
+            # 如果不存在配置，返回默认配置。env_vars 留空：通用配置现在会真的
+            # 下发给每个 stdio server，界面上显示什么就会传什么
             return MCPProfileResponse(
                 timeout=30,
                 working_dir="/tmp",
-                env_vars={
-                    "PATH": "/usr/local/bin:/usr/bin:/bin",
-                    "PYTHONPATH": "/app",
-                    "HOME": "/tmp"
-                },
+                env_vars={},
                 update_time=datetime.now().isoformat()
             )
     

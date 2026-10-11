@@ -69,6 +69,9 @@ class StdioConnection(TypedDict):
     explanations of possible values
     """
 
+    cwd: str | None = None
+    """Working directory for the spawned server process."""
+
     roots: list[str] | None = None
     """Local directories to answer the server's `roots/list` request with."""
 
@@ -193,6 +196,7 @@ class MultiServerMCPClient:
                 encoding_error_handler=kwargs.get(
                     "encoding_error_handler", DEFAULT_ENCODING_ERROR_HANDLER
                 ),
+                cwd=kwargs.get("cwd"),
                 roots=kwargs.get("roots"),
             )
         else:
@@ -209,6 +213,7 @@ class MultiServerMCPClient:
             encoding_error_handler: Literal[
                 "strict", "ignore", "replace"
             ] = DEFAULT_ENCODING_ERROR_HANDLER,
+            cwd: str | None = None,
             roots: list[str] | None = None,
     ) -> None:
         """Connect to a specific MCP server using stdio
@@ -220,6 +225,9 @@ class MultiServerMCPClient:
             env: Environment variables for the command
             encoding: Character encoding
             encoding_error_handler: How to handle encoding errors
+            cwd: Working directory for the spawned server process. Without this
+                the MCP 通用配置里的 working_dir 没有任何落点（SDK 会读
+                StdioServerParameters.cwd）。
             roots: Local directories the server may operate in. Answered back to
                 servers that ask `roots/list` (playwright-mcp always asks).
         """
@@ -234,6 +242,7 @@ class MultiServerMCPClient:
             command=command,
             args=args,
             env=env,
+            cwd=cwd,
             encoding=encoding,
             encoding_error_handler=encoding_error_handler,
         )

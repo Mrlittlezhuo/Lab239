@@ -1,7 +1,6 @@
 """手动模式（chat() 路径）的 MCP 连接生命周期回归测试，全部离线。
 
-覆盖六处修复：
-- 连接字典的构造从 ``create_models_chains`` 里拆成 ``build_mcp_connections``；
+覆盖六处修复（连接字典本身的构造见 ``test_mcp_connections.py``）：
 - ``create_agent_executor`` 收到已连好的 ``mcp_client`` 时不再自己连（否则
   client 没人引用，每条消息漏一个 MCP 子进程，收尾还会炸 anyio cancel scope）；
 - 非流式收尾遇到 ``{"error": ...}`` 帧时抛原始错误，而不是 ``KeyError('choices')``；
@@ -19,49 +18,6 @@ from fastapi import HTTPException
 import chatchat.server.chat.chat as chat_mod
 from langchain_chatchat import ChatPlatformAI, PlatformToolsRunnable
 from langchain_chatchat.callbacks.agent_callback_handler import AgentStatus
-
-
-class TestBuildMcpConnections:
-    def test_maps_stdio_and_sse_rows(self, monkeypatch):
-        monkeypatch.setattr(chat_mod, "get_enabled_mcp_connections", lambda: [
-            {
-                "server_name": "cdp",
-                "transport": "stdio",
-                # 前端 MCP 页创建的记录 config 为空，command 只能从 args[0] 取
-                "config": {},
-                "args": ["node", "/opt/cdp/cli.js", "--slim", "--headless"],
-                "env": {"ONLY_USER_KEY": "keep"},
-            },
-            {
-                "server_name": "remote",
-                "transport": "sse",
-                "config": {"url": "http://127.0.0.1:9000/sse",
-                           "headers": {"Authorization": "Bearer x"}},
-                "args": [],
-                "env": {},
-                "timeout": 45,
-            },
-        ])
-
-        conns = chat_mod.build_mcp_connections()
-
-        assert set(conns) == {"cdp", "remote"}
-        assert conns["cdp"] == {
-            "transport": "stdio",
-            "command": "node",
-            "args": ["/opt/cdp/cli.js", "--slim", "--headless"],
-            "env": {"ONLY_USER_KEY": "keep"},
-            "encoding": "utf-8",
-            "encoding_error_handler": "strict",
-        }
-        assert conns["remote"]["url"] == "http://127.0.0.1:9000/sse"
-        assert conns["remote"]["headers"] == {"Authorization": "Bearer x"}
-        # 库里没填 timeout 时不能把 None 传下去
-        assert conns["remote"]["timeout"] == 45
-
-    def test_tolerates_no_connections(self, monkeypatch):
-        monkeypatch.setattr(chat_mod, "get_enabled_mcp_connections", lambda: None)
-        assert chat_mod.build_mcp_connections() == {}
 
 
 class TestPreconnectedClient:

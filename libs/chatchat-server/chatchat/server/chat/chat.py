@@ -14,7 +14,7 @@ from langchain_core.prompts.chat import ChatPromptTemplate
 from chatchat.server.agents_registry.agents_registry import agents_registry
 from sse_starlette.sse import EventSourceResponse
 
-from chatchat.server.db.repository.mcp_connection_repository import get_enabled_mcp_connections
+from chatchat.server.mcp_connections import build_mcp_connections
 from chatchat.settings import Settings
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
 from langchain_chatchat.callbacks.agent_callback_handler import (
@@ -176,41 +176,6 @@ def create_models_from_config(configs, callbacks, stream, max_tokens):
         prompt_template = get_prompt_template(type=model_type, name=prompt_name)
         prompts[model_type] = prompt_template
     return models, prompts
-
-
-def build_mcp_connections() -> dict:
-    """把库里启用的 MCP 连接转成 ``MultiServerMCPClient`` 需要的连接字典。
-
-    单独拆出来是因为连接必须在消费流的那个协程里建立、也必须在同一个任务里关闭
-    （anyio 的 cancel scope 只能在进入它的那个任务里退出）。以前连接是在
-    ``create_agent_executor`` 内部用 ``run_until_complete`` 建的，建完就把 client
-    丢了：关不掉，每条消息留下一个常驻的 MCP 子进程。
-    """
-    connections = get_enabled_mcp_connections() or []
-
-    # 转换为MCP连接格式，支持StdioConnection和SSEConnection类型
-    mcp_connections = {}
-    for conn in connections:
-        if conn["transport"] == "stdio":
-            # StdioConnection类型
-            mcp_connections[conn["server_name"]] = {
-                "transport": "stdio",
-                "command": conn["config"].get("command", conn["args"][0] if conn["args"] else ""),
-                "args": conn["args"][1:] if len(conn["args"]) > 1 else [],
-                "env": conn["env"],
-                "encoding": "utf-8",
-                "encoding_error_handler": "strict"
-            }
-        elif conn["transport"] == "sse":
-            # SSEConnection类型
-            mcp_connections[conn["server_name"]] = {
-                "transport": "sse",
-                "url": conn["config"].get("url", ""),
-                "headers": conn["config"].get("headers", {}),
-                "timeout": conn.get("timeout", 30.0),
-                "sse_read_timeout": conn.get("sse_read_timeout", 60.0)
-            }
-    return mcp_connections
 
 
 def create_models_chains(
