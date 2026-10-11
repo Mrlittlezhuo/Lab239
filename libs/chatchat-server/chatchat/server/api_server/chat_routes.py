@@ -196,8 +196,10 @@ async def chat_completions(
 
     chat_model_config = {}  # TODO: 前端支持配置模型
     tool_config = {}
-    tool_names = _resolve_tool_names(body.tools, get_tool())
-    if tool_names:
+    if body.tools:
+        # `get_tool()` 会 reload tools_factory 并顺带查一次知识库列表，
+        # 没勾工具的普通对话没必要付这个代价（也避免工具导入问题波及所有轮次）。
+        tool_names = _resolve_tool_names(body.tools, get_tool())
         tool_config = {name: get_tool_config(name) for name in tool_names}
 
     # 任务 011：extra 中显式开启 agent_run 时，走新的单 Agent 任务闭环

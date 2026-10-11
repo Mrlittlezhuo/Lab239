@@ -12,7 +12,10 @@ from langchain_chatchat.agent_toolkits.mcp_kit.tools import MCPStructuredTool
 from langchain_chatchat.agents.format_scratchpad.all_tools import (
     format_to_platform_tool_messages,
 )
-from langchain_chatchat.agents.output_parsers import PlatformToolsAgentOutputParser
+from langchain_chatchat.agents.output_parsers import (
+    PlatformKnowledgeOutputParserCustom,
+    PlatformToolsAgentOutputParser,
+)
 import re
 from collections import defaultdict
 
@@ -125,11 +128,17 @@ def create_platform_knowledge_agent(
                 ("human", "{input}"),
             ]
         )
+        # 本轮一个工具都没有，解析器也必须相应地不再把 XML 标签当工具调用：
+        # 否则模型写 <answer> 或任何标签都会变成一次找不到的工具调用。
         return (
             direct_chat_prompt
             | llm
             | PlatformToolsAgentOutputParser(
-                instance_type="platform-knowledge-mode"
+                instance_type="platform-knowledge-mode",
+                knowledge_parser=PlatformKnowledgeOutputParserCustom(
+                    available_tools=[],
+                    available_mcp_tools=[],
+                ),
             )
         )
 
@@ -154,7 +163,13 @@ def create_platform_knowledge_agent(
             )
             | prompt
             | llm
-            | PlatformToolsAgentOutputParser(instance_type="platform-knowledge-mode")
+            | PlatformToolsAgentOutputParser(
+                instance_type="platform-knowledge-mode",
+                knowledge_parser=PlatformKnowledgeOutputParserCustom(
+                    available_tools=[t.name for t in tools],
+                    available_mcp_tools=[t.name for t in mcp_tools],
+                ),
+            )
 
     )
 

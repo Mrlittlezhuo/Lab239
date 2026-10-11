@@ -5,7 +5,7 @@ import logging
 import re
 from functools import partial
 from operator import itemgetter
-from typing import Any, List, Sequence, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 from langchain_classic.agents.agent import AgentExecutor, RunnableAgent
 from langchain_classic.agents.output_parsers import ToolsAgentOutputParser
@@ -76,6 +76,13 @@ def collect_plain_text(root):
 class PlatformKnowledgeOutputParserCustom(ToolsAgentOutputParser):
     """Output parser with retries for the structured chat agent with custom Knowledge prompt."""
 
+    available_tools: Optional[List[str]] = None
+    """本轮真实可用的平台工具名。``None`` 表示不限制（旧行为）；给了列表（包括空列表）
+    时，不在列表里的顶层标签不再被当成工具调用。"""
+
+    available_mcp_tools: Optional[List[str]] = None
+    """本轮真实可用的 MCP 工具名，语义同上。"""
+
     def parse_result(
             self, result: List[Generation], *, partial: bool = False
     ) -> Union[List[Union[AgentAction, MCPToolAction]], AgentFinish]:
@@ -111,6 +118,17 @@ class PlatformKnowledgeOutputParserCustom(ToolsAgentOutputParser):
                         logger.warning(f"use_mcp_tool 块字段不全，跳过：{elem.tag}")
                         continue
 
+                    if (self.available_mcp_tools is not None
+                            and tool_name not in self.available_mcp_tools):
+                        # 本轮没连上这个 MCP 服务。旧行为是照样造一个 MCPToolAction，
+                        # 执行器找不到工具、不发 tool_start/tool_end，模型看到空观察
+                        # 就原样重试，一直转到 max_iterations。
+                        logger.warning(
+                            f"模型请求 MCP 工具「{tool_name}」（服务「{server_name}」），"
+                            f"但本轮没有加载该工具，已忽略这次调用"
+                        )
+                        continue
+
                     _, json_input = try_parse_json_object(arguments_raw)
                     act = MCPToolAction(
                         server_name=server_name,
@@ -128,6 +146,17 @@ class PlatformKnowledgeOutputParserCustom(ToolsAgentOutputParser):
                 else:
                     # 处理其他工具标签（如calculate等）
                     tool_name = elem.tag
+                    if (self.available_tools is not None
+                            and tool_name not in self.available_tools):
+                        # 兜底分支把"任何未知顶层标签"当工具名，模型写
+                        # <answer>/<navigate_page>/<搜索> 都会变成一次工具调用；
+                        # 本轮没有这个工具时，它只会让 Agent 空转。标签里的文字
+                        # 本来就在回答里，不当工具调用不会丢内容。
+                        logger.warning(
+                            f"模型请求工具「{tool_name}」，但本轮没有加载该工具，"
+                            f"已忽略这次调用"
+                        )
+                        continue
                     tool_input = {}
                     
                     # 遍历标签内的所有子标签，作为工具参数

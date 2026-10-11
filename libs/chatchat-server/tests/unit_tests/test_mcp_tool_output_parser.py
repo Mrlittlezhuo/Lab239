@@ -35,9 +35,9 @@ MCP_BLOCK = (
 )
 
 
-def _parse(text):
+def _parse(text, **parser_kwargs):
     """按真实链路喂一条 ChatGeneration（父类解析器只认 ChatGeneration）。"""
-    return PlatformKnowledgeOutputParserCustom().parse_result(
+    return PlatformKnowledgeOutputParserCustom(**parser_kwargs).parse_result(
         [ChatGeneration(message=AIMessage(content=text))], partial=False)
 
 
@@ -96,3 +96,53 @@ class TestParseResult:
 
         assert isinstance(result, AgentFinish)
         assert "这就是回答" in result.return_values["output"]
+
+
+# 兜底分支把"任何未知顶层标签"当工具名。本轮没有这个工具时，造出来的调用
+# 找不到执行者，不发 tool_start/tool_end，模型看到空观察就原样重试，
+# 一直转到 max_iterations（15 步）才吐 "Agent stopped due to max iterations."
+NAVIGATE_TAG = "<navigate_page><url>https://example.com</url></navigate_page>"
+
+
+class TestAvailableToolsWhitelist:
+    def test_unknown_tag_is_not_a_tool_call_when_tools_are_listed(self):
+        result = _parse(
+            "这是回答正文。\n<navigate_page><url>https://x.com</url></navigate_page>",
+            available_tools=["calculate"],
+        )
+
+        assert isinstance(result, AgentFinish)
+        assert "这是回答正文" in result.return_values["output"]
+
+    def test_listed_tool_tag_still_becomes_a_tool_call(self):
+        actions = _parse(
+            "<calculate><text>1+2</text></calculate>",
+            available_tools=["calculate"],
+        )
+
+        assert [a.tool for a in actions] == ["calculate"]
+        assert actions[0].tool_input == {"text": "1+2"}
+
+    def test_no_tools_this_round_fabricates_nothing(self):
+        # 智能对话路由回退 direct 时就是这种轮次
+        result = _parse("我来搜一下。\n" + NAVIGATE_TAG,
+                        available_tools=[], available_mcp_tools=[])
+
+        assert isinstance(result, AgentFinish)
+
+    def test_mcp_call_is_dropped_when_the_server_is_not_loaded(self):
+        result = _parse(THINKING_WITH_AMP + MCP_BLOCK, available_mcp_tools=[])
+
+        assert isinstance(result, AgentFinish)
+
+    def test_mcp_call_survives_when_the_tool_is_loaded(self):
+        actions = _parse(THINKING_WITH_AMP + MCP_BLOCK,
+                         available_mcp_tools=["navigate_page"])
+
+        assert [a.tool for a in actions] == ["navigate_page"]
+
+    def test_no_whitelist_keeps_the_old_behaviour(self):
+        # 其它调用方（没有传白名单的）行为不变
+        actions = _parse(NAVIGATE_TAG)
+
+        assert [a.tool for a in actions] == ["navigate_page"]
