@@ -14,7 +14,6 @@ from typing import (
 )
 
 from langchain_classic.agents.agent import AgentExecutor
-from langchain_classic.agents.tools import InvalidTool
 from langchain_classic.utilities.asyncio import asyncio_timeout
 from langchain_core.agents import AgentAction, AgentFinish, AgentStep
 from langchain_core.callbacks import (
@@ -106,6 +105,11 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                 )
 
             intermediate_steps.extend(next_step_output)
+            stopped = self._stop_on_missing_tool(next_step_output, name_to_tool_map)
+            if stopped is not None:
+                return self._return(
+                    stopped, intermediate_steps, run_manager=run_manager
+                )
             if len(next_step_output) == 1:
                 next_step_action = next_step_output[0]
                 # See if tool should return directly
@@ -161,6 +165,13 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                         )
 
                     intermediate_steps.extend(next_step_output)
+                    stopped = self._stop_on_missing_tool(
+                        next_step_output, name_to_tool_map
+                    )
+                    if stopped is not None:
+                        return await self._areturn(
+                            stopped, intermediate_steps, run_manager=run_manager
+                        )
                     if len(next_step_output) >= 1:
                         # TODO: platform adapter status control, but langchain not output message info,
                         #   so where after paser instance object to let's DrawingToolAgentAction WebBrowserAgentAction
@@ -229,6 +240,58 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                 output, intermediate_steps, run_manager=run_manager
             )
 
+    def _find_mcp_tool(self, agent_action: MCPToolAction) -> Optional[BaseTool]:
+        """按 tool 名 + server_name 找 MCP 工具，两个字段必须同时匹配。"""
+        for tool in self.mcp_tools:
+            if tool.name == agent_action.tool and tool.server_name == agent_action.server_name:
+                return tool
+        return None
+
+    def _missing_tool_reason(
+        self, agent_action: AgentAction, name_to_tool_map: Dict[str, BaseTool]
+    ) -> Optional[str]:
+        """工具名不在本轮可用清单里时给出可读原因，否则返回 ``None``。
+
+        这类失败模型修不了：观察结果只有一句 "xxx is not a valid tool"，它看不懂，
+        只会把同一个调用原样再发一遍。实测一轮里连发 15 次（正好撞到 langchain 的
+        ``max_iterations``），每轮一次模型调用，界面上只剩一串"好的，我再尝试一次"，
+        而工具从头到尾没执行过（日志里 15 条 agent_action、0 条 tool_start/tool_end）。
+        """
+        if isinstance(agent_action, MCPToolAction):
+            if self._find_mcp_tool(agent_action) is None:
+                return (
+                    f"MCP 工具「{agent_action.tool}」"
+                    f"（服务「{agent_action.server_name}」）本轮没有加载成功，已停止重试"
+                )
+            return None
+
+        if agent_action.tool in name_to_tool_map:
+            return None
+        available = "、".join(name_to_tool_map) or "无"
+        return (
+            f"工具「{agent_action.tool}」本轮不可用"
+            f"（本轮可用工具：{available}），已停止重试"
+        )
+
+    def _stop_on_missing_tool(
+        self,
+        next_step_output: List[Tuple[AgentAction, Any]],
+        name_to_tool_map: Dict[str, BaseTool],
+    ) -> Optional[AgentFinish]:
+        """本轮里有任何一次调用指向不存在的工具时，直接收尾。
+
+        找不到工具的那条分支不会触发 tool_start/tool_end，所以前端看不到失败，
+        模型也收不到"这次没执行"的有效信号；把它认出来并收尾，比让模型重试到
+        步数上限（最后回答是 langchain 的 "Agent stopped due to max iterations."）
+        更省模型调用，也更说得清。
+        """
+        for action, _ in next_step_output:
+            reason = self._missing_tool_reason(action, name_to_tool_map)
+            if reason:
+                logger.warning(reason)
+                return AgentFinish(return_values={"output": reason}, log=reason)
+        return None
+
     def _perform_agent_action(
         self,
         name_to_tool_map: Dict[str, BaseTool],
@@ -242,11 +305,7 @@ class PlatformToolsAgentExecutor(AgentExecutor):
         if isinstance(agent_action, MCPToolAction): 
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
             # Find the MCP tool by name and server_name from self.mcp_tools
-            mcp_tool = None
-            for tool in self.mcp_tools:
-                if tool.name == agent_action.tool and tool.server_name == agent_action.server_name:
-                    mcp_tool = tool
-                    break
+            mcp_tool = self._find_mcp_tool(agent_action)
             
             if mcp_tool:
                 try:
@@ -269,7 +328,9 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                         f"this agent was driven synchronously, so it cannot be run here."
                     )
             else:
-                observation = f"MCP tool '{agent_action.tool}' from server '{agent_action.server_name}' not found in available MCP tools"
+                observation = self._missing_tool_reason(
+                    agent_action, name_to_tool_map
+                ) or f"MCP tool '{agent_action.tool}' is not available"
 
         # Otherwise we lookup the tool
         elif agent_action.tool in name_to_tool_map:
@@ -301,17 +362,9 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     **tool_run_kwargs,
                 )
         else:
-            tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-            observation = InvalidTool().run(
-                {
-                    "requested_tool_name": agent_action.tool,
-                    "available_tool_names": list(name_to_tool_map.keys()),
-                },
-                verbose=self.verbose,
-                color=None,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **tool_run_kwargs,
-            )
+            observation = self._missing_tool_reason(
+                agent_action, name_to_tool_map
+            ) or f"Tool '{agent_action.tool}' is not available"
         return AgentStep(action=agent_action, observation=observation)
 
     def _consume_next_step(
@@ -338,11 +391,7 @@ class PlatformToolsAgentExecutor(AgentExecutor):
         if isinstance(agent_action, MCPToolAction): 
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
             # Find the MCP tool by name and server_name from self.mcp_tools
-            mcp_tool = None
-            for tool in self.mcp_tools:
-                if tool.name == agent_action.tool and tool.server_name == agent_action.server_name:
-                    mcp_tool = tool
-                    break
+            mcp_tool = self._find_mcp_tool(agent_action)
             
             if mcp_tool:
                 observation = await mcp_tool.arun(
@@ -353,7 +402,9 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     **tool_run_kwargs,
                 )
             else:
-                observation = f"MCP tool '{agent_action.tool}' from server '{agent_action.server_name}' not found in available MCP tools"
+                observation = self._missing_tool_reason(
+                    agent_action, name_to_tool_map
+                ) or f"MCP tool '{agent_action.tool}' is not available"
 
         # Otherwise we lookup the tool
         elif agent_action.tool in name_to_tool_map:
@@ -386,15 +437,7 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     **tool_run_kwargs,
                 )
         else:
-            tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-            observation = await InvalidTool().arun(
-                {
-                    "requested_tool_name": agent_action.tool,
-                    "available_tool_names": list(name_to_tool_map.keys()),
-                },
-                verbose=self.verbose,
-                color=None,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **tool_run_kwargs,
-            )
+            observation = self._missing_tool_reason(
+                agent_action, name_to_tool_map
+            ) or f"Tool '{agent_action.tool}' is not available"
         return AgentStep(action=agent_action, observation=observation)
