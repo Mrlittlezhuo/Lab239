@@ -127,6 +127,8 @@ class TestStopOnMissingTool:
 
         assert isinstance(stopped, AgentFinish)
         assert "已停止重试" in stopped.return_values["output"]
+        # 上层（chat.py）靠这个标记决定这一轮要不要把工具上下文带进下一轮
+        assert stopped.return_values["agent_error"] == stopped.return_values["output"]
 
     def test_returns_none_when_every_tool_exists(self):
         tool = SearchInternet()
@@ -194,3 +196,53 @@ class TestAgentLoop:
         assert out["output"] == "页面已打开"
         assert out["intermediate_steps"][0][1] == "已打开页面"
         assert calls == [{"url": "https://x"}]
+
+
+class TestFailureIsMarked:
+    """失败收尾要能被上层认出来。
+
+    ``chat.py`` 过去无条件把 ``intermediate_steps`` 写进这轮消息的 metadata，
+    下一轮 ``_load_intermediate_steps`` 又把它当"上次这么做是成功的"回放给模型，
+    于是模型照着上一串"好的，我再试一次"继续空转。
+    """
+
+    def test_stopped_output_carries_agent_error(self):
+        executor = _executor([])
+
+        out = executor._stopped_output([], input="再试一次")
+
+        assert isinstance(out, AgentFinish)
+        assert out.return_values.get("agent_error")
+
+    async def test_max_iterations_round_is_marked_failed(self):
+        # 工具是真的，但模型一直不收尾 → 撞到 max_iterations（langchain 默认 15）
+        tool = SearchInternet()
+        executor = _executor(
+            [_action("search_internet", {"query": "苏州大学"})] * 20, tools=[tool]
+        )
+
+        out = await executor.ainvoke({"input": "一直搜", "chat_history": []})
+
+        assert "iteration limit" in out["output"]
+        assert out.get("agent_error")
+
+    async def test_missing_tool_round_is_marked_failed(self):
+        executor = _executor([_action(NAVIGATE, {"url": "https://x"})] * 15)
+
+        out = await executor.ainvoke({"input": "再试一次", "chat_history": []})
+
+        assert out.get("agent_error")
+
+    async def test_successful_round_is_not_marked(self):
+        tool = SearchInternet()
+        executor = _executor(
+            [
+                _action("search_internet", {"query": "苏州大学"}),
+                AgentFinish(return_values={"output": "这是回答"}, log="这是回答"),
+            ],
+            tools=[tool],
+        )
+
+        out = await executor.ainvoke({"input": "搜一下", "chat_history": []})
+
+        assert "agent_error" not in out

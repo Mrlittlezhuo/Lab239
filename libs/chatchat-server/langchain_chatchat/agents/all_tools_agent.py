@@ -120,9 +120,7 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     )
             iterations += 1
             time_elapsed = time.time() - start_time
-        output = self.agent.return_stopped_response(
-            self.early_stopping_method, intermediate_steps, **inputs
-        )
+        output = self._stopped_output(intermediate_steps, **inputs)
         return self._return(output, intermediate_steps, run_manager=run_manager)
 
     async def _acall(
@@ -225,17 +223,13 @@ class PlatformToolsAgentExecutor(AgentExecutor):
 
                     iterations += 1
                     time_elapsed = time.time() - start_time
-                output = self.agent.return_stopped_response(
-                    self.early_stopping_method, intermediate_steps, **inputs
-                )
+                output = self._stopped_output(intermediate_steps, **inputs)
                 return await self._areturn(
                     output, intermediate_steps, run_manager=run_manager
                 )
         except (TimeoutError, asyncio.TimeoutError):
             # stop early when interrupted by the async timeout
-            output = self.agent.return_stopped_response(
-                self.early_stopping_method, intermediate_steps, **inputs
-            )
+            output = self._stopped_output(intermediate_steps, **inputs)
             return await self._areturn(
                 output, intermediate_steps, run_manager=run_manager
             )
@@ -289,8 +283,32 @@ class PlatformToolsAgentExecutor(AgentExecutor):
             reason = self._missing_tool_reason(action, name_to_tool_map)
             if reason:
                 logger.warning(reason)
-                return AgentFinish(return_values={"output": reason}, log=reason)
+                return AgentFinish(
+                    return_values={"output": reason, "agent_error": reason},
+                    log=reason,
+                )
         return None
+
+    def _stopped_output(
+        self,
+        intermediate_steps: List[Tuple[AgentAction, Any]],
+        **inputs: Any,
+    ) -> AgentFinish:
+        """``max_iterations`` / 超时收尾，并给 ``return_values`` 打上 ``agent_error``。
+
+        上层（``chat.py``）靠这个标记判断这一轮是不是失败的：失败轮的
+        ``intermediate_steps`` 不能带进下一轮，否则模型会把上一串"我再试一次"
+        当成正确做法照着重复。
+        """
+        output = self.agent.return_stopped_response(
+            self.early_stopping_method, intermediate_steps, **inputs
+        )
+        if isinstance(output, AgentFinish):
+            output.return_values = {
+                **output.return_values,
+                "agent_error": output.log or "Agent 未能在本轮完成任务",
+            }
+        return output
 
     def _perform_agent_action(
         self,

@@ -3,7 +3,7 @@ import json
 import uuid
 import os
 from chatchat.server.db.repository.message_repository import filter_message
-from typing import AsyncIterable, List, Union, Tuple
+from typing import Any, AsyncIterable, Dict, List, Union, Tuple
 from sqlalchemy.orm import Session
 from langchain_core.load import dumpd, dumps, load, loads
 
@@ -116,6 +116,27 @@ def _load_intermediate_steps(last_metadata):
             exc_info=True,
         )
         return []
+
+
+def _round_metadata(agent_executor, round_failed: bool) -> Dict[str, Any]:
+    """本轮落库的 message metadata。
+
+    失败轮（工具不存在、撞到 ``max_iterations``、超时）不写 ``intermediate_steps``：
+    下一轮 ``_load_intermediate_steps`` 会把它当作"上一轮这么做是成功的"回放给模型，
+    于是模型照着上一串"好的，我再试一次"继续空转。回答文本照常保留，
+    界面上看到的和实际发生的一致。
+    """
+    if round_failed:
+        logger.warning(
+            "本轮 Agent 未正常完成，不保存 intermediate_steps，"
+            "避免失败的工具调用被下一轮当作可模仿的做法"
+        )
+        return {}
+    return {
+        "intermediate_steps": dumps(
+            agent_executor.intermediate_steps, pretty=True
+        )
+    }
 
 
 def _aggregate_agent_frames(frames: List[dict]) -> Tuple[str, List[dict]]:
@@ -336,6 +357,10 @@ async def chat(
                 "input": query
             })
             last_tool = {}
+            # 这一轮是不是失败收尾（工具不存在、撞到 max_iterations、超时）。
+            # 失败轮的 intermediate_steps 一旦落库，下一轮会被当作"上次这么干过"
+            # 回放给模型，于是它照着继续空转。
+            round_failed = False
             async for item in chat_iterator:
 
                 data = {}
@@ -367,6 +392,8 @@ async def chat(
                     # 真正的失败原因盖成一个看不懂的键名；空 last_tool 还会往 tool_calls
                     # 里塞一条没有 function/id 的脏记录。
                     finish_output = item.return_values.get("output")
+                    if item.return_values.get("agent_error"):
+                        round_failed = True
                     if last_tool:
                         last_tool.update(tool_output=finish_output)
                         data["tool_calls"].append(last_tool)
@@ -427,16 +454,12 @@ async def chat(
                 )
                 yield ret.model_dump_json()
 
-            string_intermediate_steps = dumps(agent_executor.intermediate_steps, pretty=True)
-
             update_message(
                 session=session,
                 message_id=current_message_id,
                 owner_id=owner_id,
                 response=agent_executor.history[-1].get("content"),
-                metadata = {
-                    "intermediate_steps": string_intermediate_steps
-                }
+                metadata=_round_metadata(agent_executor, round_failed),
             )
              
         except asyncio.exceptions.CancelledError:
