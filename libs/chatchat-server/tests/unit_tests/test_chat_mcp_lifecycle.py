@@ -1,13 +1,14 @@
 """手动模式（chat() 路径）的 MCP 连接生命周期回归测试，全部离线。
 
-覆盖五处修复：
+覆盖六处修复：
 - 连接字典的构造从 ``create_models_chains`` 里拆成 ``build_mcp_connections``；
 - ``create_agent_executor`` 收到已连好的 ``mcp_client`` 时不再自己连（否则
   client 没人引用，每条消息漏一个 MCP 子进程，收尾还会炸 anyio cancel scope）；
 - 非流式收尾遇到 ``{"error": ...}`` 帧时抛原始错误，而不是 ``KeyError('choices')``；
 - ``_load_intermediate_steps`` 用显式 ``allowed_objects`` 白名单，上一轮的
   action/observation 能读回来（多轮工具上下文不再每轮清零），名单外的类仍被拒；
-- 读回来的上下文不会被 ``L.extend(L)`` 每轮翻倍。
+- 读回来的上下文不会被 ``L.extend(L)`` 每轮翻倍；
+- 非流式收尾按与前端一致的规则聚合帧，正文只算一遍。
 """
 import asyncio
 from unittest.mock import MagicMock
@@ -17,6 +18,7 @@ from fastapi import HTTPException
 
 import chatchat.server.chat.chat as chat_mod
 from langchain_chatchat import ChatPlatformAI, PlatformToolsRunnable
+from langchain_chatchat.callbacks.agent_callback_handler import AgentStatus
 
 
 class TestBuildMcpConnections:
@@ -234,3 +236,59 @@ class TestIntermediateStepsRoundTrip:
 
         # 没开 return_intermediate_steps 时返回空列表，不能把已有上下文清掉
         assert PlatformToolsRunnable.merge_intermediate_steps([step], []) == [step]
+
+
+class TestAggregateNonStreamFrames:
+    """非流式收尾：同一段文字这条流会推好几遍，正文只能算一遍。"""
+
+    @staticmethod
+    def _frame(status, content="", tool_calls=None):
+        return {
+            "status": status,
+            "model": "stub",
+            "created": 1,
+            "choices": [{"delta": {"content": content,
+                                   "tool_calls": tool_calls or []}}],
+        }
+
+    def test_answer_counted_once(self):
+        answer = "最近最火的是《XX》"
+        content, _ = chat_mod._aggregate_agent_frames([
+            self._frame(AgentStatus.llm_new_token, "最近最火的是"),
+            self._frame(AgentStatus.llm_new_token, "《XX》"),
+            self._frame(AgentStatus.llm_end, answer),          # 本轮全文回放
+            self._frame(AgentStatus.agent_finish, answer),     # 最终答案
+            self._frame(AgentStatus.chain_end, answer),        # 收尾块
+        ])
+        assert content == answer
+
+    def test_scaffolding_never_becomes_the_answer(self):
+        thought = "Thought: 调用工具\nAction: search_internet"
+        content, _ = chat_mod._aggregate_agent_frames([
+            self._frame(AgentStatus.llm_end, thought),
+            self._frame(AgentStatus.agent_action, thought),
+        ])
+        assert content == ""
+
+    def test_finish_falls_back_when_no_token_streamed(self):
+        content, _ = chat_mod._aggregate_agent_frames([
+            self._frame(AgentStatus.llm_new_token, ""),
+            self._frame(AgentStatus.agent_finish, "推理模型只回收尾块"),
+        ])
+        assert content == "推理模型只回收尾块"
+
+    def test_tool_calls_collected_from_tool_end(self):
+        call = {"index": 0, "id": "r1", "type": "function",
+                "function": {"name": "navigate", "arguments": {"url": "x"}}}
+        _, tool_calls = chat_mod._aggregate_agent_frames([
+            self._frame(AgentStatus.tool_start, "", [call]),
+            self._frame(AgentStatus.tool_end, "", [call]),
+        ])
+        assert tool_calls == [call]
+
+    def test_frames_without_status_are_treated_as_tokens(self):
+        content, _ = chat_mod._aggregate_agent_frames([
+            self._frame(None, "一段"),
+            self._frame(None, "二段"),
+        ])
+        assert content == "一段二段"

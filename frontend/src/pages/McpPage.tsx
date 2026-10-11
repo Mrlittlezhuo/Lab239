@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { parseEnvLines } from "@/lib/mcpEnv";
 import {
   Select,
   SelectContent,
@@ -36,6 +38,7 @@ export function McpPage() {
   const [command, setCommand] = useState("");
   const [transport, setTransport] = useState("stdio");
   const [description, setDescription] = useState("");
+  const [envText, setEnvText] = useState("");
 
   const { data: connections = [] } = useQuery({
     queryKey: ["mcp-connections"],
@@ -46,10 +49,11 @@ export function McpPage() {
     queryClient.invalidateQueries({ queryKey: ["mcp-connections"] });
 
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (env: Record<string, string>) =>
       createMcpConnection({
         server_name: name,
         args: command.trim() ? command.trim().split(/\s+/) : [],
+        env,
         transport,
         description,
       }),
@@ -59,6 +63,7 @@ export function McpPage() {
       setName("");
       setCommand("");
       setDescription("");
+      setEnvText("");
       invalidate();
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "创建失败"),
@@ -124,6 +129,12 @@ export function McpPage() {
               <code>{[c.server_name, ...c.args].join(" ")}</code>
               {c.description && <span className="ml-2">{c.description}</span>}
             </div>
+            {Object.keys(c.env ?? {}).length > 0 && (
+              // 只列名字不列值：这里存的多是 API key，别在列表里铺开
+              <div className="mt-1 text-xs text-muted-foreground">
+                env：<code>{Object.keys(c.env ?? {}).join(", ")}</code>
+              </div>
+            )}
           </div>
         ))}
         {connections.length === 0 && (
@@ -164,12 +175,34 @@ export function McpPage() {
               </Select>
             </div>
             <div className="space-y-1">
+              <Label>环境变量（每行一条 KEY=VALUE，可留空）</Label>
+              <Textarea
+                value={envText}
+                onChange={(e) => setEnvText(e.target.value)}
+                placeholder={"API_KEY=xxx\nCHROME_USER_DATA_DIR=/tmp/profile"}
+                rows={3}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                只传给这个 MCP 子进程；后端进程自己的环境变量不会被带进去。
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label>描述</Label>
               <Input value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
             <Button
               className="w-full"
-              onClick={() => createMutation.mutate()}
+              onClick={() => {
+                const parsed = parseEnvLines(envText);
+                if (parsed.invalid.length) {
+                  toast.error(
+                    `环境变量格式不对（每行 KEY=VALUE）：${parsed.invalid.join("；")}`,
+                  );
+                  return;
+                }
+                createMutation.mutate(parsed.env);
+              }}
               disabled={createMutation.isPending || !name.trim()}
             >
               创建

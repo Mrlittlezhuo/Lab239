@@ -118,6 +118,33 @@ def _load_intermediate_steps(last_metadata):
         return []
 
 
+def _aggregate_agent_frames(frames: List[dict]) -> Tuple[str, List[dict]]:
+    """把 Agent 流的帧聚合成非流式结果（正文 + 工具调用）。
+
+    正文只认逐 token 帧（``llm_new_token``）。同一段文字这条流会推好几遍：
+    ``llm_end`` 回放本轮全文、``agent_action`` 带 Thought/Action 脚手架、
+    ``agent_finish`` 与 ``chain_end`` 再给一遍最终答案 —— 无条件累加就会把答案
+    重复拼三四遍（实测 "EXAMPLE DOMAINEXAMPLE DOMAINEXAMPLE DOMAIN"）。
+    ``agent_finish``/``chain_end`` 只在整轮一个 token 都没流出来时兜底（推理模型
+    不吐 content 时结果不能是空串），``llm_end``/``agent_action`` 永不兜底，
+    免得把中间轮的脚手架当正文。取舍与前端 lib/sse/applyEvent.ts 一致。
+    """
+    tokens: List[str] = []
+    fallback = ""
+    tool_calls: List[dict] = []
+    for data in frames:
+        status = data.get("status")
+        delta = data["choices"][0]["delta"]
+        text = delta.get("content") or ""
+        if status == AgentStatus.llm_new_token or status is None:
+            tokens.append(text)
+        elif status in (AgentStatus.agent_finish, AgentStatus.chain_end) and text:
+            fallback = text
+        if status == AgentStatus.tool_end:
+            tool_calls += delta.get("tool_calls") or []
+    return "".join(tokens) or fallback, tool_calls
+
+
 def create_models_from_config(configs, callbacks, stream, max_tokens):
     configs = configs or Settings.model_settings.LLM_MODEL_CONFIG
     models = {}
@@ -480,6 +507,7 @@ async def chat(
             message_id=message_id,
         )
 
+        frames: List[dict] = []
         async for chunk in chat_iterator_event():
             data = json.loads(chunk)
             if "error" in data:
@@ -487,11 +515,11 @@ async def chat(
                 # choices 键。之前直接下标取会抛 KeyError('choices')，把真正的
                 # 失败原因盖成一个看不懂的键名。
                 raise HTTPException(status_code=500, detail=str(data["error"]))
-            if text := data["choices"][0]["delta"]["content"]:
-                ret.content += text
-            if data["status"] == AgentStatus.tool_end:
-                ret.tool_calls += data["choices"][0]["delta"]["tool_calls"]
-            ret.model = data["model"]
-            ret.created = data["created"]
+            frames.append(data)
+
+        ret.content, ret.tool_calls = _aggregate_agent_frames(frames)
+        if frames:
+            ret.model = frames[-1].get("model", ret.model)
+            ret.created = frames[-1].get("created", ret.created)
 
         return ret.model_dump()

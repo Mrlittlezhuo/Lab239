@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -121,6 +122,30 @@ async def _close_mcp_client_async(client: Optional[Any]) -> None:
         await client.__aexit__(None, None, None)
     except Exception:
         logger.warning("关闭 MCP 客户端失败（忽略）", exc_info=True)
+
+
+@asynccontextmanager
+async def _mcp_session(use_mcp: bool):
+    """在**消费这条运行的那个任务里**建立并关闭 MCP 连接。
+
+    MCP 客户端 ``__aenter__`` 进入的是 anyio 的 cancel scope，只能在进入它的那个
+    任务里退出。以前连接建在路由协程里、关在 ``EventSourceResponse`` 的响应体里
+    （Starlette 用独立任务迭代 ``body_iterator``），收尾必炸
+    ``Attempted to exit cancel scope in a different task than it was entered in``；
+    非流式分支更糟：成功路径上根本没有关闭调用，每条消息留下一个常驻的 server
+    子进程（浏览器类 server 还会带起一串 Chrome）。
+
+    用法：在需要工具的地方 ``async with _mcp_session(use_mcp) as (tools, client)``，
+    运行器必须在同一个 ``async with`` 里创建并使用完。
+    """
+    if not use_mcp:
+        yield {}, None
+        return
+    mcp_tools, client = await _load_mcp_tools()
+    try:
+        yield mcp_tools, client
+    finally:
+        await _close_mcp_client_async(client)
 
 
 # 失败/取消的 Agent 轮持久化文本（``_final_message_text`` 生成）。这类文本
@@ -347,26 +372,21 @@ async def agent_run_chat(
     if not owner_id:
         raise ValueError("owner_id 不能为空（必须来自服务端认证上下文）")
 
-    tools = _build_tools(tool_config)
-    mcp_client = None
-    try:
-        if use_mcp:
-            mcp_tools, mcp_client = await _load_mcp_tools()
-            tools.update(mcp_tools)
+    base_tools = _build_tools(tool_config)
+    history = _build_history(session, conversation_id, owner_id, history_len)
+    memory_messages = _build_memory_messages(
+        session, owner_id, query, conversation_id, message_id
+    )
+    planner = _build_planner(model_name)
 
-        history = _build_history(session, conversation_id, owner_id, history_len)
-        memory_messages = _build_memory_messages(
-            session, owner_id, query, conversation_id, message_id
-        )
-
-        planner = _build_planner(model_name)
+    def _runner(mcp_tools: Dict[str, Any]):
         # 任务 014：运行时由统一工厂创建（默认 LangGraph，legacy 仅回退）；
         # Chat API / WebUI 不感知具体运行时，差异收敛在此处。
-        runner = create_agent_runtime(
+        return create_agent_runtime(
             session_factory=_session_factory,
             owner_id=owner_id,
             planner=planner,
-            tools=tools,
+            tools={**base_tools, **mcp_tools},
             goal=query,
             conversation_id=conversation_id,
             source_message_id=message_id,
@@ -376,27 +396,30 @@ async def agent_run_chat(
             model_name=model_name or "",
         )
 
-        if not stream:
+    if not stream:
+        # 连接建在、也关在这个任务里（见 _mcp_session 注释）
+        async with _mcp_session(use_mcp) as (mcp_tools, _client):
+            runner = _runner(mcp_tools)
             events: List[dict] = []
             async for ev in runner.run():
                 events.append(ev)
             _persist_final_message(message_id, owner_id, runner)
             return _aggregate_result(events, runner, conversation_id)
 
-        from sse_starlette import EventSourceResponse
+    from sse_starlette import EventSourceResponse
 
-        async def _stream() -> Any:
+    async def _stream() -> Any:
+        # runner 持有 MCP 工具的引用，所以它必须和连接建在同一个任务里 —— 也就是
+        # 在响应体开始迭代时才建，不能提前到路由协程里。
+        async with _mcp_session(use_mcp) as (mcp_tools, _client):
+            runner = _runner(mcp_tools)
             try:
                 async for ev in runner.run():
                     yield _event_to_sse(ev, message_id, model_name or "")
             finally:
-                await _close_mcp_client_async(mcp_client)
                 _persist_final_message(message_id, owner_id, runner)
 
-        return EventSourceResponse(_stream())
-    except Exception:
-        await _close_mcp_client_async(mcp_client)
-        raise
+    return EventSourceResponse(_stream())
 
 
 async def agent_run_resume(
@@ -445,49 +468,45 @@ async def agent_run_resume(
     finally:
         session.close()
 
-    tools: Dict[str, Any]
+    base_tools: Dict[str, Any]
     if tool_config:
-        tools = _build_tools(tool_config)
+        base_tools = _build_tools(tool_config)
     else:
         # 未显式给出工具配置时恢复完整注册表（与运行当时一致的能力面）
-        tools = {name: t for name, t in get_tool().items() if t}
-    mcp_client = None
+        base_tools = {name: t for name, t in get_tool().items() if t}
+    history: List[Dict[str, str]] = []
+    memory_messages: List[Dict[str, str]] = []
+    ctx_session = _session_factory()
     try:
-        if use_mcp:
-            mcp_tools, mcp_client = await _load_mcp_tools()
-            tools.update(mcp_tools)
-
-        history: List[Dict[str, str]] = []
-        memory_messages: List[Dict[str, str]] = []
-        ctx_session = _session_factory()
+        if conversation_id:
+            history = _build_history(ctx_session, conversation_id, owner_id, None)
         try:
-            if conversation_id:
-                history = _build_history(ctx_session, conversation_id, owner_id, None)
-            try:
-                memory_messages = [
-                    {"role": m.get("role", "system"), "content": m.get("content", "")}
-                    for m in (
-                        memory_service.memory_system_messages(
-                            ctx_session, owner_id, goal, conversation_id
-                        )
-                        or []
+            memory_messages = [
+                {"role": m.get("role", "system"), "content": m.get("content", "")}
+                for m in (
+                    memory_service.memory_system_messages(
+                        ctx_session, owner_id, goal, conversation_id
                     )
-                ]
-            except Exception:
-                logger.warning("恢复时读取长期记忆失败（忽略）", exc_info=True)
-                memory_messages = []
-        finally:
-            try:
-                ctx_session.close()
-            except Exception:
-                pass
+                    or []
+                )
+            ]
+        except Exception:
+            logger.warning("恢复时读取长期记忆失败（忽略）", exc_info=True)
+            memory_messages = []
+    finally:
+        try:
+            ctx_session.close()
+        except Exception:
+            pass
 
-        planner = _build_planner(model_name)
-        runner = create_agent_runtime(
+    planner = _build_planner(model_name)
+
+    def _runner(mcp_tools: Dict[str, Any]):
+        return create_agent_runtime(
             session_factory=_session_factory,
             owner_id=owner_id,
             planner=planner,
-            tools=tools,
+            tools={**base_tools, **mcp_tools},
             goal=goal,
             conversation_id=conversation_id or None,
             source_message_id=source_message_id,
@@ -499,27 +518,30 @@ async def agent_run_resume(
             forced="langgraph",
         )
 
-        if not stream:
+    if not stream:
+        # 连接建在、也关在这个任务里（见 _mcp_session 注释）
+        async with _mcp_session(use_mcp) as (mcp_tools, _client):
+            runner = _runner(mcp_tools)
             events: List[dict] = []
             async for ev in runner.run():
                 events.append(ev)
             _persist_final_message(source_message_id, owner_id, runner)
             return _aggregate_result(events, runner, conversation_id)
 
-        from sse_starlette import EventSourceResponse
+    from sse_starlette import EventSourceResponse
 
-        async def _stream() -> Any:
+    async def _stream() -> Any:
+        # 同 agent_run_chat：连接和持有 MCP 工具的 runner 都必须建在迭代响应体
+        # 的那个任务里，否则收尾会在 anyio cancel scope 处炸
+        async with _mcp_session(use_mcp) as (mcp_tools, _client):
+            runner = _runner(mcp_tools)
             try:
                 async for ev in runner.run():
                     yield _event_to_sse(ev, source_message_id, model_name or "")
             finally:
-                await _close_mcp_client_async(mcp_client)
                 _persist_final_message(source_message_id, owner_id, runner)
 
-        return EventSourceResponse(_stream())
-    except Exception:
-        await _close_mcp_client_async(mcp_client)
-        raise
+    return EventSourceResponse(_stream())
 
 
 __all__ = [
