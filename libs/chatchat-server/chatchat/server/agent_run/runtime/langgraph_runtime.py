@@ -44,6 +44,7 @@ from chatchat.server.agent_run.runtime.checkpoint import (
     initialize_agent_checkpoint_store,
     latest_agent_checkpoint_id,
 )
+from chatchat.server.agent_run.planner import StreamingPlanner
 from chatchat.server.agent_run.runner import (
     DEFAULT_MAX_STEPS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -97,6 +98,47 @@ async def _latest_checkpoint_id(store: Any, thread_id: str) -> Optional[str]:
     return tails[0]
 
 
+async def _interleave(
+    updates: Any, previews: asyncio.Queue
+) -> AsyncIterator[tuple]:
+    """按到达顺序合并图节点更新与规划器正文预览。
+
+    图只在节点边界产出更新，规划器在节点内部逐 token 产生正文：两个来源
+    必须同时等，否则规划期间预览全堆在队列里，直到节点结束才一次性涌出
+    （等于没有流式）。产出 ``("graph", chunk)`` 与
+    ``("preview", (阶段, 文本))``。
+
+    消费者提前关闭（客户端断开）时取消两个未完成的等待并关闭上游图流，
+    绝不泄漏 langgraph ``astream`` 的内部任务。
+    """
+    ait = updates.__aiter__()
+    graph_task = asyncio.ensure_future(ait.__anext__())
+    preview_task = asyncio.ensure_future(previews.get())
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {graph_task, preview_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if preview_task in done:
+                yield "preview", preview_task.result()
+                preview_task = asyncio.ensure_future(previews.get())
+            if graph_task in done:
+                try:
+                    chunk = graph_task.result()
+                except StopAsyncIteration:
+                    return
+                yield "graph", chunk
+                graph_task = asyncio.ensure_future(ait.__anext__())
+    finally:
+        graph_task.cancel()
+        preview_task.cancel()
+        await asyncio.gather(graph_task, preview_task, return_exceptions=True)
+        aclose = getattr(updates, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 class LangGraphRuntime:
     def __init__(
         self,
@@ -146,6 +188,25 @@ class LangGraphRuntime:
         self.status: str = "pending"
         self.final_result: Optional[str] = None
         self.error: Optional[str] = None
+        # 规划/判断正文预览的旁路通道，仅流式执行图期间非空
+        self._preview_queue: Optional[asyncio.Queue] = None
+        self._preview_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _push_preview(self, phase: str, text: str) -> None:
+        """把规划器产生的正文增量投进运行事件流。
+
+        规划/判断的模型调用是同步阻塞的，被放到工作线程里执行（否则事件
+        循环被占住，预览根本发不出去），因此必须经 ``call_soon_threadsafe``
+        回到循环线程再入队。队列不存在（非流式运行）或循环已关闭（客户端
+        断开）时直接丢弃——预览只是显示加速，绝不影响运行本身。
+        """
+        queue, loop = self._preview_queue, self._preview_loop
+        if queue is None or loop is None or not text:
+            return
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, (phase, text))
+        except RuntimeError:
+            pass
 
     # -- 统一事件流 -------------------------------------------------------
 
@@ -350,20 +411,39 @@ class LangGraphRuntime:
         input_state = None if resume else self._initial_state()
         merged: Dict[str, Any] = {} if resume else dict(input_state)
 
-        # durability="sync"：每个超级步骤的 checkpoint 在下一步开始前同步
-        # 落盘。默认的 "async" 模式把 checkpoint 写入排成不阻塞事件循环
-        # 的任务——消费者暂停/断开或进程崩溃时未及执行，落盘 checkpoint
-        # 链会明显落后于步骤表，恢复将加载早期 checkpoint、重放
-        # prepare_plan 并可能重复执行已完成工具步骤。
-        async for chunk in graph.astream(
-            input_state, cfg, stream_mode="updates", durability="sync"
-        ):
-            for node_name, update in (chunk or {}).items():
-                if isinstance(update, dict):
-                    merged.update(update)
-                ev = self._node_event(session, node_name, update or {})
-                if ev is not None:
-                    yield ev
+        # 规划/判断在节点内部逐 token 产生正文，图只在节点边界产出更新：
+        # 两个来源必须并发消费，否则整个规划期间前端一个字都收不到。
+        # 预览是旁路，最终答案仍以 plan_ready / run_completed 为准。
+        previews: asyncio.Queue = asyncio.Queue()
+        plain_planner = self.planner
+        self._preview_queue = previews
+        self._preview_loop = asyncio.get_running_loop()
+        self.planner = StreamingPlanner(plain_planner, self._push_preview)
+        try:
+            # durability="sync"：每个超级步骤的 checkpoint 在下一步开始前
+            # 同步落盘。默认的 "async" 模式把 checkpoint 写入排成不阻塞事件
+            # 循环的任务——消费者暂停/断开或进程崩溃时未及执行，落盘
+            # checkpoint 链会明显落后于步骤表，恢复将加载早期 checkpoint、
+            # 重放 prepare_plan 并可能重复执行已完成工具步骤。
+            updates = graph.astream(
+                input_state, cfg, stream_mode="updates", durability="sync"
+            )
+            async for kind, payload in _interleave(updates, previews):
+                if kind == "preview":
+                    phase, text = payload
+                    yield {"type": f"{phase}_delta", "run_id": self.run_id,
+                           "text": text}
+                    continue
+                for node_name, update in (payload or {}).items():
+                    if isinstance(update, dict):
+                        merged.update(update)
+                    ev = self._node_event(session, node_name, update or {})
+                    if ev is not None:
+                        yield ev
+        finally:
+            self.planner = plain_planner
+            self._preview_queue = None
+            self._preview_loop = None
 
         # 图结束后统一收敛并输出唯一终态事件
         final_status = merged.get("status")

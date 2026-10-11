@@ -75,6 +75,32 @@ export function applySseEvent(prev: UiMessage[], event: SseEvent): UiMessage[] {
       break;
     }
     case "agent": {
+      // 正文预览：模型还在生成时把已解码的正文增量堆到运行面板上。它不
+      // 改变运行状态，也不写进消息正文——正文只认 run_completed 的最终答案。
+      if (event.event === "plan_delta" || event.event === "answer_delta") {
+        const prev = m.agent;
+        const preview: UiAgentRun = {
+          runId: event.runId ?? prev?.runId,
+          status: prev?.status ?? "run_created",
+          plan: prev?.plan,
+          steps: prev?.steps ?? [],
+          finalResult: prev?.finalResult,
+          error: prev?.error,
+          livePlan: prev?.livePlan,
+          liveAnswer: prev?.liveAnswer,
+        };
+        if (event.event === "plan_delta") {
+          preview.livePlan = (preview.livePlan ?? "") + event.content;
+        } else {
+          preview.liveAnswer = (preview.liveAnswer ?? "") + event.content;
+        }
+        copy[idx] = { ...m, agent: preview };
+        break;
+      }
+      const terminal =
+        event.event === "run_completed" ||
+        event.event === "run_failed" ||
+        event.event === "run_cancelled";
       const agent: UiAgentRun = {
         runId: event.runId ?? m.agent?.runId,
         status: event.event,
@@ -82,11 +108,20 @@ export function applySseEvent(prev: UiMessage[], event: SseEvent): UiMessage[] {
         steps: event.steps ?? m.agent?.steps ?? [],
         finalResult: event.finalResult ?? m.agent?.finalResult,
         error: event.error ?? m.agent?.error,
+        // 到终态就丢掉预览：正文改用最终答案，同一段字不显示两遍
+        livePlan: terminal ? undefined : m.agent?.livePlan,
+        liveAnswer: terminal ? undefined : m.agent?.liveAnswer,
       };
       if (event.step && !event.steps) {
         agent.steps = [...(m.agent?.steps ?? []), event.step];
       }
-      copy[idx] = { ...m, agent };
+      // Agent 轮的回答此前只有刷新后（从库里读）才出现在正文里，流式期间
+      // 正文一直是空的；终态时把最终答案落到正文。
+      const content =
+        event.event === "run_completed" && event.finalResult && !m.content.trim()
+          ? event.finalResult
+          : m.content;
+      copy[idx] = { ...m, content, agent };
       break;
     }
     case "reference":

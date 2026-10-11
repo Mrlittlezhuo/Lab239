@@ -47,19 +47,23 @@ def _session_factory() -> Session:
 
 
 def _build_planner(model_name: Optional[str] = None) -> LLMPlanner:
-    """用现有模型配置构建规划器（非流式）；测试中替换为假规划器。
+    """用现有模型配置构建规划器；测试中替换为假规划器。
 
     必须使用 ``local_wrap=False``（直连模型平台，如 ollama），不能用
     ``local_wrap=True``：后者会把 LLM 指向 chatchat 自己的 ``/v1`` 接口，
-    而规划器在事件循环线程里同步调用 ``llm.invoke()``，会形成"事件循环
-    阻塞等待本服务 /v1、/v1 又只能靠事件循环处理"的自引用死锁，导致
-    Agent Run 永远停在"已启动"。与意图路由器（router.py 用默认
-    ``local_wrap=False`` 直连 ollama）保持一致。
+    而规划器同步调用模型，会形成"事件循环阻塞等待本服务 /v1、/v1 又只能
+    靠事件循环处理"的自引用死锁，导致 Agent Run 永远停在"已启动"。与意图
+    路由器（router.py 用默认 ``local_wrap=False`` 直连 ollama）保持一致。
+
+    ``streaming=True`` 是为了让 ``llm.stream()`` 真的逐片返回：langchain
+    在 ``streaming=False`` 时把 ``stream()`` 退化成一次性返回整段（实测
+    只出 1 片），那样 Agent 任务就没有正文预览可言。解析与校验仍在收完
+    之后做，流式只改变"什么时候能看到字"。
     """
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
         model_name=name,
-        streaming=False,
+        streaming=True,
         local_wrap=False,
         max_tokens=Settings.model_settings.MAX_TOKENS,
     )
@@ -224,6 +228,10 @@ def _event_to_sse(ev: dict, message_id: Optional[str], model_name: str) -> str:
     content = ""
     if etype == "run_completed":
         content = ev.get("final_result") or ""
+    elif etype in ("plan_delta", "answer_delta"):
+        # 生成中的正文预览：只带本片增量。它只是显示加速，最终答案仍以
+        # plan_ready / run_completed 里的结构化结果为准。
+        content = ev.get("text") or ""
     elif etype == "run_failed":
         content = f"Agent 运行失败：{ev.get('error') or '未知原因'}"
     elif etype == "run_cancelled":
@@ -380,6 +388,8 @@ async def agent_run_chat(
             runner = _runner(mcp_tools)
             events: List[dict] = []
             async for ev in runner.run():
+                if ev["type"] in ("plan_delta", "answer_delta"):
+                    continue  # 正文预览只对流式响应有意义
                 events.append(ev)
             _persist_final_message(message_id, owner_id, runner)
             return _aggregate_result(events, runner, conversation_id)
@@ -502,6 +512,8 @@ async def agent_run_resume(
             runner = _runner(mcp_tools)
             events: List[dict] = []
             async for ev in runner.run():
+                if ev["type"] in ("plan_delta", "answer_delta"):
+                    continue  # 正文预览只对流式响应有意义
                 events.append(ev)
             _persist_final_message(source_message_id, owner_id, runner)
             return _aggregate_result(events, runner, conversation_id)

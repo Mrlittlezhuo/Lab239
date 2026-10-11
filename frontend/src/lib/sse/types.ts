@@ -38,7 +38,11 @@ export type AgentEventType =
   | "replanned"
   | "run_completed"
   | "run_failed"
-  | "run_cancelled";
+  | "run_cancelled"
+  // 生成中的正文预览（模型分片里的正文字段），只用于显示加速：
+  // 最终答案以 plan_ready / run_completed 里的结构化结果为准
+  | "plan_delta"
+  | "answer_delta";
 
 export interface ReferenceData {
   index?: number;

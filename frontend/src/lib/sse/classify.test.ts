@@ -59,7 +59,7 @@ describe("classifyFrame", () => {
     });
   });
 
-  it("八种 agent_event 都能分类", () => {
+  it("十种 agent_event 都能分类", () => {
     for (const ev of [
       "run_created",
       "plan_ready",
@@ -69,6 +69,8 @@ describe("classifyFrame", () => {
       "run_completed",
       "run_failed",
       "run_cancelled",
+      "plan_delta",
+      "answer_delta",
     ]) {
       const e = classifyFrame(chunk({ class_name: "AgentRunEvent", agent_event: ev }));
       expect(e).toMatchObject({ kind: "agent", event: ev });

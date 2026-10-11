@@ -31,6 +31,7 @@ Run/Step（``agent_run`` / ``agent_step`` 表）在每个节点开始/结束时
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, Dict, List, Optional, TypedDict
@@ -128,7 +129,10 @@ def build_agent_graph(rt: Any, checkpointer: Any):
         run_id, owner = state["run_id"], state["owner_id"]
         try:
             try:
-                plan = rt.planner.plan(_ctx(state))
+                # 模型调用是同步阻塞的，必须放工作线程：留在事件循环里
+                # 会把循环占死，规划期间正文预览根本发不出去（等于没有
+                # 流式），运行期间其它请求也被卡住。
+                plan = await asyncio.to_thread(rt.planner.plan, _ctx(state))
             except S.PlanError as exc:
                 return _fail_terminal(
                     session, run_id, owner, f"计划生成失败（模型输出无效）：{exc}"
@@ -344,7 +348,11 @@ def build_agent_graph(rt: Any, checkpointer: Any):
         try:
             results = [S.StepResult(**r) for r in state.get("results") or []]
             try:
-                decision = rt.planner.decide(_ctx(state), results)
+                # 同 prepare_plan：同步的模型调用放工作线程，保证判断
+                # 期间事件循环可用、最终答案能逐 token 预览
+                decision = await asyncio.to_thread(
+                    rt.planner.decide, _ctx(state), results
+                )
             except S.PlanError as exc:
                 return _fail_terminal(
                     session, run_id, owner, f"执行判断失败（模型输出无效）：{exc}"

@@ -144,3 +144,89 @@ describe("applySseEvent token 去重", () => {
     });
   });
 });
+
+/**
+ * Agent 任务的正文藏在模型流出的 JSON 里，后端把已经能确定的部分作为
+ * `plan_delta` / `answer_delta` 提前推过来。预览只显示在运行面板里，
+ * 消息正文只认 `run_completed` 的最终答案（预览可能来自被重试掉的输出）。
+ */
+const agentFrame = (o: Record<string, unknown>) =>
+  frame({
+    class_name: "AgentRunEvent",
+    run_id: "r1",
+    ...o,
+  });
+
+const agentDelta = (event: string, content: string) =>
+  agentFrame({ agent_event: event, choices: [{ delta: { content } }] });
+
+describe("applySseEvent Agent 正文预览", () => {
+  it("plan_delta / answer_delta 只累积预览，不写正文也不改状态", () => {
+    const msg = run([
+      agentFrame({ agent_event: "run_created" }),
+      agentDelta("plan_delta", "查一下明天天气"),
+      agentDelta("answer_delta", "上海明天"),
+      agentDelta("answer_delta", "晴，24℃"),
+    ]);
+    expect(msg.content).toBe("");
+    expect(msg.agent?.status).toBe("run_created");
+    expect(msg.agent?.livePlan).toBe("查一下明天天气");
+    expect(msg.agent?.liveAnswer).toBe("上海明天晴，24℃");
+  });
+
+  it("预览不打断步骤时间线", () => {
+    const msg = run([
+      agentFrame({
+        agent_event: "step_started",
+        agent_step: { seq: 1, tool_name: "search_internet", status: "running" },
+      }),
+      agentDelta("answer_delta", "边判断边出字"),
+      agentFrame({
+        agent_event: "step_finished",
+        agent_step: { seq: 1, tool_name: "search_internet", status: "completed" },
+      }),
+    ]);
+    expect(msg.agent?.steps).toHaveLength(2);
+    expect(msg.agent?.liveAnswer).toBe("边判断边出字");
+  });
+
+  it("run_completed：最终答案落到正文，预览清空", () => {
+    const answer = "上海明天晴，24℃，适合出门。";
+    const msg = run([
+      agentDelta("answer_delta", "上海明天晴，24℃"),
+      agentFrame({
+        agent_event: "run_completed",
+        agent_final_result: answer,
+        choices: [{ delta: { content: answer } }],
+      }),
+    ]);
+    expect(msg.content).toBe(answer);
+    expect(msg.agent?.liveAnswer).toBeUndefined();
+    expect(msg.agent?.livePlan).toBeUndefined();
+    expect(msg.agent?.status).toBe("run_completed");
+  });
+
+  it("正文已有内容时 run_completed 不再写一遍", () => {
+    let messages: UiMessage[] = [
+      { key: "u1", role: "user", content: "目标", toolCalls: [] },
+      { key: "a1", role: "assistant", content: "已有正文", toolCalls: [], streaming: true },
+    ];
+    messages = applySseEvent(
+      messages,
+      classifyFrame(
+        agentFrame({ agent_event: "run_completed", agent_final_result: "最终答案" }),
+      ),
+    );
+    expect(messages[messages.length - 1].content).toBe("已有正文");
+  });
+
+  it("失败终态也清空预览，错误仍显示在面板里", () => {
+    const msg = run([
+      agentDelta("answer_delta", "写到一半"),
+      agentFrame({ agent_event: "run_failed", agent_error: "模型输出无效" }),
+    ]);
+    expect(msg.agent?.liveAnswer).toBeUndefined();
+    expect(msg.agent?.error).toBe("模型输出无效");
+    expect(msg.content).toBe("");
+  });
+});

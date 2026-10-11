@@ -32,6 +32,9 @@ export interface UiAgentRun {
   steps: AgentStepData[];
   finalResult?: string;
   error?: string;
+  /** 生成中的正文预览（计划摘要 / 最终答案），终态后清空 */
+  livePlan?: string;
+  liveAnswer?: string;
 }
 
 export interface UiMessage {
