@@ -10,7 +10,6 @@ from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
 
-from chatchat.server.knowledge_base.kb_doc_api import DocumentWithVSId
 from chatchat.server.pydantic_v1 import BaseModel, Extra, create_model
 from langchain_chatchat.utils import PYDANTIC_V2
 
@@ -153,17 +152,33 @@ def regist_tool(
         return t
 
 
+def _doc_page_content(doc: Any) -> str:
+    """取出一条结果的正文。
+
+    `docs` 里三种形状都出现过：`search_internet` 放的是 langchain 的 `Document`，
+    `url_reader` 放的是裸 dict，`search_local_knowledgebase` 放的是 `DocumentWithVSId`。
+    旧写法 `DocumentWithVSId.model_validate(doc)` 在 pydantic v2 下只认 dict 或
+    `DocumentWithVSId` 本身，父类 `Document` 实例直接被拒
+    （`Input should be a valid dictionary or instance of DocumentWithVSId`）——
+    联网搜索明明搜到了内容，工具却整步 failed。这里本来也只需要正文。
+    """
+    if isinstance(doc, dict):
+        return doc.get("page_content") or ""
+    return getattr(doc, "page_content", None) or ""
+
+
 def format_context(self: BaseToolOutput) -> str:
     '''
     将包含知识库输出的ToolOutput格式化为 LLM 需要的字符串
     '''
     context = ""
-    docs = self.data["docs"]
+    docs = self.data.get("docs") or []
     source_documents = []
 
-    for inum, doc in enumerate(docs):
-        doc = DocumentWithVSId.model_validate(doc)
-        source_documents.append(doc.page_content)
+    for doc in docs:
+        content = _doc_page_content(doc)
+        if content.strip():
+            source_documents.append(content)
 
     if len(source_documents) == 0:
         context = "没有找到相关文档,请更换关键词重试"
