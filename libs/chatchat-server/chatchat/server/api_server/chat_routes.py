@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from langchain_core.prompts.prompt import PromptTemplate
 
+from chatchat.server.agent.tools_access import available_tools, partition_tools
 from chatchat.server.api_server.api_schemas import OpenAIChatInput
 from chatchat.server.auth.deps import require_password_changed
 from chatchat.server.chat.chat import chat
@@ -75,7 +76,7 @@ def _require_configured_model(body: OpenAIChatInput) -> None:
         )
 
 
-def _resolve_tool_names(tools, registry: Dict) -> List[str]:
+def _resolve_tool_names(tools, registry: Dict, block_reasons: Dict[str, str] = None) -> List[str]:
     """把请求体里的 ``tools`` 收敛成工具名列表，配置/拼写问题给 400 而不是 500。
 
     两种形状都要支持：前端（``frontend/src/api/chat.ts``）发的是名字数组
@@ -100,6 +101,13 @@ def _resolve_tool_names(tools, registry: Dict) -> List[str]:
                 detail=f"tools 中有无法识别的项：{item!r}",
             )
         if name not in registry:
+            blocked = (block_reasons or {}).get(name)
+            if blocked:
+                # 工具存在但当前不该用（未配置 / 只给管理员）：把原因说清楚，
+                # 否则用户只会看到"我勾了工具但没生效"
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=blocked
+                )
             available = "、".join(sorted(registry)) or "无"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -197,9 +205,10 @@ async def chat_completions(
     chat_model_config = {}  # TODO: 前端支持配置模型
     tool_config = {}
     if body.tools:
-        # `get_tool()` 会 reload tools_factory 并顺带查一次知识库列表，
+        # `partition_tools()` 会 reload tools_factory 并顺带查一次知识库列表，
         # 没勾工具的普通对话没必要付这个代价（也避免工具导入问题波及所有轮次）。
-        tool_names = _resolve_tool_names(body.tools, get_tool())
+        allowed, blocked = partition_tools(user, get_tool())
+        tool_names = _resolve_tool_names(body.tools, allowed, blocked)
         tool_config = {name: get_tool_config(name) for name in tool_names}
 
     # 任务 011：extra 中显式开启 agent_run 时，走新的单 Agent 任务闭环
@@ -248,7 +257,10 @@ async def chat_completions(
             metadata=extra.get("metadata", {}),
             chat_model_config=extra.get("chat_model_config", chat_model_config),
             auto_use_mcp=bool(Settings.model_settings.AUTO_ROUTE_USE_MCP),
-            available_tools=get_tool(),
+            # 只把"这台机器配好了、这个用户能用"的工具交给意图路由：
+            # 否则模型会挑一个必然失败的工具（假 key、占位连接串、只有管理员
+            # 能用的 shell），用户看到的只是"工具没生效"
+            available_tools=available_tools(user, get_tool()),
         )
 
     result = await chat(

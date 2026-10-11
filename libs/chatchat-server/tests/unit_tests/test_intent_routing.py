@@ -228,6 +228,26 @@ class BoomRouter:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _configured_tool_settings(monkeypatch):
+    """让工具策略只看"配没配"，不取决于本机 tool_settings.yaml 里留着的占位符。
+
+    本文件测的是意图路由与候选清单。`weather_check` 这类工具在本机配置里是空
+    key，会被 `tools_access` 挡在候选之外，路由结果就变成"没有可用工具"，
+    测的就不是路由了。
+    """
+    from chatchat.server.agent import tools_access
+
+    table = {
+        "weather_check": {"api_key": "test-key"},
+        "amap": {"api_key": "test-key"},
+        "wolfram": {"appid": "test-appid"},
+        "text2sql": {"sqlalchemy_connect_str": "sqlite:///test.db"},
+        "shell_tool": {"use": False},
+    }
+    monkeypatch.setattr(tools_access, "_section", lambda name: table.get(name, {}))
+
+
 @pytest.fixture
 def secret(monkeypatch):
     """设置一个 >=32 字节的测试密钥（非真实密钥）。"""

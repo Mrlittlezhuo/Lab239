@@ -107,6 +107,26 @@ from test_intent_routing import (  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _configured_tool_settings(monkeypatch):
+    """让工具策略只看"配没配"，不取决于本机 tool_settings.yaml 里留着的占位符。
+
+    本文件测的是意图路由与分发。`weather_check` 这类工具在本机配置里是空 key，
+    会被 `tools_access` 挡在候选清单之外，分发结果就变成"回退直接回答"，
+    测的就不是分发了。
+    """
+    from chatchat.server.agent import tools_access
+
+    table = {
+        "weather_check": {"api_key": "test-key"},
+        "amap": {"api_key": "test-key"},
+        "wolfram": {"appid": "test-appid"},
+        "text2sql": {"sqlalchemy_connect_str": "sqlite:///test.db"},
+        "shell_tool": {"use": False},
+    }
+    monkeypatch.setattr(tools_access, "_section", lambda name: table.get(name, {}))
+
+
+@pytest.fixture(autouse=True)
 def _reset_sse_app_status():
     """隔离 sse-starlette 的进程级全局状态。
 

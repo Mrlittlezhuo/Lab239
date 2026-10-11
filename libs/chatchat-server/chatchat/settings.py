@@ -680,6 +680,17 @@ class ToolSettings(BaseFileSettings):
     6、若现有数据库表名难于让大模型理解，可配置下面table_comments字段，补充说明某些表的作用。
     '''
   
+    shell_tool: dict = {
+        "use": False,
+    }
+    '''系统命令工具（shell）配置项。字段名不能叫 shell —— 环境变量 SHELL
+    会被 pydantic-settings 当成这个字段的值，整个配置直接解析失败。
+
+    该工具在服务器上以 subprocess(shell=True) 执行任意命令，因此：
+    1. 默认关闭，设为 true 才会出现在可选工具里；
+    2. 即使打开也只允许管理员账号使用（见 server/agent/tools_access.py）。
+    '''
+
     amap: dict = {
         "use": False,
         "api_key": "高德地图 API KEY",
