@@ -14,7 +14,7 @@ from langchain_core.prompts.chat import ChatPromptTemplate
 from chatchat.server.agents_registry.agents_registry import agents_registry
 from sse_starlette.sse import EventSourceResponse
 
-from chatchat.server.mcp_connections import build_mcp_connections
+from chatchat.server.mcp_connections import build_mcp_connections, prepare_mcp_connections
 from chatchat.settings import Settings
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
 from langchain_chatchat.callbacks.agent_callback_handler import (
@@ -310,7 +310,8 @@ async def chat(
             except Exception:
                 pass
             if use_mcp:
-                mcp_connections = build_mcp_connections()
+                # 浏览器类 MCP 依赖的专用浏览器不在时，这里会先把它拉起来再连
+                mcp_connections = await prepare_mcp_connections()
                 if mcp_connections:
                     # 连接必须建在消费这条流的同一个任务里，收尾也在同一个任务里
                     # 关掉；换任务关会在 anyio 的 cancel scope 处炸

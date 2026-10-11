@@ -85,11 +85,12 @@ async def _load_mcp_tools() -> Tuple[Dict[str, Any], Optional[Any]]:
     返回 ``(tools, client)``：client 在运行期间必须保持存活（工具调用依赖
     其会话），调用方负责在运行结束后关闭。
     """
-    from chatchat.server.mcp_connections import build_mcp_connections
+    from chatchat.server.mcp_connections import prepare_mcp_connections
     from langchain_chatchat.agents.platform_tools.base import PlatformToolsRunnable
 
-    # 连接字典的构造收敛在 mcp_connections（含 MCP 通用配置），两条路径共用
-    mcp_connections = build_mcp_connections()
+    # 连接字典的构造收敛在 mcp_connections（含 MCP 通用配置），两条路径共用；
+    # 浏览器类 MCP 依赖的专用浏览器不在时，prepare 会先把它拉起来
+    mcp_connections = await prepare_mcp_connections()
     if not mcp_connections:
         return {}, None
     client = await PlatformToolsRunnable.create_mcp_client(mcp_connections)
