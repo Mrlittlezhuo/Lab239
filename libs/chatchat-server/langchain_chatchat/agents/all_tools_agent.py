@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import (
@@ -104,8 +105,11 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     next_step_output, intermediate_steps, run_manager=run_manager
                 )
 
+            previous_steps = list(intermediate_steps)
             intermediate_steps.extend(next_step_output)
             stopped = self._stop_on_missing_tool(next_step_output, name_to_tool_map)
+            if stopped is None:
+                stopped = self._stop_on_repeated_call(next_step_output, previous_steps)
             if stopped is not None:
                 return self._return(
                     stopped, intermediate_steps, run_manager=run_manager
@@ -162,10 +166,15 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                             run_manager=run_manager,
                         )
 
+                    previous_steps = list(intermediate_steps)
                     intermediate_steps.extend(next_step_output)
                     stopped = self._stop_on_missing_tool(
                         next_step_output, name_to_tool_map
                     )
+                    if stopped is None:
+                        stopped = self._stop_on_repeated_call(
+                            next_step_output, previous_steps
+                        )
                     if stopped is not None:
                         return await self._areturn(
                             stopped, intermediate_steps, run_manager=run_manager
@@ -288,6 +297,53 @@ class PlatformToolsAgentExecutor(AgentExecutor):
                     log=reason,
                 )
         return None
+
+    @staticmethod
+    def _call_key(action: AgentAction, observation: Any) -> Tuple[str, str, str]:
+        """同一轮里判断"这次调用是不是白做"的键：工具名 + 参数 + 返回内容。"""
+        try:
+            args = json.dumps(action.tool_input, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            args = str(action.tool_input)
+        return action.tool, args, str(observation)
+
+    def _repeated_call_reason(
+        self,
+        next_step_output: List[Tuple[AgentAction, Any]],
+        previous_steps: List[Tuple[AgentAction, Any]],
+    ) -> Optional[str]:
+        """同样的工具、同样的参数、同样的结果 —— 这一轮已经问不出新东西了。
+
+        scratchpad 修好之后模型理论上不该再重复；但模型不听话时不该继续烧模型调用。
+        现场（2026-10-12 15:25 日志）：search_local_knowledgebase 第 4 次调用的参数
+        与返回和第 1 次完全相同，中间还夹着两次换知识库的尝试。
+        """
+        history = {self._call_key(action, observation) for action, observation in previous_steps}
+        for action, observation in next_step_output:
+            if self._call_key(action, observation) in history:
+                return (
+                    f"工具「{action.tool}」已用相同参数调用过，返回内容也相同，"
+                    f"已停止重试（继续重复拿不到新信息）"
+                )
+        return None
+
+    def _stop_on_repeated_call(
+        self,
+        next_step_output: List[Tuple[AgentAction, Any]],
+        previous_steps: List[Tuple[AgentAction, Any]],
+    ) -> Optional[AgentFinish]:
+        """重复调用已经拿到同样结果的工具时直接收尾。
+
+        和 ``_stop_on_missing_tool`` 一样打上 ``agent_error``：失败轮的
+        ``intermediate_steps`` 不能带进下一轮。
+        """
+        reason = self._repeated_call_reason(next_step_output, previous_steps)
+        if not reason:
+            return None
+        logger.warning(reason)
+        return AgentFinish(
+            return_values={"output": reason, "agent_error": reason}, log=reason
+        )
 
     def _stopped_output(
         self,

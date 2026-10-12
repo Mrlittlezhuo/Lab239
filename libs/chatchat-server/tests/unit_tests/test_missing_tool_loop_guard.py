@@ -198,6 +198,75 @@ class TestAgentLoop:
         assert calls == [{"url": "https://x"}]
 
 
+class TestRepeatedCallGuard:
+    """同样的工具 + 同样的参数 + 同样的结果 = 拿不到新信息，别再烧模型调用。
+
+    现场（2026-10-12 15:25 日志）：search_local_knowledgebase 第 4 次调用的参数
+    与返回和第 1 次完全相同，中间还夹着两次换知识库的尝试。
+    """
+
+    def test_same_call_same_result_is_flagged(self):
+        executor = _executor([])
+        previous = [(_action("search_internet", {"query": "x"}), "同一份结果")]
+
+        reason = executor._repeated_call_reason(
+            [(_action("search_internet", {"query": "x"}), "同一份结果")], previous
+        )
+
+        assert reason is not None
+        assert "已用相同参数调用过" in reason
+
+    def test_same_call_different_result_is_allowed(self):
+        # 结果变了就说明有新信息（例如外部状态刚变化），不该拦
+        executor = _executor([])
+        previous = [(_action("search_internet", {"query": "x"}), "旧结果")]
+
+        reason = executor._repeated_call_reason(
+            [(_action("search_internet", {"query": "x"}), "新结果")], previous
+        )
+
+        assert reason is None
+
+    def test_different_arguments_are_not_flagged(self):
+        executor = _executor([])
+        previous = [(_action("search_internet", {"query": "x"}), "结果")]
+
+        reason = executor._repeated_call_reason(
+            [(_action("search_internet", {"query": "y"}), "结果")], previous
+        )
+
+        assert reason is None
+
+    async def test_identical_repeat_stops_after_two_steps(self):
+        tool = SearchInternet()
+        executor = _executor(
+            [_action("search_internet", {"query": "苏州大学"})] * 20, tools=[tool]
+        )
+
+        out = await executor.ainvoke({"input": "一直搜同一句", "chat_history": []})
+
+        assert len(out["intermediate_steps"]) == 2
+        assert "已用相同参数调用过" in out["output"]
+        assert out.get("agent_error")
+
+    async def test_second_kb_lookup_with_other_arguments_still_runs(self):
+        # 换知识库/换关键词的二次检索是正常用法，不能被守卫误伤
+        tool = SearchInternet()
+        executor = _executor(
+            [
+                _action("search_internet", {"query": "无线通信"}),
+                _action("search_internet", {"query": "samples"}),
+                AgentFinish(return_values={"output": "这是回答"}, log="这是回答"),
+            ],
+            tools=[tool],
+        )
+
+        out = await executor.ainvoke({"input": "两个库都查", "chat_history": []})
+
+        assert out["output"] == "这是回答"
+        assert len(out["intermediate_steps"]) == 2
+
+
 class TestFailureIsMarked:
     """失败收尾要能被上层认出来。
 
@@ -215,10 +284,12 @@ class TestFailureIsMarked:
         assert out.return_values.get("agent_error")
 
     async def test_max_iterations_round_is_marked_failed(self):
-        # 工具是真的，但模型一直不收尾 → 撞到 max_iterations（langchain 默认 15）
+        # 工具是真的、参数每次不同（不会被重复调用守卫拦下），
+        # 但模型一直不收尾 → 撞到 max_iterations（langchain 默认 15）
         tool = SearchInternet()
         executor = _executor(
-            [_action("search_internet", {"query": "苏州大学"})] * 20, tools=[tool]
+            [_action("search_internet", {"query": f"苏州大学 {i}"}) for i in range(20)],
+            tools=[tool],
         )
 
         out = await executor.ainvoke({"input": "一直搜", "chat_history": []})
