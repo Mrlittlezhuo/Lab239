@@ -25,6 +25,7 @@ from chatchat.server.agent_run.schema import PlanError, _extract_json_object
 from .schemas import (
     COMPLEXITY_DIRECT,
     INTENT_GENERAL,
+    MCP_CANDIDATE,
     PATH_DIRECT,
     RouteError,
     RouteResult,
@@ -117,7 +118,9 @@ class LlmIntentProvider(IntentProvider):
             obj = _extract_json_object(raw)
         except PlanError as exc:
             raise RouteError(f"路由输出解析失败：{exc}") from exc
-        return validate_route_result(obj, ctx.available_tools)
+        return validate_route_result(
+            obj, ctx.available_tools, mcp_enabled=ctx.use_mcp
+        )
 
     def _invoke(self, ctx: RouteContext) -> str:
         try:
@@ -141,9 +144,31 @@ class LlmIntentProvider(IntentProvider):
             desc = desc.splitlines()[0] if desc else ""
             lines.append(f"- {name}: {desc[:80]}")
         if len(lines) == 1:
-            lines.append("- （当前没有可用工具；所有请求都应 path=direct）")
+            lines.append("- （当前没有可用工具；除下面 MCP 场景外所有请求都应 path=direct）")
+        # MCP 工具的真实名称必须连上 MCP 服务才知道（连接表不缓存工具清单），
+        # 路由阶段无法枚举候选，只能让路由器输出保留候选名 mcp，由智能对话
+        # 总图的执行分支建立连接后换成真实工具。以前这里只有一句「还会额外
+        # 包含 MCP 工具（无需为它们选择候选）」，路由器既不能选也不该选，
+        # 结果需要 MCP 的请求被当成无候选工具回退直接回答。
+        mcp_rule = ""
+        mcp_example = ""
         if ctx.use_mcp:
-            lines.append("- 本次运行还会额外包含 MCP 工具（无需为它们选择候选）")
+            lines.append(
+                "- 额外可用：MCP 工具（操作浏览器、控制本机外部程序或第三方服务）。"
+                f"它们的名称此刻未知，需要时 candidate_tools 写 \"{MCP_CANDIDATE}\"，"
+                "禁止编造具体 MCP 工具名。"
+            )
+            mcp_rule = (
+                "- 需要操作浏览器 / 读取或填写网页 / 控制本机外部程序 / 调用第三方服务，"
+                f"而上面清单里没有对应工具时：path=agent_run, intent=complex, "
+                f'complexity=multi, candidate_tools 只写 "{MCP_CANDIDATE}"。\n'
+            )
+            mcp_example = (
+                "- 「打开浏览器看看某官网今天的公告并总结」→ "
+                '{"path": "agent_run", "intent": "complex", "complexity": "multi", '
+                f'"candidate_tools": ["{MCP_CANDIDATE}"], "confidence": 0.85, '
+                '"summary": "需要操作浏览器读取网页"}\n'
+            )
         return (
             "你是本地助手平台的意图路由器。判断用户当前请求应「直接回答」还是"
             "交给 Agent 执行闭环（规划 → 逐步调用工具 → 观察 → 最终回答）。\n\n"
@@ -156,6 +181,7 @@ class LlmIntentProvider(IntentProvider):
             "- 提到「搜索/查一下」但未指明来源时：涉及本地知识库 / 论文语料 / 自有资料 → search_local_knowledgebase；涉及网上 / 互联网 / 最新 → search_internet。\n"
             "- 单一明确能力且与某个工具匹配（天气、计算等）：path=agent_run, intent=single_tool, candidate_tools 只放相关工具。\n"
             "- 需要检索、比较、汇总等连续动作的多步骤请求：path=agent_run, intent=complex, candidate_tools 列出合理的一组相关工具。\n"
+            f"{mcp_rule}"
             "- 只有当请求信息完全不足、没有任何工具线索时才：path=direct, intent=unknown（不要猜测）。\n\n"
             "示例：\n"
             "- 「帮我联网搜索一下DeepSeek最近发布的推理优化技术」→ {\"path\": \"agent_run\", \"intent\": \"single_tool\", \"complexity\": \"single\", \"candidate_tools\": [\"search_internet\"], \"confidence\": 0.95, \"summary\": \"用户明确要求联网搜索最新技术\"}\n"
@@ -249,7 +275,9 @@ class FastJevIntentProvider(IntentProvider):
                     provider=self.name,
                     source=self.name,
                 )
-                return validate_route_result(result, ctx.available_tools)
+                return validate_route_result(
+                    result, ctx.available_tools, mcp_enabled=ctx.use_mcp
+                )
             return RouteResult(
                 path=PATH_DIRECT,
                 intent=intent,
@@ -314,7 +342,9 @@ class FastJevIntentProvider(IntentProvider):
             provider=self.name,
             source=self.name,
         )
-        return validate_route_result(result, ctx.available_tools)
+        return validate_route_result(
+            result, ctx.available_tools, mcp_enabled=ctx.use_mcp
+        )
 
     @staticmethod
     def _tool_answer(answers: Dict[str, Any], question_id: str) -> Optional[tuple[str, float]]:
@@ -350,6 +380,14 @@ class FastJevIntentProvider(IntentProvider):
         for name, tool in list((ctx.available_tools or {}).items())[:15]:
             description = str(getattr(tool, "description", "") or "").splitlines()[0][:160]
             tool_criteria[name] = description or name
+        if ctx.use_mcp:
+            # 与 LLM provider 同一约定：MCP 工具名要连上服务才知道，路由阶段
+            # 无法枚举，所以把保留候选名 mcp 作为一个候选项交给分类器。工具题的
+            # criteria 本来就按当前配置动态生成，多一项不改变请求协议；该候选
+            # 不参与注册表校验（见 schemas.validate_route_result 的 mcp_enabled）。
+            tool_criteria[MCP_CANDIDATE] = (
+                "需要操作浏览器、读取或填写网页、控制本机外部程序或第三方服务"
+            )
         if len(tool_criteria) > 1:
             questions["primary_tool"] = {
                 "type": "choice",

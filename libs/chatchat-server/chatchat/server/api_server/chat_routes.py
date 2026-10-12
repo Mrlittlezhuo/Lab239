@@ -256,7 +256,11 @@ async def chat_completions(
             history_len=Settings.model_settings.HISTORY_LEN,
             metadata=extra.get("metadata", {}),
             chat_model_config=extra.get("chat_model_config", chat_model_config),
-            auto_use_mcp=bool(Settings.model_settings.AUTO_ROUTE_USE_MCP),
+            # MCP 按请求走：前端「智能路由」里的开关（extra.use_mcp）决定本轮
+            # 是否加载 MCP 工具；全局 AUTO_ROUTE_USE_MCP 保留为强制开启的逃生口。
+            # 以前只看全局配置，请求里的 use_mcp 在这个分支被直接忽略。
+            auto_use_mcp=bool(extra.get("use_mcp", False))
+            or bool(Settings.model_settings.AUTO_ROUTE_USE_MCP),
             # 只把"这台机器配好了、这个用户能用"的工具交给意图路由：
             # 否则模型会挑一个必然失败的工具（假 key、占位连接串、只有管理员
             # 能用的 shell），用户看到的只是"工具没生效"

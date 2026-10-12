@@ -54,6 +54,10 @@ export function ChatSettings() {
     <>
       <div className="flex items-center gap-2">
         <Badge variant="secondary">{modeMeta.label}</Badge>
+        {/* MCP 开着时给个可见标记：智能路由下有没有真的带上 MCP 由这个开关决定 */}
+        {prefs.useMcp && prefs.toolMode !== "plain" && (
+          <Badge variant="outline">MCP</Badge>
+        )}
         {prefs.model && <Badge variant="outline">{prefs.model}</Badge>}
         <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
           <Settings2 className="h-4 w-4" />
@@ -150,7 +154,9 @@ export function ChatSettings() {
             </div>
           </div>
 
-          {(prefs.toolMode === "manual" || prefs.toolMode === "agent_run") && (
+          {/* 智能路由也显示：以前只有手动模式能开 MCP，智能路由下请求里的
+              use_mcp 又被服务端忽略，等于智能对话永远用不到 MCP 工具。 */}
+          {prefs.toolMode !== "plain" && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>可用 MCP 工具</Label>
@@ -159,6 +165,12 @@ export function ChatSettings() {
                   onCheckedChange={prefs.setUseMcp}
                 />
               </div>
+              {prefs.toolMode === "auto" && (
+                <p className="text-xs text-muted-foreground">
+                  开启后意图路由才会考虑 MCP 工具（操作浏览器、读取网页、控制本机外部程序等）；
+                  关闭时智能对话完全不加载 MCP 工具。
+                </p>
+              )}
             </div>
           )}
 

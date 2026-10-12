@@ -193,6 +193,8 @@ export function useChatStream(options: {
           switch (opts.toolMode) {
             case "auto":
               req.auto_agent = true;
+              // 智能路由也带上 MCP 开关：服务端按请求决定本轮是否加载 MCP 工具
+              req.use_mcp = opts.useMcp;
               break;
             case "plain":
               break;

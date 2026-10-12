@@ -100,8 +100,11 @@ class IntentRouter:
                 )
             # 在 provider 边界统一校验，而不是只依赖当前 LLM provider
             # 自行校验。这样后续 FastJev 等 provider 也不能返回不存在的
-            # 工具名或无候选工具的 Agent Run。
-            result = validate_route_result(result, ctx.available_tools)
+            # 工具名或无候选工具的 Agent Run。开启 MCP 时额外放行保留候选名
+            # mcp（路由器无法预知 MCP 工具名，只能声明「要用 MCP」）。
+            result = validate_route_result(
+                result, ctx.available_tools, mcp_enabled=ctx.use_mcp
+            )
         except concurrent.futures.TimeoutError as exc:
             future.cancel()
             result = _fallback_result(
@@ -230,8 +233,10 @@ def route_auto_agent(
 ) -> RouteResult:
     """自动模式路由入口：任何失败都回退「直接回答」。
 
-    ``available_tools`` 必须来自当前实际可用的工具注册表（含按配置
-    允许进入自动候选的 MCP 工具），避免维护与实际工具脱节的副本。
+    ``available_tools`` 必须来自当前实际可用的工具注册表，避免维护与
+    实际工具脱节的副本。``use_mcp`` 为真时，路由器可以输出保留候选名
+    ``mcp``（``schemas.MCP_CANDIDATE``）表示「需要 MCP 工具」：MCP 工具名
+    要连上服务才知道，路由阶段无法枚举，由智能对话总图的执行分支落地。
     """
     ctx = RouteContext(
         query=query or "",

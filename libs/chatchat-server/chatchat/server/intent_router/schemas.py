@@ -7,6 +7,8 @@
 校验规则：
 - 候选工具必须全部来自当前实际可用的工具集合（由调用方传入，
   来源于现有工具注册表）；未知工具名被剔除；
+- 本次请求开启 MCP 时额外允许候选名 ``mcp``（「需要 MCP 工具」的占位，
+  不参与注册表校验，由执行分支在建立 MCP 连接后换成真实工具）；
 - 路径为 Agent Run 但剔除后没有有效候选工具 → 视为非法结果
   （``RouteError``），由路由器进入回退流程；
 - 未知意图降级为 ``unknown``，并按统一策略落到直接回答路径；
@@ -49,6 +51,12 @@ COMPLEXITY_DIRECT = "direct"
 COMPLEXITY_SINGLE = "single"
 COMPLEXITY_MULTI = "multi"
 VALID_COMPLEXITY = (COMPLEXITY_DIRECT, COMPLEXITY_SINGLE, COMPLEXITY_MULTI)
+
+# 保留候选名：代表「这一步需要 MCP 工具」，不是某个具体工具名。
+# MCP 工具的真实名字必须连上 MCP 服务才知道（连接表里不缓存工具清单），
+# 路由阶段无法枚举，只能让路由器声明「要用 MCP」，由执行分支在建立连接后
+# 把真实工具交给 Agent。仅当本次请求开启 MCP 时才允许出现在候选清单里。
+MCP_CANDIDATE = "mcp"
 
 SUMMARY_MAX_CHARS = 120
 
@@ -106,17 +114,24 @@ def _clamp_confidence(value: Any) -> Optional[float]:
     return min(1.0, max(0.0, conf))
 
 
-def validate_route_result(raw: Any, available_tools: Any) -> RouteResult:
+def validate_route_result(
+    raw: Any, available_tools: Any, *, mcp_enabled: bool = False
+) -> RouteResult:
     """校验并归一化原始路由输出为 ``RouteResult``。
 
     ``available_tools`` 是当前实际可用的工具集合：工具注册表 dict
     （取键为工具名）或工具名可迭代对象。未知工具名被剔除；结构非法、
     或 Agent Run 路径没有有效候选工具时抛出 ``RouteError``。
+
+    ``mcp_enabled`` 为真时保留候选名 ``mcp``（见 ``MCP_CANDIDATE``），
+    它代表「需要 MCP 工具」而不是某个具体工具，因此不参与注册表校验。
     """
     if isinstance(available_tools, dict):
         available = {str(n) for n in available_tools}
     else:
         available = {str(n) for n in (available_tools or ())}
+    if mcp_enabled:
+        available.add(MCP_CANDIDATE)
 
     if isinstance(raw, RouteResult):
         path = str(raw.path or "").strip().lower()
@@ -200,4 +215,5 @@ __all__ = [
     "COMPLEXITY_DIRECT",
     "COMPLEXITY_SINGLE",
     "COMPLEXITY_MULTI",
+    "MCP_CANDIDATE",
 ]

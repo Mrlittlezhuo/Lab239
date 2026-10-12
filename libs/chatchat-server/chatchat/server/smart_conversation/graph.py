@@ -49,6 +49,7 @@ from chatchat.server.intent_router.schemas import (
     INTENT_KB_SEARCH,
     INTENT_SINGLE_TOOL,
     INTENT_UNKNOWN,
+    MCP_CANDIDATE,
     PATH_AGENT_RUN,
     PATH_DIRECT,
     RouteResult,
@@ -133,7 +134,24 @@ def _demote(route: RouteResult, reason: str) -> RouteResult:
     )
 
 
-def _resolve_execution(route: RouteResult, available_tools: Dict[str, Any]):
+def _split_candidates(
+    route: RouteResult, available: Dict[str, Any], mcp_enabled: bool
+):
+    """把路由候选拆成（可用的平台工具名列表，是否要求 MCP 工具）。
+
+    保留候选名 ``mcp`` 不是真实工具名：MCP 工具清单要连上 MCP 服务才知道，
+    路由阶段只能声明「要用 MCP」。它只在本次请求开启 MCP 时有效，由执行
+    分支在建立连接后换成真实工具（见 ``schemas.MCP_CANDIDATE``）。
+    """
+    names = list(route.candidate_tools or [])
+    mcp_requested = bool(mcp_enabled) and MCP_CANDIDATE in names
+    valid = [n for n in names if n != MCP_CANDIDATE and n in (available or {})]
+    return valid, mcp_requested
+
+
+def _resolve_execution(
+    route: RouteResult, available_tools: Dict[str, Any], mcp_enabled: bool = False
+):
     """按路由结果确定实际执行分支；工具执行开始前的受控回退都发生在这里。
 
     映射（任务 015 §5.1）：
@@ -141,7 +159,10 @@ def _resolve_execution(route: RouteResult, available_tools: Dict[str, Any]):
     - kb_search → knowledge_task（要求知识库检索工具仍在注册表中，否则回退）；
     - single_tool 或 single → single_tool_task（取首个有效候选工具）；
     - complex 或 multi → multi_step_agent（保留全部有效候选工具）；
-    - agent_run 但意图不一致 / 无有效候选工具 → 回退 direct_answer。
+    - agent_run 但意图不一致 / 无有效候选工具且未要求 MCP → 回退 direct_answer。
+
+    ``mcp_enabled`` 为真时候选里的保留名 ``mcp`` 也算有效候选：智能路由不再
+    因为「平台工具清单里没有这个名字」把需要 MCP 的请求退回直接回答。
     """
     available = available_tools or {}
     if route.path != PATH_AGENT_RUN:
@@ -163,8 +184,8 @@ def _resolve_execution(route: RouteResult, available_tools: Dict[str, Any]):
             EXEC_DIRECT_ANSWER,
         )
 
-    valid = [t for t in route.candidate_tools if t in available]
-    if not valid:
+    valid, mcp_requested = _split_candidates(route, available, mcp_enabled)
+    if not valid and not mcp_requested:
         return _demote(route, "无可用候选工具"), EXEC_DIRECT_ANSWER
 
     if route.intent == INTENT_SINGLE_TOOL or route.complexity == COMPLEXITY_SINGLE:
@@ -200,7 +221,14 @@ async def route_node(state: SmartConversationState) -> dict:
             route = _fallback_route("路由结果非法")
 
         route, mode = _resolve_execution(
-            route, state.get("available_tools") or {}
+            route,
+            state.get("available_tools") or {},
+            mcp_enabled=bool(state.get("auto_use_mcp", False)),
+        )
+        _, mcp_requested = _split_candidates(
+            route,
+            state.get("available_tools") or {},
+            bool(state.get("auto_use_mcp", False)),
         )
         set_span_attributes(
             route_span,
@@ -213,6 +241,10 @@ async def route_node(state: SmartConversationState) -> dict:
                 "chatchat.route.source": route.source,
                 "chatchat.route.fallback_reason": route.fallback_reason,
                 "chatchat.route.candidate_tools": list(route.candidate_tools),
+                # 排查「智能路由为什么没用 MCP」时看这两项：开关是否打开、
+                # 路由是否真的要求了 MCP 工具
+                "chatchat.route.mcp_enabled": bool(state.get("auto_use_mcp", False)),
+                "chatchat.route.mcp_requested": mcp_requested,
                 "chatchat.execution_mode": mode,
             },
         )
@@ -292,13 +324,19 @@ async def knowledge_task_node(state: SmartConversationState) -> dict:
 
 
 async def single_tool_task_node(state: SmartConversationState) -> dict:
-    """单工具任务：只提供路由选中的单个有效工具，限制为一步工具任务。"""
+    """单工具任务：只提供路由选中的单个有效工具，限制为一步工具任务。
+
+    路由在候选里写了保留名 ``mcp``（本次请求开启 MCP 时）时，这一步改为
+    加载 MCP 工具：平台工具清单里可能一个都没有，一步 Agent 拿到的是连上
+    MCP 服务后的真实工具。
+    """
     route: RouteResult = state["route_result"]
-    available = state.get("available_tools") or {}
-    valid = [t for t in route.candidate_tools if t in available]
-    if not valid:
+    mcp_enabled = bool(state.get("auto_use_mcp", False))
+    valid, mcp_requested = _split_candidates(
+        route, state.get("available_tools") or {}, mcp_enabled
+    )
+    if not valid and not mcp_requested:
         raise ValueError("单工具任务无可用候选工具")
-    tool_name = valid[0]
     result = await agent_service.agent_run_chat(
         query=state["query"],
         conversation_id=state["conversation_id"],
@@ -306,8 +344,8 @@ async def single_tool_task_node(state: SmartConversationState) -> dict:
         session=state["session"],
         owner_id=state["owner_id"],
         stream=bool(state.get("stream")),
-        tool_config=_tool_config_for([tool_name]),
-        use_mcp=False,
+        tool_config=_tool_config_for(valid[:1]),
+        use_mcp=mcp_requested,
         model_name=state.get("model_name"),
         history_len=state.get("history_len"),
         max_steps=ONE_STEP_MAX_STEPS,
@@ -317,11 +355,17 @@ async def single_tool_task_node(state: SmartConversationState) -> dict:
 
 async def multi_step_agent_node(state: SmartConversationState) -> dict:
     """多步骤任务：复用任务 014 的默认 LangGraph Agent Runtime（含正常步数
-    限制、重规划、取消、checkpoint 与恢复）。"""
+    限制、重规划、取消、checkpoint 与恢复）。
+
+    本次请求开启 MCP 时始终加载 MCP 工具（由 Agent 自己选用）；因此候选里
+    只有保留名 ``mcp`` 也算有可用工具，不再退回报错。
+    """
     route: RouteResult = state["route_result"]
-    available = state.get("available_tools") or {}
-    valid = [t for t in route.candidate_tools if t in available]
-    if not valid:
+    mcp_enabled = bool(state.get("auto_use_mcp", False))
+    valid, mcp_requested = _split_candidates(
+        route, state.get("available_tools") or {}, mcp_enabled
+    )
+    if not valid and not mcp_requested:
         raise ValueError("多步骤任务无可用候选工具")
     result = await agent_service.agent_run_chat(
         query=state["query"],
@@ -331,7 +375,7 @@ async def multi_step_agent_node(state: SmartConversationState) -> dict:
         owner_id=state["owner_id"],
         stream=bool(state.get("stream")),
         tool_config=_tool_config_for(valid),
-        use_mcp=bool(state.get("auto_use_mcp", False)),
+        use_mcp=mcp_enabled,
         model_name=state.get("model_name"),
         history_len=state.get("history_len"),
     )

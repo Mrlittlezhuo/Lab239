@@ -416,6 +416,69 @@ class TestSmartConversationDispatch:
         assert called["kwargs"]["use_mcp"] is False
         assert called["kwargs"]["owner_id"] == users["alice"]["id"]
 
+    def test_auto_agent_honors_request_use_mcp(
+        self, monkeypatch, app, client, temp_db, users
+    ):
+        """智能路由按请求里的 use_mcp 决定是否加载 MCP 工具。
+
+        以前 auto_agent 分支只读全局 AUTO_ROUTE_USE_MCP（默认 False），
+        前端在智能路由模式下既没有开关、请求里的 use_mcp 也被忽略，
+        等于智能对话永远用不到 MCP。
+        """
+        temp_db["owner_id"] = users["alice"]["id"]
+        route = rule_fast_path("你好！")
+        harness = self._patch_smart(
+            monkeypatch,
+            temp_db,
+            ScriptedPlanner(S.Plan(direct_answer="不应执行")),
+            route,
+        )
+        # 全局逃生口关掉：这样 use_mcp=True 只可能来自请求本身
+        monkeypatch.setattr(
+            chat_routes_mod.Settings.model_settings,
+            "AUTO_ROUTE_USE_MCP",
+            False,
+            raising=False,
+        )
+
+        called = {}
+
+        async def fake_chat(**kwargs):
+            called["kwargs"] = kwargs
+            return {"object": "chat.completion", "content": "你好！"}
+
+        monkeypatch.setattr(chat_routes_mod, "chat", fake_chat)
+        r = client.post(
+            "/chat/chat/completions",
+            headers=_headers(temp_db, "alice"),
+            json={
+                "model": "fake-llm",
+                "messages": [{"role": "user", "content": "你好！"}],
+                "stream": False,
+                "auto_agent": True,
+                "use_mcp": True,
+            },
+        )
+        assert r.status_code == 200
+        # 开关传到意图路由：路由器这才可能把 MCP 纳入候选
+        assert harness["route_calls"][0]["use_mcp"] is True
+        # 本轮走直接回答分支，仍然不加载 MCP（开关不等于所有分支都挂工具）
+        assert called["kwargs"]["use_mcp"] is False
+
+        # 不带 use_mcp 的旧请求维持原样：按全局配置（此处为 False）
+        r2 = client.post(
+            "/chat/chat/completions",
+            headers=_headers(temp_db, "alice"),
+            json={
+                "model": "fake-llm",
+                "messages": [{"role": "user", "content": "你好！"}],
+                "stream": False,
+                "auto_agent": True,
+            },
+        )
+        assert r2.status_code == 200
+        assert harness["route_calls"][1]["use_mcp"] is False
+
     def test_kb_task_kb_tool_only_and_one_step_limit(
         self, monkeypatch, app, client, temp_db, users
     ):

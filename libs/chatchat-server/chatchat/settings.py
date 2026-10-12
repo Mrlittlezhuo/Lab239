@@ -398,7 +398,9 @@ class ApiModelSettings(BaseFileSettings):
     """自动意图路由的最小置信度（任务 012）：Agent Run 判定低于该值时回退直接回答；None 表示不做置信度检查"""
 
     AUTO_ROUTE_USE_MCP: bool = False
-    """自动路由是否把 MCP 工具纳入候选（任务 012）：默认关闭，MCP 仍可由手动调试开关启用"""
+    """自动路由的 MCP 全局开关：置 True 时所有智能路由请求都加载 MCP 工具。
+    平时不需要打开——前端「聊天设置 → 可用 MCP 工具」按会话发 use_mcp，
+    服务端取「请求 use_mcp 或本配置」。两者都为假时智能对话完全不碰 MCP。"""
 
     AUTO_ROUTE_PROVIDER: str = "fastjev"
     """自动意图路由来源：fastjev 优先使用本机分类服务并在失败时回退现有 LLM；llm 仅使用现有 LLM"""
