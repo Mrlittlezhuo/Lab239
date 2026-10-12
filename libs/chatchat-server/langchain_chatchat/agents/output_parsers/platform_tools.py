@@ -76,7 +76,12 @@ class PlatformToolsAgentOutputParser(MultiActionAgentOutputParser):
     gpt_base_parser: AgentOutputParser = Field(default_factory=StructuredChatOutputParser)
     glm3_base_parser: AgentOutputParser = Field(default_factory=StructuredGLM3ChatOutputParser)
     qwen_base_parser: AgentOutputParser = Field(default_factory=QwenChatAgentOutputParserCustom)
-    knowledge_parser: AgentOutputParser = Field(default_factory=PlatformKnowledgeOutputParserCustom)
+    # 这个字段不能标成 AgentOutputParser：PlatformKnowledgeOutputParserCustom 继承的是
+    # ToolsAgentOutputParser → MultiActionAgentOutputParser，不是 AgentOutputParser 的子类。
+    # 以前只靠 default_factory 赋值，pydantic 不校验默认值所以没暴露；
+    # 一旦显式传实例（带工具白名单时就是这么传的）就直接
+    # `Input should be a valid dictionary or instance of AgentOutputParser`。
+    knowledge_parser: MultiActionAgentOutputParser = Field(default_factory=PlatformKnowledgeOutputParserCustom)
     base_parser: AgentOutputParser = Field(default_factory=StructuredChatOutputParserLC)
 
     @property

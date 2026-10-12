@@ -16,6 +16,9 @@ from langchain_chatchat.agents.output_parsers.platform_knowledge_output_parsers 
     PlatformKnowledgeOutputParserCustom,
     _xml_safe,
 )
+from langchain_chatchat.agents.output_parsers.platform_tools import (
+    PlatformToolsAgentOutputParser,
+)
 
 # 真实出错的那一条：thinking 里的 GitHub 搜索 URL 带两个裸 &
 THINKING_WITH_AMP = (
@@ -146,3 +149,52 @@ class TestAvailableToolsWhitelist:
         actions = _parse(NAVIGATE_TAG)
 
         assert [a.tool for a in actions] == ["navigate_page"]
+
+
+class TestPlatformToolsAgentComposition:
+    """带工具的轮次里，bind 会把带白名单的解析器实例交给 PlatformToolsAgentOutputParser。
+
+    现场（手动模式勾工具后整条聊天 500）：
+    `knowledge_parser` 字段标的是 `AgentOutputParser`，而
+    `PlatformKnowledgeOutputParserCustom` 继承的是
+    ToolsAgentOutputParser → MultiActionAgentOutputParser，不是它的子类。
+    以前只靠 default_factory 赋值（pydantic 不校验默认值）所以没暴露，
+    一旦显式传实例就报
+    `Input should be a valid dictionary or instance of AgentOutputParser`。
+    """
+
+    def _outer(self, **parser_kwargs):
+        return PlatformToolsAgentOutputParser(
+            instance_type="platform-knowledge-mode",
+            knowledge_parser=PlatformKnowledgeOutputParserCustom(**parser_kwargs),
+        )
+
+    def test_accepts_a_customized_knowledge_parser_instance(self):
+        outer = self._outer(available_tools=["calculate"], available_mcp_tools=[])
+
+        assert outer.knowledge_parser.available_tools == ["calculate"]
+
+    def test_default_construction_still_works(self):
+        outer = PlatformToolsAgentOutputParser(instance_type="platform-knowledge-mode")
+
+        assert isinstance(outer.knowledge_parser, PlatformKnowledgeOutputParserCustom)
+
+    def test_whitelist_survives_through_the_outer_parser(self):
+        outer = self._outer(available_tools=["calculate"], available_mcp_tools=[])
+
+        result = outer.parse_result(
+            [ChatGeneration(message=AIMessage(content="我来搜一下。\n" + NAVIGATE_TAG))],
+            partial=False,
+        )
+
+        assert isinstance(result, AgentFinish)
+
+    def test_listed_tool_still_runs_through_the_outer_parser(self):
+        outer = self._outer(available_tools=["calculate"])
+
+        actions = outer.parse_result(
+            [ChatGeneration(message=AIMessage(content="<calculate><text>1+2</text></calculate>"))],
+            partial=False,
+        )
+
+        assert [a.tool for a in actions] == ["calculate"]
