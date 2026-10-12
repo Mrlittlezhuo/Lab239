@@ -6,7 +6,8 @@ export type RagMode = "local_kb" | "temp_kb" | "search_engine";
 
 export interface RagChatRequest {
   messages: ChatMessage[];
-  model: string;
+  /** 留空/缺省时由服务端用默认模型；不能传空串（见 streamRagChat 里的说明）。 */
+  model?: string;
   stream: boolean;
   temperature?: number;
   top_k?: number;
@@ -27,9 +28,15 @@ export function streamRagChat(
   onEvent: (event: SseEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const body: RagChatRequest = { ...req, stream: true };
+  // 空 model 必须整个不传：服务端签名是 `model: str = Body(get_default_llm())`，
+  // 客户端显式传 "" 时默认值不生效，get_ChatOpenAI("") 返回 None，
+  // 整轮知识库对话崩在 `chat_prompt | None`
+  // （界面上是 Expected a Runnable, callable or dict ... NoneType）。
+  if (!body.model?.trim()) delete body.model;
   return streamSse({
     path: `/knowledge_base/${mode}/${encodeURIComponent(param)}/chat/completions`,
-    body: { ...req, stream: true },
+    body,
     onEvent,
     signal,
   });

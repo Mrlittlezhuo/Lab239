@@ -37,6 +37,7 @@ from chatchat.server.knowledge_base.utils import (
     format_reference_markdown,
 )
 from chatchat.server.utils import (wrap_done, get_ChatOpenAI, get_default_llm,
+                                   resolve_llm_model_name,
                                    BaseResponse, get_prompt_template, build_logger,
                                    check_embed_model, api_address
                                 )
@@ -81,6 +82,10 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 user: UserModel = Depends(require_password_changed),
                 session: Session = Depends(get_db),
                 ):
+    # 空模型名先回落，否则后面 get_ChatOpenAI 返回 None，整轮崩在 NoneType；
+    # 回落后的名字也要写进响应体，否则客户端看到 model="" 会以为请求没带模型
+    model = resolve_llm_model_name(model)
+
     if mode == "local_kb":
         kb = KBServiceFactory.get_service_by_name(kb_name)
         if kb is None:
@@ -271,6 +276,13 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 max_tokens=max_tokens,
                 callbacks=callbacks,
             )
+            if llm is None:
+                # get_ChatOpenAI 失败时不抛异常只返回 None。以前直接往下走，
+                # 用户看到的是 langchain 的 NoneType 报错，看不出该改哪里。
+                raise ValueError(
+                    f"无法创建模型「{model}」：请确认它在服务端可用"
+                    f"（GET /server/models 的 llm_models），或在聊天设置里换一个模型"
+                )
             # TODO： 视情况使用 API
             # # 加入reranker
             # if Settings.kb_settings.USE_RERANKER:

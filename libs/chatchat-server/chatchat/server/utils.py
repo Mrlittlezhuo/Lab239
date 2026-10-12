@@ -223,6 +223,19 @@ def get_history_len() -> int:
             Settings.model_settings.LLM_MODEL_CONFIG["action_model"]["history_len"])
 
 
+def resolve_llm_model_name(model_name: Optional[str]) -> str:
+    """空模型名回落到服务端默认模型。
+
+    很多接口签名写的是 ``model: str = Body(get_default_llm())``，但客户端显式传
+    ``""`` 时 FastAPI 不会用默认值（前端没选模型时就是这么发的）。空名字走到
+    ``get_ChatOpenAI`` 只会得到 ``None``（它失败时不抛异常），调用方随后
+    ``prompt | None`` 才崩成「Expected a Runnable, callable or dict ... NoneType」，
+    界面上看不出该改哪里。
+    """
+    name = (model_name or "").strip()
+    return name or get_default_llm()
+
+
 def get_ChatOpenAI(
         model_name: str = get_default_llm(),
         temperature: float = Settings.model_settings.TEMPERATURE,
@@ -233,6 +246,7 @@ def get_ChatOpenAI(
         local_wrap: bool = False,  # use local wrapped api
         **kwargs: Any,
 ) -> ChatOpenAI:
+    model_name = resolve_llm_model_name(model_name)
     model_info = get_model_info(model_name)
     params = dict(
         streaming=streaming,
