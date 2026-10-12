@@ -46,6 +46,8 @@ export async function request<T = unknown>(
   if (body instanceof FormData) {
     payload = body; // multipart 由浏览器自动设置 Content-Type
   } else if (body !== undefined) {
+    // body 只在这里编码一次：调用方传原始值（字符串就传字符串），
+    // 自己先 JSON.stringify 会得到双重编码的载荷。
     requestHeaders.set("Content-Type", "application/json");
     payload = JSON.stringify(body);
   }

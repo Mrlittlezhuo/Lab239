@@ -51,12 +51,18 @@ export async function createKnowledgeBase(input: {
   return checkEnvelope(body);
 }
 
-/** 注意：服务端签名是单个 Body str，请求体是裸 JSON 字符串。 */
+/**
+ * 服务端签名是单个 Body str，请求体是裸 JSON 字符串 `"知识库名"`。
+ *
+ * 这里只能传原始字符串，不能先 JSON.stringify：http.ts 的 request 会对
+ * 非 FormData 的 body 编码一次，先编码就变成 `"\"知识库名\""`，服务端校验
+ * 通过后拿到的是带引号的名字，查库必然落空，界面只看到
+ * 「未找到知识库 "知识库名"」（HTTP 200 + code=404）。
+ */
 export async function deleteKnowledgeBase(name: string): Promise<Envelope> {
   const body = await request<Envelope>("/knowledge_base/delete_knowledge_base", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name),
+    body: name,
   });
   return checkEnvelope(body);
 }
@@ -112,8 +118,11 @@ export async function deleteDocs(input: {
   file_names: string[];
   deleteContent?: boolean;
 }): Promise<Envelope> {
+  // 逐个列字段，不 spread input：input 里是 camelCase（deleteContent），
+  // spread 会把 camelCase 一起发给服务端。
   const body = await postJson<Envelope>("/knowledge_base/delete_docs", {
-    ...input,
+    knowledge_base_name: input.knowledge_base_name,
+    file_names: input.file_names,
     delete_content: input.deleteContent ?? false,
     not_refresh_vs_cache: false,
   });
