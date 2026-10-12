@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Settings2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Settings2 } from "lucide-react";
 
 import { getServerModels } from "@/api/server";
 import { listTools } from "@/api/tools";
@@ -34,6 +34,8 @@ const MODE_OPTIONS: { value: ToolMode; label: string; hint: string }[] = [
 
 export function ChatSettings() {
   const [open, setOpen] = useState(false);
+  // 哪些工具行是展开的（工具介绍常常很长，收起态一行都看不全）
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const prefs = useChatPrefs();
   const { data: models } = useQuery({
     queryKey: ["server-models"],
@@ -163,35 +165,77 @@ export function ChatSettings() {
           {prefs.toolMode === "manual" && (
             <div className="min-w-0 space-y-2">
               <Label>选择工具</Label>
+              <p className="text-xs text-muted-foreground">
+                勾选=启用；点工具名展开完整说明。
+              </p>
               {/* min-w-0 是必需的：工具 description 是一整行长文本
                   （search_local_knowledgebase 的描述把所有知识库拼成一行），
                   truncate 的 white-space:nowrap 会让这一行的最小宽度等于全文，
-                  不加 min-w-0 就会把对话框撑破，右边的模式按钮被顶出可视区。 */}
-              <div className="min-w-0 max-h-52 space-y-1 overflow-y-auto rounded-md border p-2">
-                {Object.values(tools ?? {}).map((tool) => (
-                  <label
-                    key={tool.name}
-                    className="flex min-w-0 cursor-pointer items-center gap-2 text-sm"
-                  >
-                    <Checkbox
-                      checked={prefs.selectedTools.includes(tool.name)}
-                      onCheckedChange={(checked) => {
-                        const next = checked
-                          ? [...prefs.selectedTools, tool.name]
-                          : prefs.selectedTools.filter(
-                              (t) => t !== tool.name,
-                            );
-                        prefs.setSelectedTools(next);
-                      }}
-                    />
-                    <span className="shrink-0">{tool.name}</span>
-                    {tool.description && (
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                        {tool.description}
-                      </span>
-                    )}
-                  </label>
-                ))}
+                  不加 min-w-0 就会把对话框撑破，右边的模式按钮被顶出可视区。
+                  完整说明放在展开区里（whitespace-pre-wrap），收起态只截断一行。 */}
+              <div className="min-w-0 max-h-72 space-y-1.5 overflow-y-auto rounded-md border p-2">
+                {Object.values(tools ?? {}).map((tool) => {
+                  // 别叫 open：外层对话框已经有一个 open
+                  const isExpanded = Boolean(expanded[tool.name]);
+                  const argNames = Object.keys(tool.args ?? {});
+                  return (
+                    <div key={tool.name} className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={prefs.selectedTools.includes(tool.name)}
+                          onCheckedChange={(checked) => {
+                            const next = checked
+                              ? [...prefs.selectedTools, tool.name]
+                              : prefs.selectedTools.filter(
+                                  (t) => t !== tool.name,
+                                );
+                            prefs.setSelectedTools(next);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          aria-expanded={isExpanded}
+                          onClick={() =>
+                            setExpanded((prev) => ({
+                              ...prev,
+                              [tool.name]: !isExpanded,
+                            }))
+                          }
+                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                        >
+                          <span className="shrink-0">{tool.name}</span>
+                          {tool.description && !isExpanded && (
+                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                              {tool.description}
+                            </span>
+                          )}
+                          {isExpanded ? (
+                            <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          )}
+                        </button>
+                      </div>
+                      {isExpanded && (
+                        <div className="mt-1 space-y-1 rounded-md bg-muted/40 p-2 text-xs">
+                          {tool.title && tool.title !== tool.name && (
+                            <div className="whitespace-pre-wrap break-words font-medium">
+                              {tool.title}
+                            </div>
+                          )}
+                          <div className="whitespace-pre-wrap break-words text-muted-foreground">
+                            {tool.description || "（服务端没有提供说明）"}
+                          </div>
+                          {argNames.length > 0 && (
+                            <div className="text-muted-foreground">
+                              参数：{argNames.join("、")}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 {tools && Object.keys(tools).length === 0 && (
                   <div className="text-sm text-muted-foreground">
                     服务端没有可用工具

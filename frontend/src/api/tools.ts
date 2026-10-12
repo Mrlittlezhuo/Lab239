@@ -3,6 +3,8 @@ import { unwrapEnvelope, type Envelope } from "@/lib/errors";
 
 export interface ToolInfo {
   name: string;
+  /** 中文名，来自 @regist_tool(title=...)；text2images 的那个 title 是一大段说明 */
+  title?: string;
   description?: string;
   args?: Record<string, unknown>; // JSON Schema 风格参数定义
   return_direct?: boolean;
