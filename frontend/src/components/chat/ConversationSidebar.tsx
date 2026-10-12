@@ -103,7 +103,7 @@ export function ConversationSidebar({
                 }}
               />
             ) : (
-              <span className="flex-1 truncate">
+              <span className="min-w-0 flex-1 truncate">
                 {conv.name || "未命名会话"}
               </span>
             )}

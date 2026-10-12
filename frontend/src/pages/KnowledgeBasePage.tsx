@@ -199,7 +199,7 @@ export function KnowledgeBasePage() {
               onClick={() => navigate(`/kb/${encodeURIComponent(kb.kb_name)}`)}
             >
               <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="flex-1 truncate">{kb.kb_name}</span>
+              <span className="min-w-0 flex-1 truncate">{kb.kb_name}</span>
               {typeof kb.file_count === "number" && (
                 <Badge variant="secondary">{kb.file_count}</Badge>
               )}

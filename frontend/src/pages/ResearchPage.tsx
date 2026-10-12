@@ -160,7 +160,7 @@ export function ResearchPage() {
               )}
               onClick={() => navigate(`/research/${p.project_id}`)}
             >
-              <span className="flex-1 truncate">{p.name}</span>
+              <span className="min-w-0 flex-1 truncate">{p.name}</span>
               <button
                 type="button"
                 className="hidden text-muted-foreground hover:text-destructive group-hover:block"

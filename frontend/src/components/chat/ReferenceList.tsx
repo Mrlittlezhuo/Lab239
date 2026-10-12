@@ -43,7 +43,7 @@ export function ReferenceList({ references }: { references: ReferenceData[] }) {
         {references.map((ref, i) => (
           <li key={i} className="flex items-center gap-2">
             <FileText className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">
+            <span className="min-w-0 flex-1 truncate">
               [{ref.index ?? i + 1}] {ref.file_name ?? ref.knowledge_base ?? "文档"}
             </span>
             {typeof ref.score === "number" && (

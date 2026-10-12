@@ -161,13 +161,17 @@ export function ChatSettings() {
           )}
 
           {prefs.toolMode === "manual" && (
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <Label>选择工具</Label>
-              <div className="max-h-52 space-y-1 overflow-y-auto rounded-md border p-2">
+              {/* min-w-0 是必需的：工具 description 是一整行长文本
+                  （search_local_knowledgebase 的描述把所有知识库拼成一行），
+                  truncate 的 white-space:nowrap 会让这一行的最小宽度等于全文，
+                  不加 min-w-0 就会把对话框撑破，右边的模式按钮被顶出可视区。 */}
+              <div className="min-w-0 max-h-52 space-y-1 overflow-y-auto rounded-md border p-2">
                 {Object.values(tools ?? {}).map((tool) => (
                   <label
                     key={tool.name}
-                    className="flex cursor-pointer items-center gap-2 text-sm"
+                    className="flex min-w-0 cursor-pointer items-center gap-2 text-sm"
                   >
                     <Checkbox
                       checked={prefs.selectedTools.includes(tool.name)}
@@ -180,9 +184,9 @@ export function ChatSettings() {
                         prefs.setSelectedTools(next);
                       }}
                     />
-                    <span>{tool.name}</span>
+                    <span className="shrink-0">{tool.name}</span>
                     {tool.description && (
-                      <span className="truncate text-xs text-muted-foreground">
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                         {tool.description}
                       </span>
                     )}
