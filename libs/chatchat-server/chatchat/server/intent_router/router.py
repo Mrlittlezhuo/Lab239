@@ -4,7 +4,7 @@
 路由入口：
 
 1. 确定性快速路径（问候/纯应答等明显意图）；
-2. 可插拔 provider（当前为现有 LLM；后续 FastJev 只需实现
+2. 可插拔 provider（当前为现有 LLM；新增决策来源只需实现
    ``IntentProvider`` 并在 ``build_router`` 处替换）；
 3. 结构化结果校验与低置信度检查；
 4. 任何异常、解析失败、超时或低置信度 → 统一回退「直接回答」，
@@ -21,8 +21,6 @@ from typing import Any, Dict, List, Optional
 from chatchat.server.utils import build_logger
 
 from .providers import (
-    FallbackIntentProvider,
-    FastJevIntentProvider,
     IntentProvider,
     LlmIntentProvider,
     RouteContext,
@@ -99,7 +97,7 @@ class IntentRouter:
                     f"provider 返回了非 RouteResult 类型：{type(result).__name__}"
                 )
             # 在 provider 边界统一校验，而不是只依赖当前 LLM provider
-            # 自行校验。这样后续 FastJev 等 provider 也不能返回不存在的
+            # 自行校验。这样任何 provider 都不能返回不存在的
             # 工具名或无候选工具的 Agent Run。开启 MCP 时额外放行保留候选名
             # mcp（路由器无法预知 MCP 工具名，只能声明「要用 MCP」）。
             result = validate_route_result(
@@ -182,8 +180,9 @@ def build_router(
 ) -> IntentRouter:
     """按当前配置构建路由器。
 
-    ``provider`` 缺省时按 ``AUTO_ROUTE_PROVIDER`` 构建。FastJev 模式
-    优先访问本机服务，调用失败时自动回退现有 LLM provider。
+    ``provider`` 缺省时按 ``AUTO_ROUTE_PROVIDER`` 构建。当前只支持
+    ``llm``；配置里写了别的名字会告警并按 ``llm`` 处理，绝不因为
+    失效的 provider 名中断对话。
     """
     model_settings = None
     try:
@@ -206,19 +205,11 @@ def build_router(
             logger.warning("构建 LLM 路由 provider 失败，将统一回退直接回答：{}", exc)
 
         provider_name = str(getattr(model_settings, "AUTO_ROUTE_PROVIDER", "llm")).lower()
-        if provider_name == "fastjev":
-            primary = FastJevIntentProvider(
-                getattr(model_settings, "FASTJEV_BASE_URL", "http://127.0.0.1:8811"),
-                getattr(model_settings, "FASTJEV_MODEL", "fastjev-qwen3.5-4b-q4-k-m"),
-                timeout_seconds=getattr(model_settings, "FASTJEV_TIMEOUT_SECONDS", 12.0),
-                tool_threshold=getattr(model_settings, "FASTJEV_TOOL_THRESHOLD", 0.0),
-                promotion_threshold=getattr(
-                    model_settings, "FASTJEV_PROMOTION_THRESHOLD", 0.9
-                ),
+        if provider_name != "llm":
+            logger.warning(
+                "AUTO_ROUTE_PROVIDER={} 不是可用的路由来源，按 llm 路由", provider_name
             )
-            provider = FallbackIntentProvider(primary, llm_provider)
-        else:
-            provider = llm_provider
+        provider = llm_provider
 
     return IntentRouter(provider, timeout_seconds=timeout, min_confidence=min_confidence)
 

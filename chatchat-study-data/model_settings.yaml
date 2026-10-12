@@ -26,13 +26,12 @@ MAX_TOKENS:
 # LLM通用对话参数
 TEMPERATURE: 0.7
 
-# 自动模式（extra.auto_agent）意图路由 provider：llm / fastjev。
-# 2026-10-08 回归并切回 fastjev：本机 FastJev 服务（127.0.0.1:8811，GPU1，
-# llama-cpp backend）+ 两项代码修复（超时 8→12s；工具头提升规则 + 工具头置信度
-# 托底）后，31 条对比基准 fastjev 31/31（联网搜索 5/5 命中，无误报），优于
-# llm 29/31。此前 fastjev 把"联网搜索X"判成 general 的系统性误判已被工具头
-# 提升/托底规则修复。若后续 FastJev 服务不可用，会自动回退 llm 路由。
-AUTO_ROUTE_PROVIDER: fastjev
+# 自动模式（extra.auto_agent）意图路由 provider：当前只支持 llm。
+# 2026-10-12 下线本机分类服务 provider：GPU 显存已被模型引擎占满，4B 分类
+# 模型单次路由实测 7~8s，延迟不可接受；相关代码、权重与 conda 环境已删除。
+# 2026-10-08 曾用 31 条中文基准验证过它 31/31（优于 llm 29/31），该结论保留
+# 在 项目优化/ 记录中，供以后接入更快的决策模型时参考。
+AUTO_ROUTE_PROVIDER: llm
 
 # 支持的Agent模型
 SUPPORT_AGENT_MODELS:

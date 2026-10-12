@@ -8,17 +8,15 @@
 - ``LlmIntentProvider``：当前版本的默认 provider，使用项目现有
   ``get_ChatOpenAI`` 模型路径（与任务 011 规划器同一模型来源）做
   通用判断；
-- 后续 FastJev 接入：实现 ``IntentProvider`` 同步接口
+- 新增决策来源：实现 ``IntentProvider`` 同步接口
   ``route(ctx) -> RouteResult`` 并在 ``router.build_router`` 处注册即可，
-  chat API、Agent Run 与 WebUI 无需改动。本任务不引入 FastJev 模型
-  或任何新外部依赖。
+  chat API、Agent Run 与 WebUI 无需改动。本机分类服务 provider 已于
+  2026-10-12 下线（推理延迟不可接受），接口边界保持不变。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
-import httpx
 
 from chatchat.server.agent_run.schema import PlanError, _extract_json_object
 
@@ -205,211 +203,6 @@ class LlmIntentProvider(IntentProvider):
         return "\n".join(parts)
 
 
-class FastJevIntentProvider(IntentProvider):
-    """Use the local FastJev System One service for intent/tool classification."""
-
-    name = "fastjev"
-
-    def __init__(
-        self,
-        base_url: str,
-        model: str,
-        *,
-        timeout_seconds: float = 12.0,
-        tool_threshold: float = 0.0,
-        promotion_threshold: float = 0.9,
-        http_client: Any = None,
-    ):
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.timeout_seconds = max(1.0, float(timeout_seconds))
-        self.tool_threshold = min(1.0, max(0.0, float(tool_threshold)))
-        self.promotion_threshold = min(1.0, max(0.0, float(promotion_threshold)))
-        self.http_client = http_client or httpx.Client(trust_env=False)
-
-    def route(self, ctx: RouteContext) -> RouteResult:
-        payload, offered_tools = self._payload(ctx)
-        try:
-            response = self.http_client.post(
-                f"{self.base_url}/v1/systemone",
-                json=payload,
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except Exception as exc:
-            raise RouteError(f"FastJev 服务调用失败：{exc}") from exc
-
-        try:
-            answers = data["answers"]
-            intent_answer = answers["intent"]
-            intent = str(intent_answer["choice"])
-            probabilities = intent_answer["probabilities"]
-            confidence = float(probabilities[intent])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RouteError(f"FastJev 返回结构非法：{exc}") from exc
-
-        if intent in ("general", "unknown"):
-            # 工具头提升：意图头会把"明确要求调用工具"的请求（如"联网搜索
-            # X"）系统性误判为 general，而同一请求的 primary_tool 头往往给
-            # 对应工具打出高分（如 search_internet 0.96）。工具头得分达到
-            # 阈值时信任工具头、提升为 Agent 调用，避免真实工具请求被漏掉；
-            # 未达阈值维持直接回答，避免闲聊被提升进 Agent。
-            primary = self._tool_answer(answers, "primary_tool")
-            if (
-                primary is not None
-                and primary[0] in offered_tools
-                and primary[1] >= self.promotion_threshold
-            ):
-                tool_name, score = primary
-                result = RouteResult(
-                    path="agent_run",
-                    intent="single_tool",
-                    complexity="single",
-                    candidate_tools=[tool_name],
-                    confidence=score,
-                    summary=(
-                        f"意图头判为{intent}，但工具头给 {tool_name} "
-                        f"高分 {score:.2f}，提升为 Agent 工具调用"
-                    ),
-                    provider=self.name,
-                    source=self.name,
-                )
-                return validate_route_result(
-                    result, ctx.available_tools, mcp_enabled=ctx.use_mcp
-                )
-            return RouteResult(
-                path=PATH_DIRECT,
-                intent=intent,
-                complexity=COMPLEXITY_DIRECT,
-                confidence=confidence,
-                summary="FastJev 判断为普通对话" if intent == "general" else "FastJev 无法可靠判断意图",
-                provider=self.name,
-                source=self.name,
-            )
-
-        selected: List[str] = []
-        tool_scores: Dict[str, float] = {}
-        for question_id in ("primary_tool", "secondary_tool"):
-            picked = self._tool_answer(answers, question_id)
-            if picked is None:
-                continue
-            tool_name, score = picked
-            if (
-                tool_name in offered_tools
-                and tool_name not in selected
-                and score >= self.tool_threshold
-            ):
-                selected.append(tool_name)
-                tool_scores[tool_name] = score
-        if intent == "kb_search" and "search_local_knowledgebase" in ctx.available_tools:
-            if "search_local_knowledgebase" not in selected:
-                selected.insert(0, "search_local_knowledgebase")
-
-        if intent == "kb_search":
-            normalized_intent = "kb_search"
-        elif intent == "single_tool":
-            normalized_intent = "single_tool"
-            if len(selected) > 1:
-                selected = [max(selected, key=lambda name: tool_scores.get(name, 0.0))]
-        else:
-            normalized_intent = "complex"
-
-        # 工具头置信度托底：意图头对"明确要求调用工具"的请求系统性低估
-        # （如"搜索互联网上关于X的最新论文"意图头只给 complex 0.46，而工具头
-        # 给 search_internet 0.96），低分会被路由器低置信度护栏降级为直接
-        # 回答。工具头对某具体工具给出达到提升阈值的得分时，用工具头得分
-        # 托底整体置信度；工具头未达阈值时保持意图头原分，交由护栏处置。
-        backed_confidence = max(
-            confidence,
-            max(
-                (
-                    score
-                    for score in tool_scores.values()
-                    if score >= self.promotion_threshold
-                ),
-                default=0.0,
-            ),
-        )
-
-        result = RouteResult(
-            path="agent_run",
-            intent=normalized_intent,
-            complexity="multi" if normalized_intent == "complex" and len(selected) > 1 else "single",
-            candidate_tools=selected,
-            confidence=backed_confidence,
-            summary="FastJev 判断需要 Agent 调用工具",
-            provider=self.name,
-            source=self.name,
-        )
-        return validate_route_result(
-            result, ctx.available_tools, mcp_enabled=ctx.use_mcp
-        )
-
-    @staticmethod
-    def _tool_answer(answers: Dict[str, Any], question_id: str) -> Optional[tuple[str, float]]:
-        """读取某工具题（primary_tool / secondary_tool）的选中工具及其概率。
-
-        缺失、格式非法或选择 none 时返回 None。
-        """
-        try:
-            answer = answers[question_id]
-            tool_name = str(answer["choice"])
-            score = float(answer["probabilities"][tool_name])
-        except (KeyError, TypeError, ValueError):
-            return None
-        if tool_name == "none":
-            return None
-        return tool_name, score
-
-    def _payload(self, ctx: RouteContext) -> tuple[Dict[str, Any], set[str]]:
-        questions: Dict[str, Any] = {
-            "intent": {
-                "type": "choice",
-                "instructions": "判断用户当前请求最适合采用哪种处理方式。",
-                "criteria": {
-                    "general": "普通对话、改写、翻译或无需工具即可回答的问题",
-                    "kb_search": "需要检索本地知识库、论文语料或用户已有资料",
-                    "single_tool": "需要调用一个明确工具完成的任务",
-                    "complex": "需要多个工具或检索、比较、汇总等连续步骤的复杂任务",
-                    "unknown": "信息不足，无法可靠判断处理方式",
-                },
-            }
-        }
-        tool_criteria: Dict[str, str] = {"none": "不需要使用任何工具"}
-        for name, tool in list((ctx.available_tools or {}).items())[:15]:
-            description = str(getattr(tool, "description", "") or "").splitlines()[0][:160]
-            tool_criteria[name] = description or name
-        if ctx.use_mcp:
-            # 与 LLM provider 同一约定：MCP 工具名要连上服务才知道，路由阶段
-            # 无法枚举，所以把保留候选名 mcp 作为一个候选项交给分类器。工具题的
-            # criteria 本来就按当前配置动态生成，多一项不改变请求协议；该候选
-            # 不参与注册表校验（见 schemas.validate_route_result 的 mcp_enabled）。
-            tool_criteria[MCP_CANDIDATE] = (
-                "需要操作浏览器、读取或填写网页、控制本机外部程序或第三方服务"
-            )
-        if len(tool_criteria) > 1:
-            questions["primary_tool"] = {
-                "type": "choice",
-                "instructions": "选择完成用户请求最需要的主工具；若无需工具则选择 none。",
-                "criteria": tool_criteria,
-            }
-            questions["secondary_tool"] = {
-                "type": "choice",
-                "instructions": "选择复杂任务还需要的第二个工具；若无需第二个工具则选择 none。",
-                "criteria": tool_criteria,
-            }
-        return {
-            "model": self.model,
-            "state": {
-                "query": ctx.query,
-                "recent_history": list(ctx.history[-6:]),
-                "mcp_enabled": bool(ctx.use_mcp),
-            },
-            "questions": questions,
-        }, set(tool_criteria) - {"none"}
-
-
 class FallbackIntentProvider(IntentProvider):
     """Try the local classifier first, then preserve the existing LLM path."""
 
@@ -437,7 +230,6 @@ __all__ = [
     "RouteContext",
     "IntentProvider",
     "LlmIntentProvider",
-    "FastJevIntentProvider",
     "FallbackIntentProvider",
     "rule_fast_path",
 ]

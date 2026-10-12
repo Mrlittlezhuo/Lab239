@@ -75,7 +75,7 @@ class RouteResult:
     candidate_tools: List[str] = field(default_factory=list)
     confidence: Optional[float] = None
     summary: str = ""
-    # 决策来源（provider）：rules / llm / 后续 fastjev 等
+    # 决策来源（provider）：rules / llm / 后续新增的 provider
     provider: str = ""
     # 判定途径：rules（快速路径）/ llm（模型判断）/ fallback（回退）
     source: str = ""

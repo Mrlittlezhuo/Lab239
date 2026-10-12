@@ -1,7 +1,7 @@
 """智能对话总图离线测试（任务 015）。
 
 全部使用临时 SQLite 数据库（迁移到 v7）+ 确定性假工具 / 假规划器 / 脚本化
-route_auto_agent 替身，不连接真实 LLM、FastJev、MCP、知识库、外部网络或用户
+route_auto_agent 替身，不连接真实 LLM、MCP、知识库、外部网络或用户
 数据库；用户身份一律来自服务端认证上下文。
 
 覆盖任务文档 §9 要求：
@@ -299,7 +299,7 @@ class TestMasterGraphStructure:
 class TestSmartConversationDispatch:
     def _patch_smart(self, monkeypatch, temp_db, planner, route, extra_tools=()):
         """把服务层接到临时库与假规划器/假工具，并用脚本化 route_auto_agent
-        替身模拟路由结果（不触真实 LLM / FastJev / 网络）。"""
+        替身模拟路由结果（不触真实 LLM / 网络）。"""
         monkeypatch.setattr(
             chat_routes_mod, "get_OpenAIClient", lambda **k: None
         )

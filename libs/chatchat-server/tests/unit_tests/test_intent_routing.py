@@ -1,7 +1,7 @@
 """意图路由与自动 Agent 离线测试（任务 012）。
 
 全部使用临时 SQLite 数据库（迁移到 v7）+ 确定性假工具 / 假规划器 / 假路由
-provider，不连接真实模型、FastJev、外部服务、MCP 服务或用户数据库；用户
+provider，不连接真实模型、外部分类服务、外部网络、MCP 服务或用户数据库；用户
 身份一律来自服务端认证上下文。
 
 覆盖任务文档 §9 要求：
@@ -67,7 +67,6 @@ from chatchat.server.intent_router import (
     PATH_DIRECT,
     IntentProvider,
     IntentRouter,
-    FastJevIntentProvider,
     FallbackIntentProvider,
     LlmIntentProvider,
     RouteContext,
@@ -581,238 +580,39 @@ class TestLlmIntentProvider:
         assert "当前没有可用工具" in llm.calls[0][0][1]
 
 
-class _FakeHttpResponse:
-    def __init__(self, payload, status_error=None):
-        self.payload = payload
-        self.status_error = status_error
+class TestFallbackIntentProvider:
+    """provider 回退边界：主 provider 异常时保留现有 LLM 路径。"""
 
-    def raise_for_status(self):
-        if self.status_error:
-            raise self.status_error
-
-    def json(self):
-        return self.payload
-
-
-class _FakeHttpClient:
-    def __init__(self, payload=None, raises=None):
-        self.payload = payload
-        self.raises = raises
-        self.calls = []
-
-    def post(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        if self.raises:
-            raise self.raises
-        return _FakeHttpResponse(self.payload)
-
-
-class TestFastJevIntentProvider:
-    def test_kb_route_and_tool_selection(self):
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {
-                    "choice": "kb_search",
-                    "probabilities": {"kb_search": 0.91},
-                },
-                "primary_tool": {
-                    "type": "choice",
-                    "choice": "search_local_knowledgebase",
-                    "probabilities": {"search_local_knowledgebase": 0.88},
-                },
-                "secondary_tool": {
-                    "type": "choice",
-                    "choice": "none",
-                    "probabilities": {"none": 0.9},
-                },
-            }
-        })
-        provider = FastJevIntentProvider(
-            "http://127.0.0.1:8811", "model", http_client=client
+    def _pair(self, raises=None):
+        primary = FixedRouteProvider(
+            result=None if raises else RouteResult(path=PATH_DIRECT, intent=INTENT_GENERAL)
         )
-        result = provider.route(RouteContext(
-            query="查知识库",
-            available_tools={"search_local_knowledgebase": FakeTool("kb", "知识库")},
-        ))
-        assert result.path == PATH_AGENT_RUN
-        assert result.intent == INTENT_KB_SEARCH
-        assert result.candidate_tools == ["search_local_knowledgebase"]
-        assert result.confidence == 0.91
-        assert client.calls[0][0].endswith("/v1/systemone")
-
-    def test_direct_route_ignores_tools(self):
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {
-                    "choice": "general",
-                    "probabilities": {"general": 0.8},
-                }
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(query="解释概念", available_tools={})
+        primary.name = "classifier"
+        fallback = FixedRouteProvider(
+            result=RouteResult(path=PATH_DIRECT, intent=INTENT_GENERAL)
         )
-        assert result.path == PATH_DIRECT
-        assert result.provider == "fastjev"
-
-    def test_service_failure_falls_back_to_llm(self):
-        primary = FastJevIntentProvider(
-            "http://local", "model", http_client=_FakeHttpClient(raises=OSError("down"))
-        )
-        fallback = FixedRouteProvider(RouteResult(path=PATH_DIRECT, intent=INTENT_GENERAL))
         fallback.name = "llm"
+        if raises is not None:
+            primary.raises = raises
+        return primary, fallback
+
+    def test_primary_answer_keeps_primary_name(self):
+        primary, fallback = self._pair()
         result = FallbackIntentProvider(primary, fallback).route(
-            RouteContext(query="解释概念")
+            RouteContext(query="q", available_tools={})
         )
-        assert result.path == PATH_DIRECT
+        assert result.provider == "classifier"
+        assert result.source == "classifier"
+        assert not fallback.calls
+
+    def test_primary_error_falls_back_to_llm(self):
+        primary, fallback = self._pair(raises=OSError("分类服务不可用"))
+        result = FallbackIntentProvider(primary, fallback).route(
+            RouteContext(query="q", available_tools={})
+        )
         assert result.provider == "llm"
-
-    # -- 工具头提升规则（修复"联网搜索"类请求被意图头误判为 general 的问题） --
-
-    def test_general_intent_promoted_by_high_tool_score(self):
-        """意图头判 general 但工具头给具体工具高分 → 提升为 agent_run。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.96},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(
-                query="帮我联网搜索一下X",
-                available_tools={"search_internet": FakeTool("web", "联网搜索")},
-            )
-        )
-        assert result.path == PATH_AGENT_RUN
-        assert result.intent == INTENT_SINGLE_TOOL
-        assert result.candidate_tools == ["search_internet"]
-        assert result.complexity == "single"
-        assert result.confidence == 0.96
-        assert result.provider == "fastjev"
-
-    def test_general_intent_below_promotion_threshold_stays_direct(self):
-        """工具头得分低于阈值 → 维持直接回答，避免闲聊被提升进 Agent。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.5},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(
-                query="随便聊聊",
-                available_tools={"search_internet": FakeTool("web", "联网搜索")},
-            )
-        )
-        assert result.path == PATH_DIRECT
-        assert result.candidate_tools == []
-
-    def test_promotion_requires_tool_offered(self):
-        """高分工具不在可用列表内 → 不提升（不编造工具）。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.97},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(query="帮我联网搜索一下X", available_tools={})
-        )
-        assert result.path == PATH_DIRECT
-        assert result.candidate_tools == []
-
-    def test_unknown_intent_promoted_by_high_tool_score(self):
-        """意图头判 unknown 但工具头高分 → 同样提升。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "unknown", "probabilities": {"unknown": 0.7}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.95},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(
-                query="查一下最新进展",
-                available_tools={"search_internet": FakeTool("web", "联网搜索")},
-            )
-        )
-        assert result.path == PATH_AGENT_RUN
-        assert result.candidate_tools == ["search_internet"]
-
-    def test_promotion_disabled_at_threshold_one(self):
-        """阈值设为 1.0 时关闭提升（任何 <1.0 的得分都不触发）。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "general", "probabilities": {"general": 0.8}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.96},
-                },
-            }
-        })
-        provider = FastJevIntentProvider(
-            "http://local", "model", http_client=client, promotion_threshold=1.0
-        )
-        result = provider.route(RouteContext(
-            query="帮我联网搜索一下X",
-            available_tools={"search_internet": FakeTool("web", "联网搜索")},
-        ))
-        assert result.path == PATH_DIRECT
-
-    # -- 工具头置信度托底（非 general/unknown 意图分支） --
-
-    def test_low_intent_confidence_backed_by_high_tool_score(self):
-        """意图头低分（complex 0.46）但工具头高分（0.95）→ 置信度托底到工具头，
-        不再被路由器低置信度护栏降级。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "complex", "probabilities": {"complex": 0.46}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.95},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(
-                query="搜索互联网上关于X的最新论文",
-                available_tools={"search_internet": FakeTool("web", "联网搜索")},
-            )
-        )
-        assert result.path == PATH_AGENT_RUN
-        assert result.candidate_tools == ["search_internet"]
-        assert result.confidence == 0.95
-
-    def test_low_intent_confidence_unbacked_below_threshold(self):
-        """工具头得分低于提升阈值 → 置信度保持意图头原分，交由路由器护栏。"""
-        client = _FakeHttpClient({
-            "answers": {
-                "intent": {"choice": "complex", "probabilities": {"complex": 0.4}},
-                "primary_tool": {
-                    "choice": "search_internet",
-                    "probabilities": {"search_internet": 0.8},
-                },
-            }
-        })
-        result = FastJevIntentProvider("http://local", "model", http_client=client).route(
-            RouteContext(
-                query="搜索一下X",
-                available_tools={"search_internet": FakeTool("web", "联网搜索")},
-            )
-        )
-        assert result.path == PATH_AGENT_RUN
-        assert result.confidence == 0.4
+        assert result.source == "llm"
+        assert len(fallback.calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -898,7 +698,7 @@ class TestIntentRouterFallbacks:
         assert r.source == "fallback"
 
     def test_custom_provider_unknown_tool_falls_back(self):
-        """所有 provider 都必须经过统一工具校验，含后续 FastJev。"""
+        """所有 provider 都必须经过统一工具校验。"""
         provider = FixedRouteProvider(
             RouteResult(
                 path=PATH_AGENT_RUN,
@@ -939,7 +739,7 @@ class TestRouteAutoAgentEntry:
 class TestChatCompletionsAutoAgent:
     def _patch_auto(self, monkeypatch, temp_db, planner, route, extra_tools=()):
         """把服务层接到临时库与假规划器/假工具，并用脚本化 route_auto_agent
-        替身模拟路由结果（不触真实 LLM / FastJev / 网络）。"""
+        替身模拟路由结果（不触真实 LLM / 网络）。"""
         monkeypatch.setattr(
             chat_routes_mod, "get_OpenAIClient", lambda **k: None
         )

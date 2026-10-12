@@ -2,13 +2,12 @@
 
 - ``route_auto_agent``：chat API 自动模式唯一入口；
 - ``IntentRouter`` + ``IntentProvider``：可测试、可替换的路由组件边界，
-  后续接入 FastJev 只需实现 ``IntentProvider`` 接口；
+  新增决策来源只需实现 ``IntentProvider`` 接口；
 - ``RouteResult`` / ``validate_route_result``：结构化、可校验的路由结果。
 """
 
 from .providers import (
     FallbackIntentProvider,
-    FastJevIntentProvider,
     IntentProvider,
     LlmIntentProvider,
     RouteContext,
@@ -34,7 +33,6 @@ from .schemas import (
 __all__ = [
     "IntentProvider",
     "LlmIntentProvider",
-    "FastJevIntentProvider",
     "FallbackIntentProvider",
     "RouteContext",
     "rule_fast_path",

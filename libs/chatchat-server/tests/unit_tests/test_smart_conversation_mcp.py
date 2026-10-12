@@ -13,8 +13,8 @@
 在建立 MCP 连接后把它换成真实工具；MCP 开关按请求走，全局配置只作强制
 开启的逃生口。
 
-全部离线：假 http_client / 假工具 / 打桩 agent_run_chat，不连 MCP 服务、
-LLM、FastJev、数据库或网络。
+全部离线：假工具 / 打桩 agent_run_chat，不连 MCP 服务、LLM、外部网络
+或数据库。
 """
 import asyncio
 import sys
@@ -33,7 +33,6 @@ if "chatchat.server.chat.kb_chat" not in sys.modules:
     sys.modules["chatchat.server.chat.kb_chat"] = _kb_stub
 
 from chatchat.server.intent_router.providers import (
-    FastJevIntentProvider,
     LlmIntentProvider,
     RouteContext,
 )
@@ -308,97 +307,7 @@ class TestBranchNodesWithMcp:
 
 
 # ---------------------------------------------------------------------------
-# 5. FastJev provider：把保留候选名作为可选项交给分类器
-# ---------------------------------------------------------------------------
-
-
-class _FakeResponse:
-    def __init__(self, data):
-        self._data = data
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._data
-
-
-class _FakeHttpClient:
-    """记录请求载荷并返回脚本化的 FastJev 答案。"""
-
-    def __init__(self, answers):
-        self.answers = answers
-        self.payloads = []
-
-    def post(self, url, json, timeout):
-        self.payloads.append(json)
-        return _FakeResponse({"answers": self.answers})
-
-
-def _jev_answers(intent: str, tool: str, score: float = 0.8):
-    return {
-        "intent": {"choice": intent, "probabilities": {intent: 0.6}},
-        "primary_tool": {"choice": tool, "probabilities": {tool: score}},
-        "secondary_tool": {"choice": "none", "probabilities": {"none": 0.9}},
-    }
-
-
-class TestFastJevMcpCandidate:
-    def test_mcp_candidate_is_offered_only_when_enabled(self):
-        client = _FakeHttpClient(_jev_answers("complex", MCP_CANDIDATE))
-        provider = FastJevIntentProvider(
-            "http://127.0.0.1:8811", "fake-model", http_client=client
-        )
-        ctx = RouteContext(
-            query="打开浏览器看看官网公告",
-            available_tools={"search_internet": _tool("search_internet")},
-            use_mcp=True,
-        )
-        result = provider.route(ctx)
-
-        criteria = client.payloads[0]["questions"]["primary_tool"]["criteria"]
-        assert MCP_CANDIDATE in criteria
-        assert result.candidate_tools == [MCP_CANDIDATE]
-        assert result.is_agent_run
-
-    def test_mcp_candidate_is_not_offered_when_disabled(self):
-        # 关闭开关时分类器看不见 mcp，选了它也不算有效候选 → 结果非法，
-        # 由路由器回退直接回答（保持旧行为，不会误开 MCP）。
-        client = _FakeHttpClient(_jev_answers("complex", MCP_CANDIDATE))
-        provider = FastJevIntentProvider(
-            "http://127.0.0.1:8811", "fake-model", http_client=client
-        )
-        ctx = RouteContext(
-            query="打开浏览器看看官网公告",
-            available_tools={"search_internet": _tool("search_internet")},
-            use_mcp=False,
-        )
-        with pytest.raises(RouteError):
-            provider.route(ctx)
-
-        criteria = client.payloads[0]["questions"]["primary_tool"]["criteria"]
-        assert MCP_CANDIDATE not in criteria
-
-    def test_mcp_only_candidate_still_gets_tool_head_confidence(self):
-        client = _FakeHttpClient(_jev_answers("complex", MCP_CANDIDATE, 0.95))
-        provider = FastJevIntentProvider(
-            "http://127.0.0.1:8811",
-            "fake-model",
-            http_client=client,
-            promotion_threshold=0.9,
-        )
-        ctx = RouteContext(
-            query="打开浏览器看看官网公告",
-            available_tools={"search_internet": _tool("search_internet")},
-            use_mcp=True,
-        )
-        result = provider.route(ctx)
-        # 意图头只有 0.6，工具头托底到 0.95，否则会被低置信度护栏退回直接回答
-        assert result.confidence == pytest.approx(0.95)
-
-
-# ---------------------------------------------------------------------------
-# 6. LLM provider 提示词：明确 MCP 场景怎么写候选
+# 5. LLM provider 提示词：明确 MCP 场景怎么写候选
 # ---------------------------------------------------------------------------
 
 

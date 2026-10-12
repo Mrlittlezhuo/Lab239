@@ -2,7 +2,7 @@
 
 全部使用内存 span exporter（opentelemetry-sdk InMemorySpanExporter）、
 假 register / 假路由 / 假模型 / 假工具，不连接真实 Phoenix、LLM、
-FastJev、MCP、知识库、外部网络或用户数据。
+MCP、知识库、外部网络或用户数据。
 
 覆盖任务文档 §8 要求：
 - 关闭时 no-op：不注册、无导出、不改变对话结果；

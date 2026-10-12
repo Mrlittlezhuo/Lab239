@@ -402,26 +402,10 @@ class ApiModelSettings(BaseFileSettings):
     平时不需要打开——前端「聊天设置 → 可用 MCP 工具」按会话发 use_mcp，
     服务端取「请求 use_mcp 或本配置」。两者都为假时智能对话完全不碰 MCP。"""
 
-    AUTO_ROUTE_PROVIDER: str = "fastjev"
-    """自动意图路由来源：fastjev 优先使用本机分类服务并在失败时回退现有 LLM；llm 仅使用现有 LLM"""
-
-    FASTJEV_BASE_URL: str = "http://127.0.0.1:8811"
-    """本机 FastJev System One API 地址"""
-
-    FASTJEV_MODEL: str = "fastjev-qwen3.5-4b-q4-k-m"
-    """FastJev 服务发布的模型名称"""
-
-    FASTJEV_TIMEOUT_SECONDS: float = 12.0
-    """单次 FastJev HTTP 请求超时（秒）。本机实测推理延迟约 7~8s，8s 过于贴线
-    （偶发超时触发 LLM 兜底），12s 留出余量"""
-
-    FASTJEV_TOOL_THRESHOLD: float = 0.0
-    """FastJev 工具选项最低概率；默认接受模型选出的非 none 工具"""
-
-    FASTJEV_PROMOTION_THRESHOLD: float = 0.9
-    """FastJev 工具头提升阈值：意图头判 general/unknown 时，primary_tool 头对
-    某具体工具得分达到该值则提升为 Agent 工具调用（修复"明确要求用工具"被
-    系统性误判为普通对话的问题）；设为 1.0 可关闭提升"""
+    AUTO_ROUTE_PROVIDER: str = "llm"
+    """自动意图路由来源，当前只支持 llm。2026-10-12 下线了本机分类服务
+    provider（推理延迟不可接受）；配置里写别的名字会告警并按 llm 处理。
+    新增决策来源请实现 intent_router.IntentProvider 并在 build_router 注册。"""
 
     SUPPORT_AGENT_MODELS: t.List[str] = [
             "chatglm3-6b",
