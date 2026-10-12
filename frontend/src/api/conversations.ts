@@ -19,8 +19,14 @@ export interface MessageRecord {
   feedback_reason: string | null;
 }
 
-export function listConversations(): Promise<Conversation[]> {
-  return getJson<Conversation[]>("/conversations");
+/**
+ * 会话列表。chatType 决定只看哪一类会话：智能聊天是 agent_chat，
+ * 知识库对话是 kb_chat —— 不传就混在一起（知识库对话页会看到智能聊天的会话）。
+ */
+export function listConversations(chatType?: string): Promise<Conversation[]> {
+  return getJson<Conversation[]>("/conversations", {
+    query: chatType ? { chat_type: chatType } : undefined,
+  });
 }
 
 export function createConversation(

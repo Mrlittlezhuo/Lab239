@@ -26,9 +26,11 @@ export function ConversationSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
 
+  // queryKey 必须带 chatType：两个页面共用这个组件，不带就会共用缓存，
+  // 知识库对话页会显示智能聊天的会话列表。
   const { data: conversations = [] } = useQuery({
-    queryKey: ["conversations"],
-    queryFn: listConversations,
+    queryKey: ["conversations", chatType],
+    queryFn: () => listConversations(chatType),
   });
 
   const invalidate = () =>

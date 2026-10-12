@@ -279,6 +279,52 @@ def test_lists_are_per_user(client, temp_user_db, secret):
 
 
 # ---------------------------------------------------------------------------
+# 按 chat_type 过滤（智能聊天 / 知识库对话各自的会话列表）
+# ---------------------------------------------------------------------------
+
+
+def test_list_can_be_filtered_by_chat_type(client, temp_user_db, secret):
+    """不过滤时两个入口的会话混在一起，知识库对话页能打开智能聊天的会话。
+
+    前端两个页面共用同一个侧栏组件，之前只把 chat_type 用在创建上，
+    列表请求带了这个 query 参数但服务端忽略，所以知识库对话页会列出
+    智能聊天的会话，选中后历史与 kb_chat 消息混成一串。
+    """
+    hdr, _ = _headers_of(temp_user_db, "alice")
+    chat_conv = _create_conv(client, hdr, "智能聊天里的", chat_type="agent_chat")
+    kb_conv = _create_conv(client, hdr, "知识库对话里的", chat_type="kb_chat")
+
+    all_ids = {c["id"] for c in client.get("/conversations", headers=hdr).json()}
+    assert {chat_conv, kb_conv} <= all_ids
+
+    kb_ids = {
+        c["id"]
+        for c in client.get("/conversations?chat_type=kb_chat", headers=hdr).json()
+    }
+    assert kb_ids == {kb_conv}
+
+    agent_ids = {
+        c["id"]
+        for c in client.get("/conversations?chat_type=agent_chat", headers=hdr).json()
+    }
+    assert agent_ids == {chat_conv}
+
+
+def test_chat_type_filter_does_not_leak_other_users_conversations(
+    client, temp_user_db, secret
+):
+    hdr_a, _ = _headers_of(temp_user_db, "alice")
+    hdr_b, _ = _headers_of(temp_user_db, "bob")
+    kb_b = _create_conv(client, hdr_b, "b 的知识库会话", chat_type="kb_chat")
+
+    ids = {
+        c["id"]
+        for c in client.get("/conversations?chat_type=kb_chat", headers=hdr_a).json()
+    }
+    assert kb_b not in ids
+
+
+# ---------------------------------------------------------------------------
 # A 读取 / 重命名 / 删除 B 的会话均为 404
 # ---------------------------------------------------------------------------
 

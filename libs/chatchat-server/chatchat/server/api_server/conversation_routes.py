@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -99,10 +99,14 @@ def create_my_conversation(
 
 @conversation_router.get("", summary="当前用户会话列表（update_time DESC）")
 def list_my_conversations(
+    chat_type: Optional[str] = Query(
+        None,
+        description="按聊天类型过滤，如 agent_chat（智能聊天）、kb_chat（知识库对话）；不传为全部。",
+    ),
     user: UserModel = Depends(require_password_changed),
     session: Session = Depends(get_db),
 ) -> List[ConversationOut]:
-    return [_conv_out(c) for c in list_conversations(session, user.id)]
+    return [_conv_out(c) for c in list_conversations(session, user.id, chat_type)]
 
 
 @conversation_router.get("/{conversation_id}", summary="会话详情")

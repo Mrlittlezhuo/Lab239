@@ -44,17 +44,26 @@ def create_conversation(
     return c.id
 
 
-def list_conversations(session: Session, owner_id: str) -> list[ConversationModel]:
-    """当前用户的会话列表，按 update_time 倒序（无时间者按 id 兜底）。"""
-    return (
-        session.query(ConversationModel)
-        .filter(ConversationModel.owner_id == owner_id)
-        .order_by(
-            ConversationModel.update_time.desc(),
-            ConversationModel.id.desc(),
-        )
-        .all()
+def list_conversations(
+    session: Session,
+    owner_id: str,
+    chat_type: str | None = None,
+) -> list[ConversationModel]:
+    """当前用户的会话列表，按 update_time 倒序（无时间者按 id 兜底）。
+
+    ``chat_type`` 用于把不同入口的会话分开（智能聊天 agent_chat、
+    知识库对话 kb_chat…）。不传就是全部 —— 前端两个页面都用同一个侧栏组件，
+    不过滤的话知识库对话页会列出并打开智能聊天的会话，历史混成一串。
+    """
+    query = session.query(ConversationModel).filter(
+        ConversationModel.owner_id == owner_id
     )
+    if chat_type:
+        query = query.filter(ConversationModel.chat_type == chat_type)
+    return query.order_by(
+        ConversationModel.update_time.desc(),
+        ConversationModel.id.desc(),
+    ).all()
 
 
 def get_owned_conversation(
