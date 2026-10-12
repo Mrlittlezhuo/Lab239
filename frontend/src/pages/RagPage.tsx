@@ -106,6 +106,8 @@ export function RagPage() {
   }
 
   const param = mode === "local_kb" ? kbName : mode === "temp_kb" ? tempId : engine;
+  // 没显式选模型时显示并发送服务端默认模型（空串会让服务端 Body 默认值失效）
+  const modelValue = prefs.model || serverModels?.default_llm || "";
   const draftKey = `rag:${conversationId ?? "new"}`;
   const draft = prefs.drafts[draftKey] ?? "";
 
@@ -190,6 +192,28 @@ export function RagPage() {
               </Select>
             )}
 
+            {/* 模型：与聊天设置共用同一个偏好（prefs.model）。
+                没选过模型时这里显示服务端默认模型，发请求时也带上真实名字 ——
+                以前发的是空串，服务端 Body 默认值不生效，整轮对话直接失败。 */}
+            <div className="flex items-center gap-1">
+              <Label className="text-xs text-muted-foreground">模型</Label>
+              <Select value={modelValue} onValueChange={prefs.setModel}>
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="服务端默认" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(serverModels?.llm_models ?? []).map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!prefs.model && (
+                <span className="text-xs text-muted-foreground">（服务端默认）</span>
+              )}
+            </div>
+
             <div className="flex items-center gap-1">
               <Label className="text-xs text-muted-foreground">top_k</Label>
               <Input
@@ -241,7 +265,7 @@ export function RagPage() {
             void rag.send(text, {
               mode,
               param,
-              model: prefs.model,
+              model: modelValue,
               temperature: prefs.temperature,
               topK,
               scoreThreshold,
