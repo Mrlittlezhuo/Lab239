@@ -133,4 +133,14 @@ describe("send 请求载荷", () => {
     expect(body.use_mcp).toBe(true);
     expect("auto_agent" in body).toBe(false);
   });
+
+  it("“本次不使用个人偏好”时带 use_memory=false", async () => {
+    const body = await bodyFor({ useMemory: false });
+    expect(body.use_memory).toBe(false);
+  });
+
+  it("默认使用个人记忆时不带 use_memory（请求形状与旧版一致）", async () => {
+    const body = await bodyFor();
+    expect("use_memory" in body).toBe(false);
+  });
 });

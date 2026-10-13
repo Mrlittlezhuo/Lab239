@@ -15,6 +15,8 @@ export interface RagChatRequest {
   prompt_name?: string;
   return_direct?: boolean;
   conversation_id?: string;
+  /** false = 本轮不使用个人记忆（界面"本次不使用个人偏好"）；缺省表示使用 */
+  use_memory?: boolean;
 }
 
 /**
