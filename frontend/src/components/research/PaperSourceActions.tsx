@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileSearch, ScanText, Stamp } from "lucide-react";
+import { AlignLeft, FileText, ScanText, Stamp } from "lucide-react";
 import { toast } from "sonner";
 
 import { extractEvidence, ingestFulltext, listUnits } from "@/api/research";
 import type { PaperUnit, ResearchPaper } from "@/api/research";
+import {
+  PaperAbstractDialog,
+  isWebUrl,
+} from "@/components/research/PaperAbstractDialog";
+import { dehyphenate } from "@/components/research/paperText";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,9 +37,14 @@ export interface SubQuestionOption {
 }
 
 /**
- * 单篇论文的原文与证据入口：取原文（幂等、可降级）、查看原文单元、
- * 按子问题提取证据。取不到全文时后端会如实降级为摘要级证据，
- * 界面必须把降级原因显示出来，不能假装拿到了全文。
+ * 单篇论文的原文与证据入口。
+ *
+ * 「取原文」和「原文」是同一个按钮的两种状态：还没取到全文时只有
+ * 「取原文」（幂等、可降级），取到之后变成「原文」，点击在新标签页里
+ * 让浏览器直接渲染 PDF。摘要不再平铺在列表里，改为「摘要」按钮按需查看。
+ * 原文可得性徽章本身就是「原文单元」的入口（有单元才可点），不再单独占一个按钮。
+ * 取不到全文时后端会如实降级为摘要级证据，界面必须把降级原因显示出来，
+ * 不能假装拿到了全文。
  */
 export function PaperSourceActions({
   projectId,
@@ -48,6 +60,8 @@ export function PaperSourceActions({
   const queryClient = useQueryClient();
   const [showUnits, setShowUnits] = useState(false);
   const [showExtract, setShowExtract] = useState(false);
+  const [showAbstract, setShowAbstract] = useState(false);
+  const hasFulltext = paper.fulltext_state === "fulltext";
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["research-papers", projectId] });
@@ -72,31 +86,65 @@ export function PaperSourceActions({
   return (
     <>
       <div className="flex flex-wrap items-center gap-1">
-        <Badge variant="outline" title="该论文在本项目内的原文可得性">
-          {FULLTEXT_STATE_LABEL[paper.fulltext_state] ?? paper.fulltext_state}
-          {paper.unit_count > 0 ? ` · ${paper.unit_count} 单元` : ""}
-        </Badge>
+        {/* 原文可得性徽章本身就是原文单元入口，不再单独放一个按钮 */}
+        {paper.unit_count > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowUnits(true)}
+            title="查看带页码/章节定位的原文单元（证据核对引用的就是这些）"
+            className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent"
+          >
+            {FULLTEXT_STATE_LABEL[paper.fulltext_state] ?? paper.fulltext_state}
+            {` · ${paper.unit_count} 单元`}
+          </button>
+        ) : (
+          <Badge variant="outline" title="该论文在本项目内的原文可得性">
+            {FULLTEXT_STATE_LABEL[paper.fulltext_state] ?? paper.fulltext_state}
+          </Badge>
+        )}
+        {hasFulltext ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={() =>
+              // 有可访问的链接就交给浏览器自己的 PDF 查看器（应用内 iframe 会被
+              // 外部站点的 X-Frame-Options 挡掉）；原文只来自本地知识库时退回单元视图
+              isWebUrl(paper.url)
+                ? window.open(paper.url, "_blank", "noopener,noreferrer")
+                : setShowUnits(true)
+            }
+            title={
+              isWebUrl(paper.url)
+                ? "在新标签页打开原文 PDF"
+                : "该论文没有可打开的外部链接，显示已解析的原文单元"
+            }
+          >
+            <FileText className="mr-1 h-3 w-3" />
+            原文
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={() => ingestMutation.mutate()}
+            disabled={ingestMutation.isPending}
+            title="解析 PDF/知识库原文；取不到会降级为摘要级证据"
+          >
+            <ScanText className="mr-1 h-3 w-3" />
+            {ingestMutation.isPending ? "取原文中…" : "取原文"}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
           className="h-7 text-xs"
-          onClick={() => ingestMutation.mutate()}
-          disabled={ingestMutation.isPending}
-          title="解析 PDF/知识库原文；取不到会降级为摘要级证据"
+          onClick={() => setShowAbstract(true)}
+          title="查看完整摘要与元数据"
         >
-          <ScanText className="mr-1 h-3 w-3" />
-          取原文
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs"
-          onClick={() => setShowUnits(true)}
-          disabled={paper.unit_count === 0}
-          title={paper.unit_count === 0 ? "还没有原文单元" : "查看带定位的原文单元"}
-        >
-          <FileSearch className="mr-1 h-3 w-3" />
-          原文
+          <AlignLeft className="mr-1 h-3 w-3" />
+          摘要
         </Button>
         <Button
           size="sm"
@@ -114,6 +162,11 @@ export function PaperSourceActions({
         open={showUnits}
         onClose={() => setShowUnits(false)}
         projectId={projectId}
+        paper={paper}
+      />
+      <PaperAbstractDialog
+        open={showAbstract}
+        onClose={() => setShowAbstract(false)}
         paper={paper}
       />
       <ExtractDialog
@@ -232,6 +285,13 @@ function ExtractDialog({
   );
 }
 
+/**
+ * 原文单元浏览视图。
+ *
+ * 一篇论文动辄上百块、每块最多 2000 字，全部摊开就是一堵墙：所以默认只露
+ * 三行，配搜索框和页码过滤，定位信息做成一行标签。断词合并只发生在显示层，
+ * 库内文本不变，证据核对仍是逐字比对。
+ */
 function UnitsDialog({
   open,
   onClose,
@@ -248,41 +308,147 @@ function UnitsDialog({
     queryFn: () => listUnits(projectId, paper.paper_id),
     enabled: open,
   });
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState("all");
+  // 一篇论文动辄上百个单元，默认只露三行，点开才展开（否则整屏都是墙）
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const pages = useMemo(
+    () =>
+      Array.from(new Set(units.map((u) => u.page).filter((p): p is number => !!p))).sort(
+        (a, b) => a - b,
+      ),
+    [units],
+  );
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return units.filter((unit) => {
+      if (page !== "all" && String(unit.page ?? "") !== page) return false;
+      if (needle && !unit.text.toLowerCase().includes(needle)) return false;
+      return true;
+    });
+  }, [units, query, page]);
+  const totalChars = units.reduce((sum, u) => sum + (u.char_count || 0), 0);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{paper.title} 的原文单元（{units.length}）</DialogTitle>
+          <DialogTitle className="pr-6 text-left text-base">
+            原文单元（{units.length}）
+          </DialogTitle>
+          <p className="line-clamp-1 text-xs text-muted-foreground" title={paper.title}>
+            {paper.title}
+          </p>
         </DialogHeader>
-        <div className="max-h-[60vh] space-y-2 overflow-y-auto text-xs">
-          {isLoading && <div className="text-muted-foreground">加载中…</div>}
-          {units.map((unit) => (
-            <UnitBlock key={unit.unit_id} unit={unit} />
-          ))}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="在单元内搜索…"
+            className="h-8 w-56 text-sm"
+          />
+          <Select value={page} onValueChange={setPage}>
+            <SelectTrigger className="h-8 w-32 text-xs">
+              <SelectValue placeholder="全部页码" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部页码</SelectItem>
+              {pages.map((p) => (
+                <SelectItem key={p} value={String(p)}>
+                  第 {p} 页
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {filtered.length}/{units.length} 块 · 共 {totalChars} 字
+          </span>
         </div>
+
+        <div className="max-h-[58vh] space-y-2 overflow-y-auto pr-1">
+          {isLoading && <div className="text-sm text-muted-foreground">加载中…</div>}
+          {filtered.map((unit) => (
+            <UnitBlock
+              key={unit.unit_id}
+              unit={unit}
+              expanded={expanded.has(unit.unit_id)}
+              onToggle={() =>
+                setExpanded((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(unit.unit_id)) next.delete(unit.unit_id);
+                  else next.add(unit.unit_id);
+                  return next;
+                })
+              }
+            />
+          ))}
+          {!isLoading && units.length > 0 && filtered.length === 0 && (
+            <div className="py-6 text-center text-sm text-muted-foreground">
+              没有匹配的单元，换个关键词或页码
+            </div>
+          )}
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          显示时合并了 PDF 换行处的断词（be- yond → beyond）；证据核对仍按库内原文逐字比对。
+        </p>
       </DialogContent>
     </Dialog>
   );
 }
 
-function UnitBlock({ unit }: { unit: PaperUnit }) {
-  const where =
-    unit.unit_kind === "abstract"
-      ? "摘要级"
-      : [
-          unit.page ? `第 ${unit.page} 页` : "",
-          unit.section ?? "",
-          `文本块 ${unit.block_index}`,
-        ]
-          .filter(Boolean)
-          .join("，");
+function UnitBlock({
+  unit,
+  expanded,
+  onToggle,
+}: {
+  unit: PaperUnit;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  // 章节标题检测偶尔会把整句当标题吞进来（现场："method for network resource
+  // optimization combined with a"）：过长就不显示，避免定位行看起来像乱码
+  const section =
+    unit.section && unit.section.length <= 40 ? unit.section : "";
   return (
-    <div className="rounded-md border p-2">
-      <div className="text-[11px] text-muted-foreground">
-        {where} · {unit.char_count} 字 · 来源 {unit.source_kind}
+    <div className="rounded-md border">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-t-md border-b bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+        <span className="rounded bg-background px-1.5 py-0.5 font-mono">
+          #{unit.block_index}
+        </span>
+        <span>
+          {unit.unit_kind === "abstract"
+            ? "摘要级（无页码）"
+            : unit.page
+              ? `第 ${unit.page} 页`
+              : "页码未知"}
+        </span>
+        {section ? (
+          <span className="max-w-[18rem] truncate" title={section}>
+            {section}
+          </span>
+        ) : null}
+        <span>{unit.char_count} 字</span>
+        <span>来源 {unit.source_kind}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-6 px-2 text-xs"
+          onClick={onToggle}
+        >
+          {expanded ? "收起" : "展开全文"}
+        </Button>
       </div>
-      <p className="mt-1 whitespace-pre-wrap">{unit.text}</p>
+      <p
+        className={cn(
+          "whitespace-pre-wrap px-2.5 py-2 text-sm leading-6",
+          !expanded && "line-clamp-3",
+        )}
+      >
+        {dehyphenate(unit.text)}
+      </p>
     </div>
   );
 }

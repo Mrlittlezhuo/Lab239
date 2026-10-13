@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -368,11 +368,7 @@ function PaperRow({
             {paper.year ? ` · ${paper.year}` : ""} · {paper.source}
             {paper.arxiv_id ? ` · arXiv:${paper.arxiv_id}` : ""}
           </div>
-          {paper.abstract && (
-            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-              {paper.abstract}
-            </p>
-          )}
+          {/* 摘要不平铺在列表里（一行卡片塞两段英文没法读），改由「摘要」按钮按需查看 */}
           <div className="mt-2">
             <PaperSourceActions
               projectId={projectId}
@@ -401,17 +397,6 @@ function PaperRow({
             <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onScreen("excluded")}>
               排除
             </Button>
-            {paper.url && (
-              <a
-                href={paper.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent"
-              >
-                <Search className="mr-1 h-3 w-3" />
-                原文
-              </a>
-            )}
           </div>
         </div>
       </div>

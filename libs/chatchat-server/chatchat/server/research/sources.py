@@ -6,9 +6,8 @@
 
 第一版复用两类已有能力：
 
-- ``arxiv``：与现有 ArXiv 工具同一底层能力
-  （``langchain_community`` 的 ArxivAPIWrapper），但走结构化结果接口，
-  不解析工具自由文本输出；底层依赖缺失时该来源以 ``SourceError``
+- ``arxiv``：直接调 ``arxiv`` 包（与现有 ArXiv 工具同一底层依赖），取结构化
+  结果而非工具的自由文本输出；底层依赖缺失时该来源以 ``SourceError``
   明确不可用（与现有工具行为一致），不影响其他来源；
 - ``local_kb``：现有公共知识库检索（``kb_doc_api.search_docs``），
   文档结构化字段转换为候选。
@@ -20,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from chatchat.server.research.papers import PaperCandidate
+from chatchat.server.research.papers import PaperCandidate, normalize_arxiv_id
 from chatchat.utils import build_logger
 
 logger = build_logger()
@@ -43,18 +42,35 @@ class PaperSource:
 
 
 class ArxivSource(PaperSource):
-    """ArXiv 检索：复用现有 ArXiv 工具的底层结构化接口。"""
+    """ArXiv 检索：直接调 ``arxiv`` 包取结构化结果。
+
+    不再经 ``langchain_community`` 的 ArxivAPIWrapper：0.4.x 已移除
+    ``load_results``（只剩 ``run`` / ``load`` / ``lazy_load``），拿回的是
+    Document 而非带 arxiv_id、published、pdf_url 的原始结果，本来源需要
+    后者。聊天里的 ArXiv 工具仍走 wrapper 的 ``run``，不受影响。
+    """
 
     name = "arxiv"
 
     async def search(self, query: str, limit: int = DEFAULT_SOURCE_TOP_K) -> List[PaperCandidate]:
         try:
-            from langchain_community.tools.arxiv.tool import ArxivAPIWrapper
+            import arxiv
         except ImportError as exc:  # 底层依赖缺失：来源明确不可用
             raise SourceError(f"ArXiv 依赖不可用：{exc}") from exc
         try:
-            wrapper = ArxivAPIWrapper(top_k_results=max(1, int(limit)))
-            results = wrapper.load_results(query, max(1, int(limit)))
+            top = max(1, int(limit))
+            search = arxiv.Search(
+                query=query,
+                max_results=top,
+                sort_by=arxiv.SortCriterion.Relevance,
+            )
+            # arxiv 2.x 用 Client().results(search)；1.x 只有 Search.results()
+            client_cls = getattr(arxiv, "Client", None)
+            if client_cls is None:
+                results = list(search.results())
+            else:
+                client = client_cls(page_size=min(top, 100), delay_seconds=0.0, num_retries=2)
+                results = list(client.results(search))
         except Exception as exc:
             raise SourceError(f"ArXiv 检索失败：{exc}") from exc
         candidates: List[PaperCandidate] = []
@@ -64,8 +80,18 @@ class ArxivSource(PaperSource):
                 published = getattr(res, "published", None) or getattr(res, "updated", None)
                 if published is not None:
                     year = int(getattr(published, "year", 0)) or None
-                arxiv_id = str(getattr(res, "result_id", "") or getattr(res, "arxiv_id", "") or "") or None
-                url = str(getattr(res, "url", "") or "") or None
+                # arxiv 2.x 删掉了 1.x 的 result_id / url：短 id 只能从 entry_id
+                # （http://arxiv.org/abs/1102.2017v2）解析，全文下载要的 .pdf
+                # 链接只有 pdf_url —— fulltext 的 PdfUrlUnitProvider 只认
+                # 以 .pdf 结尾的 url，填 abs 页会直接解析不到正文。
+                entry_id = str(getattr(res, "entry_id", "") or "")
+                pdf_url = str(getattr(res, "pdf_url", "") or "") or None
+                arxiv_id = (
+                    str(getattr(res, "result_id", "") or "")
+                    or normalize_arxiv_id(entry_id)
+                    or None
+                )
+                url = str(getattr(res, "url", "") or "") or pdf_url or entry_id or None
                 candidates.append(
                     PaperCandidate(
                         title=str(getattr(res, "title", "") or "").strip(),
@@ -75,7 +101,7 @@ class ArxivSource(PaperSource):
                         abstract=str(getattr(res, "summary", "") or ""),
                         arxiv_id=arxiv_id,
                         url=url,
-                        fulltext_status="pdf" if getattr(res, "pdf_url", None) else "abstract",
+                        fulltext_status="pdf" if pdf_url else "abstract",
                     )
                 )
             except Exception:  # 单条解析失败不影响该来源其余结果

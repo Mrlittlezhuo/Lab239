@@ -1,6 +1,8 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronDown,
+  ChevronRight,
   FileText,
   MessageSquareText,
   Pencil,
@@ -18,12 +20,13 @@ import {
   deleteDocs,
   deleteKnowledgeBase,
   listFiles,
+  listKbStatistics,
   listKnowledgeBases,
   searchDocs,
   updateKbInfo,
   uploadDocs,
 } from "@/api/kb";
-import type { KbSearchDoc } from "@/api/kb";
+import type { KbSearchDoc, KbStatistics } from "@/api/kb";
 import { getServerModels } from "@/api/server";
 import { ChunkEditor } from "@/components/kb/ChunkEditor";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +51,20 @@ function formatSize(bytes?: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** 服务端 file_mtime 是 epoch 秒（Float），直接渲染会是一串裸数字。 */
+function formatMtime(seconds?: number | null): string {
+  if (typeof seconds !== "number" || !seconds) return "-";
+  const d = new Date(seconds * 1000);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function KnowledgeBasePage() {
   const { kbName } = useParams<{ kbName?: string }>();
   const navigate = useNavigate();
@@ -59,13 +76,16 @@ export function KnowledgeBasePage() {
   const [newInfo, setNewInfo] = useState("");
   const [confirmDeleteKb, setConfirmDeleteKb] = useState<string | null>(null);
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
-  const [editingInfo, setEditingInfo] = useState(false);
+  const [editingInfoFor, setEditingInfoFor] = useState<string | null>(null);
   const [infoDraft, setInfoDraft] = useState("");
-  const [chunkFile, setChunkFile] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [chunkTarget, setChunkTarget] = useState<{ kb: string; file: string } | null>(
+    null,
+  );
+  const [searchKb, setSearchKb] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<KbSearchDoc[] | null>(null);
   const [uploadOverride, setUploadOverride] = useState(true);
+  const [recreateKb, setRecreateKb] = useState<string | null>(null);
 
   const { progress, start: startRecreate, clear: clearProgress } =
     useRecreateProgress();
@@ -73,6 +93,10 @@ export function KnowledgeBasePage() {
   const { data: kbs = [], isLoading } = useQuery({
     queryKey: ["knowledge-bases"],
     queryFn: listKnowledgeBases,
+  });
+  const { data: stats = [] } = useQuery({
+    queryKey: ["kb-statistics"],
+    queryFn: listKbStatistics,
   });
   const { data: serverModels } = useQuery({
     queryKey: ["server-models"],
@@ -84,8 +108,16 @@ export function KnowledgeBasePage() {
     enabled: !!kbName,
   });
 
+  // 知识库名大小写不敏感（服务端查询一律 ilike）
+  const statsByKb = useMemo(() => {
+    const map = new Map<string, KbStatistics>();
+    for (const s of stats) map.set(s.kb_name.toLowerCase(), s);
+    return map;
+  }, [stats]);
+
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["knowledge-bases"] });
+    queryClient.invalidateQueries({ queryKey: ["kb-statistics"] });
     queryClient.invalidateQueries({ queryKey: ["kb-files"] });
   };
 
@@ -153,23 +185,22 @@ export function KnowledgeBasePage() {
   });
 
   const infoMutation = useMutation({
-    mutationFn: (info: string) => updateKbInfo(kbName!, info),
+    mutationFn: (input: { kb: string; info: string }) =>
+      updateKbInfo(input.kb, input.info),
     onSuccess: () => {
       toast.success("介绍已更新");
-      setEditingInfo(false);
+      setEditingInfoFor(null);
       invalidateAll();
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "更新失败"),
   });
 
-  const currentKb = kbs.find((kb) => kb.kb_name === kbName);
-
   async function runSearchTest() {
-    if (!kbName) return;
+    if (!searchKb) return;
     try {
       const results = await searchDocs({
         query: searchQuery,
-        knowledge_base_name: kbName,
+        knowledge_base_name: searchKb,
         top_k: 5,
         score_threshold: 0,
       });
@@ -179,226 +210,311 @@ export function KnowledgeBasePage() {
     }
   }
 
+  function toggleExpand(name: string) {
+    navigate(kbName === name ? "/kb" : `/kb/${encodeURIComponent(name)}`);
+  }
+
   return (
-    <div className="flex h-full">
-      <div className="flex w-60 shrink-0 flex-col border-r">
-        <div className="p-2">
-          <Button size="sm" className="w-full" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" />
-            新建知识库
-          </Button>
-        </div>
-        <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-2">
-          {kbs.map((kb) => (
-            <div
-              key={kb.kb_name}
-              className={cn(
-                "group flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent",
-                kbName === kb.name && "bg-accent",
-              )}
-              onClick={() => navigate(`/kb/${encodeURIComponent(kb.kb_name)}`)}
-            >
-              <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">{kb.kb_name}</span>
-              {typeof kb.file_count === "number" && (
-                <Badge variant="secondary">{kb.file_count}</Badge>
-              )}
-              <button
-                type="button"
-                className="hidden text-muted-foreground hover:text-destructive group-hover:block"
-                title="删除知识库"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDeleteKb(kb.kb_name);
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-          {!isLoading && kbs.length === 0 && (
-            <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-              暂无知识库
-            </div>
-          )}
-        </div>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b px-4 py-3">
+        <h1 className="text-lg font-semibold">知识库管理</h1>
+        <span className="text-xs text-muted-foreground">
+          共 {kbs.length} 个公共知识库
+        </span>
+        <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          新建知识库
+        </Button>
       </div>
 
-      <div className="min-w-0 flex-1 overflow-y-auto p-2">
-        {!kbName ? (
-          <div className="py-16 text-center text-muted-foreground">
-            选择左侧知识库查看和管理文件
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg font-semibold">{kbName}</h1>
-              <Badge variant="outline">{currentKb?.vs_type ?? "-"}</Badge>
-              <Badge variant="outline">{currentKb?.embed_model ?? "-"}</Badge>
-              <div className="ml-auto flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSearchOpen(true)}
-                >
-                  <Search className="h-4 w-4" />
-                  检索测试
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={progress?.running}
-                  onClick={() => {
-                    clearProgress();
-                    void startRecreate(kbName);
-                  }}
-                  title="从 content 目录重建向量库"
-                >
-                  <RefreshCw
-                    className={cn("h-4 w-4", progress?.running && "animate-spin")}
-                  />
-                  重建向量库
-                </Button>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    const picked = Array.from(e.target.files ?? []);
-                    if (picked.length > 0) uploadMutation.mutate(picked);
-                    if (fileRef.current) fileRef.current.value = "";
+      <div className="min-w-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+          公共知识库：上传、修改、删除都会影响所有用户。
+        </div>
+
+        {/* 重建进度放在列表外层：折叠卡片也不会丢掉进度条 */}
+        {progress && recreateKb && (
+          <div className="rounded-md border p-2 text-sm">
+            <div className="mb-1 flex items-center justify-between">
+              <span>
+                正在重建「{recreateKb}」：{progress.finished}
+                {progress.total > 0 ? ` / ${progress.total}` : ""}
+                {progress.doc ? `（${progress.doc}）` : ""}
+              </span>
+              {progress.error && (
+                <span className="text-destructive">{progress.error}</span>
+              )}
+            </div>
+            {progress.total > 0 && (
+              <div className="h-2 rounded bg-muted">
+                <div
+                  className="h-2 rounded bg-primary transition-all"
+                  style={{
+                    width: `${Math.min(100, (progress.finished / progress.total) * 100)}%`,
                   }}
                 />
-                <Button size="sm" onClick={() => fileRef.current?.click()}>
-                  <Upload className="h-4 w-4" />
-                  上传文件
-                </Button>
               </div>
-            </div>
+            )}
+          </div>
+        )}
 
-            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
-              公共知识库：上传、修改、删除都会影响所有用户。
-            </div>
+        {isLoading && (
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            正在读取知识库…
+          </div>
+        )}
 
-            {progress && (
-              <div className="rounded-md border p-2 text-sm">
-                <div className="mb-1 flex items-center justify-between">
-                  <span>
-                    重建进度：{progress.finished}
-                    {progress.total > 0 ? ` / ${progress.total}` : ""}
-                    {progress.doc ? `（${progress.doc}）` : ""}
-                  </span>
-                  {progress.error && (
-                    <span className="text-destructive">{progress.error}</span>
-                  )}
+        {!isLoading && kbs.length === 0 && (
+          <div className="py-16 text-center text-muted-foreground">
+            暂无知识库，点击右上角「新建知识库」创建。
+          </div>
+        )}
+
+        {kbs.map((kb) => {
+          const expanded = kbName === kb.kb_name;
+          const stat = statsByKb.get(kb.kb_name.toLowerCase());
+          return (
+            <div key={kb.kb_name} className="rounded-lg border bg-card">
+              <div className="space-y-2 p-3">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <h2 className="truncate font-semibold">{kb.kb_name}</h2>
+                      <Badge variant="outline">{kb.vs_type ?? "-"}</Badge>
+                      <Badge variant="outline">{kb.embed_model ?? "-"}</Badge>
+                      {stat ? (
+                        <span
+                          className="text-xs text-muted-foreground"
+                          title="统计取自已入库文件（knowledge_file），只放在 content 目录但未上传的文件不计入"
+                        >
+                          {stat.file_count} 个文件 · {stat.docs_count} 个片段 ·{" "}
+                          {formatSize(stat.total_size)} · 更新于{" "}
+                          {formatMtime(stat.latest_mtime)}
+                        </span>
+                      ) : (
+                        <span
+                          className="text-xs text-muted-foreground"
+                          title="没取到统计：后端未更新，或该库暂无已入库文件（点「管理文件」看明细）"
+                        >
+                          {kb.file_count ?? 0} 个文件 · 统计未就绪
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1">
+                      <p
+                        className={cn(
+                          "min-w-0 flex-1 text-sm",
+                          kb.kb_info
+                            ? "text-foreground/80"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {kb.kb_info || "未填写介绍"}
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 shrink-0 px-1 text-muted-foreground"
+                        title={
+                          editingInfoFor === kb.kb_name ? "取消编辑" : "编辑介绍"
+                        }
+                        aria-label={
+                          editingInfoFor === kb.kb_name ? "取消编辑" : "编辑介绍"
+                        }
+                        onClick={() => {
+                          setInfoDraft(kb.kb_info ?? "");
+                          setEditingInfoFor((v) =>
+                            v === kb.kb_name ? null : kb.kb_name,
+                          );
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="sm"
+                      title={`用「${kb.kb_name}」新建一个知识库对话`}
+                      onClick={() =>
+                        navigate(`/rag?kb=${encodeURIComponent(kb.kb_name)}`)
+                      }
+                    >
+                      <MessageSquareText className="h-4 w-4" />
+                      去对话
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => toggleExpand(kb.kb_name)}
+                    >
+                      {expanded ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                      管理文件
+                    </Button>
+                  </div>
                 </div>
-                {progress.total > 0 && (
-                  <div className="h-2 rounded bg-muted">
-                    <div
-                      className="h-2 rounded bg-primary transition-all"
-                      style={{
-                        width: `${Math.min(100, (progress.finished / progress.total) * 100)}%`,
-                      }}
+
+                {editingInfoFor === kb.kb_name && (
+                  <div className="flex gap-2">
+                    <Textarea
+                      value={infoDraft}
+                      onChange={(e) => setInfoDraft(e.target.value)}
+                      rows={2}
+                      maxLength={200}
+                      className="flex-1"
+                      placeholder="知识库内容简介（最多 200 字），用于 Agent 选择知识库"
                     />
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        infoMutation.mutate({ kb: kb.kb_name, info: infoDraft })
+                      }
+                      disabled={infoMutation.isPending}
+                    >
+                      保存
+                    </Button>
                   </div>
                 )}
               </div>
-            )}
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Label className="text-sm text-muted-foreground">介绍</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 text-xs"
-                  onClick={() => {
-                    setInfoDraft(currentKb?.kb_info ?? "");
-                    setEditingInfo((v) => !v);
-                  }}
-                >
-                  <Pencil className="h-3 w-3" />
-                  {editingInfo ? "取消" : "编辑"}
-                </Button>
-              </div>
-              {editingInfo ? (
-                <div className="flex gap-2">
-                  <Textarea
-                    value={infoDraft}
-                    onChange={(e) => setInfoDraft(e.target.value)}
-                    rows={2}
-                    className="flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => infoMutation.mutate(infoDraft)}
-                    disabled={infoMutation.isPending}
-                  >
-                    保存
-                  </Button>
+              {expanded && (
+                <div className="space-y-3 border-t p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSearchKb(kb.kb_name);
+                        setSearchResults(null);
+                        setSearchQuery("");
+                      }}
+                    >
+                      <Search className="h-4 w-4" />
+                      检索测试
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={progress?.running}
+                      onClick={() => {
+                        clearProgress();
+                        setRecreateKb(kb.kb_name);
+                        void startRecreate(kb.kb_name);
+                      }}
+                      title="从 content 目录重建向量库"
+                    >
+                      <RefreshCw
+                        className={cn(
+                          "h-4 w-4",
+                          progress?.running && recreateKb === kb.kb_name && "animate-spin",
+                        )}
+                      />
+                      重建向量库
+                    </Button>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const picked = Array.from(e.target.files ?? []);
+                        if (picked.length > 0) uploadMutation.mutate(picked);
+                        if (fileRef.current) fileRef.current.value = "";
+                      }}
+                    />
+                    <Button size="sm" onClick={() => fileRef.current?.click()}>
+                      <Upload className="h-4 w-4" />
+                      上传文件
+                    </Button>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Checkbox
+                        checked={uploadOverride}
+                        onCheckedChange={(v) => setUploadOverride(v === true)}
+                      />
+                      上传时覆盖同名文件
+                    </label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto text-destructive"
+                      onClick={() => setConfirmDeleteKb(kb.kb_name)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      删除知识库
+                    </Button>
+                  </div>
+
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="py-2">文件</th>
+                        <th className="py-2">片段</th>
+                        <th className="py-2">大小</th>
+                        <th className="py-2">修改时间</th>
+                        <th className="py-2 text-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {files.map((f) => (
+                        <tr key={f.file_name} className="border-b last:border-0">
+                          <td className="py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="break-all">{f.file_name}</span>
+                              {f.in_db === false && (
+                                <Badge variant="secondary" title="文件在 content 目录里，但尚未向量化入库，检索不到">
+                                  未入库
+                                </Badge>
+                              )}
+                            </div>
+                          </td>
+                          <td>{typeof f.docs_count === "number" ? f.docs_count : "-"}</td>
+                          <td>{formatSize(f.file_size as number | undefined)}</td>
+                          <td>{formatMtime(f.file_mtime)}</td>
+                          <td className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                setChunkTarget({ kb: kb.kb_name, file: f.file_name })
+                              }
+                            >
+                              <MessageSquareText className="h-4 w-4" />
+                              chunk
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive"
+                              onClick={() => setConfirmDeleteFile(f.file_name)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              删除
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {files.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            className="py-6 text-center text-muted-foreground"
+                          >
+                            暂无文件，点击「上传文件」添加。
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {currentKb?.kb_info || "（无介绍）"}
-                </p>
               )}
             </div>
-
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="py-2">文件</th>
-                  <th className="py-2">大小</th>
-                  <th className="py-2">修改时间</th>
-                  <th className="py-2 text-right">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {files.map((f) => (
-                  <tr key={f.file_name} className="border-b last:border-0">
-                    <td className="py-2">{f.file_name}</td>
-                    <td>{formatSize(f.file_size as number | undefined)}</td>
-                    <td>{f.file_mtime ?? "-"}</td>
-                    <td className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setChunkFile(f.file_name)}
-                      >
-                        <MessageSquareText className="h-4 w-4" />
-                        chunk
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive"
-                        onClick={() => setConfirmDeleteFile(f.file_name)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        删除
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {files.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="py-6 text-center text-muted-foreground">
-                      暂无文件
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox
-                checked={uploadOverride}
-                onCheckedChange={(v) => setUploadOverride(v === true)}
-              />
-              上传时覆盖同名文件
-            </label>
-          </div>
-        )}
+          );
+        })}
       </div>
 
       {/* 创建知识库 */}
@@ -411,7 +527,11 @@ export function KnowledgeBasePage() {
             <Label>名称</Label>
             <Input value={newName} onChange={(e) => setNewName(e.target.value)} />
             <Label>介绍</Label>
-            <Textarea value={newInfo} onChange={(e) => setNewInfo(e.target.value)} />
+            <Textarea
+              value={newInfo}
+              maxLength={200}
+              onChange={(e) => setNewInfo(e.target.value)}
+            />
             <Button
               className="w-full"
               onClick={() => createMutation.mutate()}
@@ -482,10 +602,13 @@ export function KnowledgeBasePage() {
       </Dialog>
 
       {/* 检索测试 */}
-      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
+      <Dialog
+        open={searchKb !== null}
+        onOpenChange={(open) => !open && setSearchKb(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>检索测试：{kbName}</DialogTitle>
+            <DialogTitle>检索测试：{searchKb}</DialogTitle>
           </DialogHeader>
           <div className="flex gap-2">
             <Input
@@ -515,12 +638,12 @@ export function KnowledgeBasePage() {
         </DialogContent>
       </Dialog>
 
-      {kbName && chunkFile && (
+      {chunkTarget && (
         <ChunkEditor
-          kbName={kbName}
-          fileName={chunkFile}
-          open={chunkFile !== null}
-          onOpenChange={(open) => !open && setChunkFile(null)}
+          kbName={chunkTarget.kb}
+          fileName={chunkTarget.file}
+          open={chunkTarget !== null}
+          onOpenChange={(open) => !open && setChunkTarget(null)}
           onSaved={invalidateAll}
         />
       )}

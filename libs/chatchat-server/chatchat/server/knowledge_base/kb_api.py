@@ -6,6 +6,7 @@ from chatchat.settings import Settings
 from chatchat.server.auth.deps import require_password_changed
 from chatchat.server.db.models.user_model import UserModel
 from chatchat.server.db.repository.knowledge_base_repository import list_kbs_from_db
+from chatchat.server.db.repository.knowledge_file_repository import get_kb_statistics
 from chatchat.server.knowledge_base.kb_service.base import KBServiceFactory
 from chatchat.server.knowledge_base.utils import validate_kb_name
 from chatchat.server.utils import BaseResponse, ListResponse, get_default_embedding
@@ -31,6 +32,17 @@ def log_kb_operation(user: UserModel, operation: str, knowledge_base_name: str, 
 def list_kbs():
     # Get List of Knowledge Base
     return ListResponse(data=list_kbs_from_db())
+
+
+def list_kb_statistics() -> ListResponse:
+    """各知识库的入库数据统计，供知识库列表一次取齐。
+
+    单独一个接口而不是并进 ``list_knowledge_bases``：后者返回
+    ``KnowledgeBaseSchema``，其 ``file_count`` 是增删时维护的计数器，可能与实际
+    行数漂移；统计接口按 ``knowledge_file`` 现算，两者口径不同，混在一个响应里
+    会让调用方分不清该信哪个。
+    """
+    return ListResponse(data=get_kb_statistics())
 
 
 def create_kb(
