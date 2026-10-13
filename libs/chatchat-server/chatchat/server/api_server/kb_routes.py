@@ -12,7 +12,12 @@ from chatchat.server.db.session import get_db
 from chatchat.server.api_server.api_schemas import OpenAIChatInput, OpenAIChatOutput
 from chatchat.server.chat.file_chat import upload_temp_docs
 from chatchat.server.chat.kb_chat import kb_chat
-from chatchat.server.knowledge_base.kb_api import create_kb, delete_kb, list_kbs
+from chatchat.server.knowledge_base.kb_api import (
+    create_kb,
+    delete_kb,
+    list_kb_statistics,
+    list_kbs,
+)
 from chatchat.server.knowledge_base.kb_doc_api import (
     delete_docs,
     download_doc,
@@ -82,6 +87,10 @@ async def kb_chat_endpoint(
 kb_router.get(
     "/list_knowledge_bases", response_model=ListResponse, summary="获取知识库列表"
 )(list_kbs)
+
+kb_router.get(
+    "/list_statistics", response_model=ListResponse, summary="获取各知识库的入库数据统计"
+)(list_kb_statistics)
 
 kb_router.post(
     "/create_knowledge_base", response_model=BaseResponse, summary="创建知识库"

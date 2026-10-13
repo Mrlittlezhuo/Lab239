@@ -13,6 +13,7 @@ import {
   createKnowledgeBase,
   deleteDocs,
   deleteKnowledgeBase,
+  listKbStatistics,
   updateDocs,
   uploadDocs,
 } from "@/api/kb";
@@ -141,5 +142,40 @@ describe("知识库写操作请求体", () => {
       delete_content: true,
       not_refresh_vs_cache: false,
     });
+  });
+});
+
+/**
+ * 知识库列表页的统计来源。单独一个接口而不是并进 list_knowledge_bases：
+ * 后者的 file_count 是增删时维护的计数器，会与 knowledge_file 实际行数漂移。
+ */
+describe("listKbStatistics", () => {
+  it("GET /knowledge_base/list_statistics 并解出 data", async () => {
+    const fetchMock = mockFetch(async () =>
+      envelope(200, "ok", [
+        {
+          kb_name: "无线通信",
+          file_count: 3,
+          docs_count: 23,
+          total_size: 3584,
+          latest_mtime: 1760000000,
+        },
+      ]),
+    );
+
+    const rows = await listKbStatistics();
+
+    const { url, init } = lastCall(fetchMock);
+    expect(url).toBe("/knowledge_base/list_statistics");
+    expect(init.method).toBe("GET");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].docs_count).toBe(23);
+    expect(rows[0].total_size).toBe(3584);
+  });
+
+  it("信封 code 非 200 时抛错，不能当成“没有统计”", async () => {
+    mockFetch(async () => envelope(500, "统计失败"));
+
+    await expect(listKbStatistics()).rejects.toThrow("统计失败");
   });
 });

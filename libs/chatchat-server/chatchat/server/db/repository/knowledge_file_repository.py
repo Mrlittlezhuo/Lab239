@@ -1,5 +1,7 @@
 from typing import Dict, List
 
+from sqlalchemy import func
+
 from chatchat.server.db.models.knowledge_base_model import KnowledgeBaseModel
 from chatchat.server.db.models.knowledge_file_model import (
     FileDocModel,
@@ -107,6 +109,37 @@ def list_files_from_db(session, kb_name):
     )
     docs = [f.file_name for f in files]
     return docs
+
+
+@with_session
+def get_kb_statistics(session) -> List[Dict]:
+    """按知识库汇总已入库文件的统计，供知识库列表展示。
+
+    返回 ``[{kb_name, file_count, docs_count, total_size, latest_mtime}]``。
+    口径是 ``knowledge_file`` 表，也就是「已上传并入库」的文件；只躺在 content
+    目录、尚未入库的文件不计入。只读查询，不触达向量库与磁盘。
+    """
+    totals = (
+        session.query(
+            KnowledgeFileModel.kb_name,
+            func.count(KnowledgeFileModel.id),
+            func.coalesce(func.sum(KnowledgeFileModel.docs_count), 0),
+            func.coalesce(func.sum(KnowledgeFileModel.file_size), 0),
+            func.max(KnowledgeFileModel.file_mtime),
+        )
+        .group_by(KnowledgeFileModel.kb_name)
+        .all()
+    )
+    stats: Dict[str, Dict] = {}
+    for kb_name, files, docs, size, mtime in totals:
+        stats[kb_name] = {
+            "kb_name": kb_name,
+            "file_count": int(files or 0),
+            "docs_count": int(docs or 0),
+            "total_size": int(size or 0),
+            "latest_mtime": float(mtime) if mtime else None,
+        }
+    return list(stats.values())
 
 
 @with_session

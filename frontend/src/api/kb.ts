@@ -22,9 +22,27 @@ export interface KbFileDetail {
   file_id?: string;
   kb_name?: string;
   file_ext?: string;
-  file_mtime?: string;
+  /** epoch 秒（服务端 Float），不是 ISO 字符串 */
+  file_mtime?: number;
   file_size?: number;
+  /** 该文件切分出的片段数；只在 content 目录、尚未入库的文件为 0 */
+  docs_count?: number;
+  /** false = 文件在 content 目录里但没进向量库，检索不到 */
+  in_db?: boolean;
+  in_folder?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * 知识库入库统计。口径是 knowledge_file 表（已上传入库的文件），与
+ * KbSummary.file_count（增删时维护的计数器）可能不一致；列表页以本接口为准。
+ */
+export interface KbStatistics {
+  kb_name: string;
+  file_count: number;
+  docs_count: number;
+  total_size: number;
+  latest_mtime?: number | null;
 }
 
 export interface KbSearchDoc {
@@ -38,6 +56,15 @@ export async function listKnowledgeBases(): Promise<KbSummary[]> {
   const body = await getJson<Envelope<KbSummary[]>>(
     "/knowledge_base/list_knowledge_bases",
   );
+  return unwrapEnvelope(body);
+}
+
+/**
+ * 一次取回所有知识库的入库统计（文件数 / 片段数 / 总大小 / 最近更新 / 文件类型）。
+ * 没有入库文件的知识库不会出现在返回里，调用方按缺失处理。
+ */
+export async function listKbStatistics(): Promise<KbStatistics[]> {
+  const body = await getJson<Envelope<KbStatistics[]>>("/knowledge_base/list_statistics");
   return unwrapEnvelope(body);
 }
 

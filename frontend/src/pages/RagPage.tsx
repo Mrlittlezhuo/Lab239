@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { listMessages } from "@/api/conversations";
@@ -42,8 +42,13 @@ export function RagPage() {
     onConversationId: (id) => navigate(`/rag/${id}`, { replace: true }),
   });
 
+  // 知识库管理页的「去对话」用 /rag?kb=<名字> 过来：不带会话 id，
+  // 因此每次点击都是一个新会话，且已经选中那个知识库。
+  const [searchParams] = useSearchParams();
+  const kbParam = searchParams.get("kb");
+
   const [mode, setMode] = useState<RagMode>("local_kb");
-  const [kbName, setKbName] = useState("");
+  const [kbName, setKbName] = useState(() => kbParam ?? "");
   const [tempId, setTempId] = useState("");
   const [tempFileName, setTempFileName] = useState("");
   const [engine, setEngine] = useState("");
@@ -60,10 +65,16 @@ export function RagPage() {
     queryFn: getServerModels,
   });
 
-  // 默认选中第一个知识库 / 搜索引擎
+  // 默认选中第一个知识库 / 搜索引擎。?kb= 指定的知识库优先；
+  // 名字不存在（已删除或写错）时退回第一个，避免下拉框空选导致整轮失败。
   useEffect(() => {
-    if (!kbName && kbs.length > 0) setKbName(kbs[0].kb_name);
-  }, [kbs, kbName]);
+    if (kbs.length === 0) return;
+    setKbName((cur) => {
+      if (cur && kbs.some((kb) => kb.kb_name === cur)) return cur;
+      if (kbParam && kbs.some((kb) => kb.kb_name === kbParam)) return kbParam;
+      return kbs[0].kb_name;
+    });
+  }, [kbs, kbParam]);
   useEffect(() => {
     if (!engine && serverModels?.search_engines?.length)
       setEngine(serverModels.search_engines[0]);
