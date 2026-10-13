@@ -5,10 +5,10 @@
 
 - **降级不伪造**：拿不到全文时只用摘要，产出 ``unit_kind='abstract'``
   的单元且 ``page is None``；绝不给摘要级证据编页码或章节；
-- **复用既有能力**：PDF 解析走仓库已有的文档加载器
-  （``chatchat.server.file_rag.document_loaders.RapidOCRPDFLoader``，
-  与知识库同一套），本地全文走公共知识库检索，不引入第二套 PDF 框架、
-  不新增依赖；
+- **复用既有能力**：远程 PDF 先下载到临时文件，再走仓库已有的文档加载器 ——
+  有文字层用 ``PyPDFLoader``（快），扫描件回落
+  ``chatchat.server.file_rag.document_loaders.RapidOCRPDFLoader``（与知识库
+  同一套 OCR）；本地全文走公共知识库检索，不引入第二套 PDF 框架、不新增依赖；
 - **定位稳定**：``block_index`` 按文档顺序连续编号，配合 ``page``/
   ``section`` 与内容哈希构成可重现定位；同一论文重跑得到同样的槽位。
 
@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
@@ -311,36 +312,109 @@ class LocalKbUnitProvider(FullTextProvider):
         return units_from_documents(docs, source_kind=self.name)
 
 
-class PdfUrlUnitProvider(FullTextProvider):
-    """远程 PDF：用仓库既有加载器解析论文的稳定 URL（运行时联网）。"""
+def _has_text(docs: Iterable[Any]) -> bool:
+    """解析结果里是否真有文字（扫描件会得到空/空白页）。"""
+    return any((getattr(d, "page_content", "") or "").strip() for d in docs or [])
 
-    def __init__(self, loader_factory: Optional[Any] = None):
-        #: 可注入的加载器工厂（测试用假 loader；默认按 URL 构造）
+
+class PdfUrlUnitProvider(FullTextProvider):
+    """远程 PDF：下载后按「文字层 → OCR」顺序解析（运行时联网）。
+
+    两个实测出来的坑，都在这里钉住：
+
+    - arXiv 现在的 ``pdf_url`` 形如 ``https://arxiv.org/pdf/2312.10793v3``，
+      **没有** ``.pdf`` 后缀 —— 旧实现只按后缀判断，等于把所有 arXiv 论文
+      判成「没有 PDF」，还静默返回空（不记失败原因），界面只看到
+      「未取得全文，已降级为摘要级证据」而没有任何解释；
+    - 仓库的 ``RapidOCRPDFLoader`` 和 ``PyPDFLoader`` 都只吃**本地路径**，
+      直接把 URL 塞进去必然解析失败，所以先下载到临时文件再解析。
+    """
+
+    #: 单篇 PDF 的下载上限（防止一篇超长 PDF 撑爆一次运行）
+    MAX_PDF_BYTES = 30 * 1024 * 1024
+
+    def __init__(
+        self,
+        loader_factory: Optional[Any] = None,
+        timeout_seconds: float = 60.0,
+    ):
+        #: 可注入的加载器工厂（测试用假 loader；默认按下载后的本地路径构造）
         self.loader_factory = loader_factory
+        self.timeout_seconds = timeout_seconds
         self.name = "pdf"
+
+    @staticmethod
+    def _looks_like_pdf(url: str) -> bool:
+        path = url.split("?", 1)[0].split("#", 1)[0].lower()
+        return path.endswith(".pdf") or path.endswith("/pdf") or "/pdf/" in path
+
+    def _download(self, url: str) -> str:
+        """下载到临时文件并返回路径（调用方负责删除）。"""
+        import urllib.request
+        from tempfile import mkstemp
+
+        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as resp:
+                content_type = (resp.headers.get("content-type") or "").lower()
+                body = resp.read(self.MAX_PDF_BYTES + 1)
+        except Exception as exc:
+            raise FullTextError(f"PDF 下载失败：{exc}") from exc
+        if len(body) > self.MAX_PDF_BYTES:
+            raise FullTextError(
+                f"PDF 超过 {self.MAX_PDF_BYTES // (1024 * 1024)} MB 上限，跳过全文"
+            )
+        if "pdf" not in content_type and not body.startswith(b"%PDF"):
+            raise FullTextError(
+                f"链接返回的不是 PDF（content-type={content_type or '未知'}）"
+            )
+        fd, path = mkstemp(prefix="chatchat-research-", suffix=".pdf")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+        return path
+
+    def _load(self, loader: Any) -> List[Any]:
+        try:
+            return list(loader.load() or [])
+        except Exception as exc:
+            raise FullTextError(f"PDF 解析失败：{exc}") from exc
+
+    def _load_text(self, path: str) -> List[Any]:
+        """文字层解析：论文 PDF 绝大多数带文字层，比 OCR 快两个数量级。"""
+        try:
+            from langchain_community.document_loaders import PyPDFLoader
+        except Exception as exc:
+            raise FullTextError(f"PDF 加载器不可用：{exc}") from exc
+        return self._load(PyPDFLoader(path))
+
+    def _load_ocr(self, path: str) -> List[Any]:
+        """扫描件兜底：只有文字层取不到内容时才走仓库的 OCR 加载器。"""
+        try:
+            from chatchat.server.file_rag.document_loaders import RapidOCRPDFLoader
+        except Exception as exc:
+            raise FullTextError(f"OCR 加载器不可用：{exc}") from exc
+        return self._load(RapidOCRPDFLoader(path))
 
     def fetch(self, paper: Any) -> List[PaperUnit]:
         url = (getattr(paper, "url", "") or "").strip()
-        if not url.lower().endswith(".pdf"):
-            return []
-        if self.loader_factory is not None:
-            loader = self.loader_factory(url)
-        else:
-            try:
-                from chatchat.server.file_rag.document_loaders import RapidOCRPDFLoader
+        if not url:
+            raise FullTextError("论文没有可解析的链接")
+        if not self._looks_like_pdf(url):
+            raise FullTextError(f"链接不是 PDF：{url[:120]}")
 
-                loader = RapidOCRPDFLoader(url)
-            except Exception:
-                try:
-                    from langchain_community.document_loaders import PyPDFLoader
-
-                    loader = PyPDFLoader(url)
-                except Exception as exc:
-                    raise FullTextError(f"PDF 加载器不可用：{exc}") from exc
+        path = self._download(url)
         try:
-            docs = loader.load()
-        except Exception as exc:
-            raise FullTextError(f"PDF 解析失败：{exc}") from exc
+            if self.loader_factory is not None:
+                docs = self._load(self.loader_factory(path))
+            else:
+                docs = self._load_text(path)
+                if not _has_text(docs):
+                    docs = self._load_ocr(path)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                logger.warning("临时 PDF 删除失败", exc_info=True)
         return units_from_documents(docs, source_kind=self.name)
 
 
