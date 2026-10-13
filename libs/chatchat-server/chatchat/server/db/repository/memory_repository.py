@@ -8,12 +8,22 @@ from __future__ import annotations
 
 import re
 import uuid
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from chatchat.server.db.models.memory_model import MemoryModel
 
 #: 记忆类型白名单
 VALID_TYPES = ("preference", "fact", "goal", "important")
+
+#: 个人偏好类别白名单（智能聊天记忆第一期）。``category`` 为空表示"不是用户
+#: 管理的个人偏好"（例如自动提取的长期事实），因此旧数据无需回填。
+VALID_CATEGORIES = (
+    "answer_style",
+    "technical_background",
+    "work_style",
+    "long_term_goal",
+)
 
 
 class MemoryNotOwned(Exception):
@@ -23,6 +33,22 @@ class MemoryNotOwned(Exception):
 def _normalize_type(mtype: str) -> str:
     mtype = (mtype or "").strip().lower()
     return mtype if mtype in VALID_TYPES else "fact"
+
+
+def _normalize_category(category) -> str | None:
+    """个人偏好类别规范化：空→None（不是个人偏好），未知→ValueError。
+
+    与 ``_normalize_type`` 不同，这里**不静默回落**：类别决定注入优先级和
+    管理页分组，写错类别会让用户的偏好落到错误的分组里且难以发现。
+    """
+    if category is None:
+        return None
+    value = str(category).strip().lower()
+    if not value:
+        return None
+    if value not in VALID_CATEGORIES:
+        raise ValueError(f"未知的个人偏好类别：{category!r}")
+    return value
 
 
 def _normalize_importance(importance) -> int:
@@ -45,6 +71,7 @@ def create_memory(
     memory_key: str | None = None,
     source_conversation_id: str | None = None,
     source_message_id: str | None = None,
+    category: str | None = None,
 ) -> MemoryModel:
     """新增一条记忆；owner 由服务端写入。"""
     if not owner_id:
@@ -61,6 +88,7 @@ def create_memory(
         owner_id=owner_id,
         memory_key=memory_key[:128],
         type=_normalize_type(mtype),
+        category=_normalize_category(category),
         content=content,
         source=source,
         source_conversation_id=source_conversation_id,
@@ -112,8 +140,13 @@ def update_memory(
     memory_key: str | None = None,
     source_conversation_id: str | None = None,
     source_message_id: str | None = None,
+    category: str | None = None,
 ) -> MemoryModel:
-    """更新当前用户的一条记忆（owner 不匹配抛 MemoryNotOwned）。"""
+    """更新当前用户的一条记忆（owner 不匹配抛 MemoryNotOwned）。
+
+    ``category`` 传空串表示"清除类别"（这条记忆不再是用户管理的个人偏好），
+    不传（None）表示不改动。
+    """
     m = get_owned_memory(session, memory_id, owner_id)
     if m is None:
         raise MemoryNotOwned(memory_id)
@@ -124,6 +157,8 @@ def update_memory(
         m.content = content
     if mtype is not None:
         m.type = _normalize_type(mtype)
+    if category is not None:
+        m.category = _normalize_category(category)
     if importance is not None:
         m.importance = _normalize_importance(importance)
     if enabled is not None:
@@ -170,17 +205,59 @@ def count_by_owner(session: Session, owner_id: str) -> int:
     )
 
 
+def list_preference_memories(session: Session, owner_id: str) -> list[MemoryModel]:
+    """当前用户"已启用 + 带个人偏好类别"的记忆（个人偏好注入/展示的唯一入口）。
+
+    只取 ``category`` 非空的行：自动提取的长期事实不属于第一期用户在管理页
+    管理的个人偏好。排序与数量上限由 ``memory_service.select_preferences``
+    按优先级决定，本函数只负责 owner 过滤与启用过滤。
+    """
+    if not owner_id:
+        return []
+    return (
+        session.query(MemoryModel)
+        .filter(
+            MemoryModel.owner_id == owner_id,
+            MemoryModel.enabled.is_(True),
+            # 白名单之外的类别（例如直接改库留下的值）不算个人偏好，
+            # 否则注入优先级和分组都会落到未定义的行为上。
+            MemoryModel.category.in_(VALID_CATEGORIES),
+        )
+        .order_by(MemoryModel.importance.desc(), MemoryModel.update_time.desc())
+        .all()
+    )
+
+
+def delete_all_memories(session: Session, owner_id: str) -> int:
+    """删除当前用户的全部记忆，返回删除条数（清空全部个人记忆）。
+
+    只按 ``owner_id`` 过滤，绝不跨用户删除；不删除会话、消息、会话摘要，
+    也不改动知识库与向量索引。
+    """
+    if not owner_id:
+        return 0
+    deleted = (
+        session.query(MemoryModel).filter(MemoryModel.owner_id == owner_id).delete()
+    )
+    session.commit()
+    return int(deleted)
+
+
 def search_memories(
     session: Session,
     owner_id: str,
     query: str,
     limit: int = 5,
+    uncategorized_only: bool = False,
 ) -> list[MemoryModel]:
     """按用户召回相关记忆（结构化 + 关键词，不依赖向量/Embedding）。
 
     - 只召回 enabled=True 且属于 owner 的记忆；
     - 相关度由"命中关键词数量" + 类型/重要性加成排序；
-    - 结果数量与内容长度由调用方（``memory_service``）限制。
+    - 结果数量与内容长度由调用方（``memory_service``）限制；
+    - ``uncategorized_only=True`` 时排除带个人偏好类别的行：个人偏好只经
+      ``select_preferences`` 一条通道注入，避免同一条记忆在两个上下文段里
+      重复出现，也保证关闭个人记忆时它不会被"顺带"注入。
     """
     if not owner_id or limit <= 0:
         return []
@@ -189,6 +266,11 @@ def search_memories(
         session.query(MemoryModel)
         .filter(MemoryModel.owner_id == owner_id, MemoryModel.enabled.is_(True))
     )
+    if uncategorized_only:
+        # 空串是历史/手工数据的可能取值，与 NULL 同等对待
+        base = base.filter(
+            or_(MemoryModel.category.is_(None), MemoryModel.category == "")
+        )
     if not query:
         # 无查询时按重要性/更新时间取少量（兜底）
         return (
@@ -282,12 +364,15 @@ def _is_general_memory_query(query: str) -> bool:
 __all__ = [
     "MemoryNotOwned",
     "VALID_TYPES",
+    "VALID_CATEGORIES",
     "create_memory",
     "list_memories",
+    "list_preference_memories",
     "get_owned_memory",
     "update_memory",
     "disable_memory",
     "delete_memory",
+    "delete_all_memories",
     "count_by_owner",
     "search_memories",
 ]

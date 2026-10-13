@@ -202,7 +202,7 @@ def create_models_from_config(configs, callbacks, stream, max_tokens):
 def create_models_chains(
     history_len, prompts, models, tools, callbacks, conversation_id,
     session, owner_id, metadata, use_mcp: bool = False, query: str = "",
-    mcp_client=None
+    mcp_client=None, use_memory: bool = True
 ):
 
     # 从数据库获取conversation_id对应的 intermediate_steps 、 mcp_connections
@@ -223,11 +223,12 @@ def create_models_chains(
             memory_service.summarize_conversation(session, owner_id, conversation_id)
     except Exception:
         pass
-    # 用户记忆注入：长期记忆段 + 较早内容摘要段，作为独立系统消息置于近期
-    # 轮次之前（当前用户本轮明确表达优先于记忆）。失败/无会话时返回空列表，
-    # 不改变无记忆时的原有行为，也不阻断正常回答。
+    # 用户记忆注入：个人偏好段 + 长期记忆段 + 较早内容摘要段，作为独立系统
+    # 消息置于近期轮次之前（当前用户本轮明确表达优先于记忆）。失败/无会话时
+    # 返回空列表，不改变无记忆时的原有行为，也不阻断正常回答。
+    # use_memory=False 对应界面"本次不使用个人偏好"：只影响本轮。
     memory_msgs = memory_service.memory_system_messages(
-        session, owner_id, query, conversation_id
+        session, owner_id, query, conversation_id, use_memory=use_memory
     )
     for message in messages:
         history.append({"role": "user", "content": message["query"]})
@@ -273,6 +274,7 @@ async def chat(
         tool_config: dict = Body({}, description="工具配置", examples=[]),
         use_mcp: bool = Body(False, description="使用MCP"),
         max_tokens: int = Body(None, description="LLM最大token数配置", examples=[4096]),
+        use_memory: bool = Body(True, description="本轮是否使用个人记忆（个人偏好/长期记忆）"),
         session: Session = None,
         owner_id: str = None,
 ):
@@ -280,6 +282,9 @@ async def chat(
 
     ``session`` / ``owner_id`` 由受保护的路由注入（已验证当前用户），
     聊天内所有读写都限定在 owner 自己的会话中。
+
+    ``use_memory=False`` 只让本轮不使用个人记忆（界面"本次不使用个人偏好"），
+    不删除任何数据，也不影响会话摘要与自动记忆提取。
     """
 
     async def chat_iterator_event() -> AsyncIterable[OpenAIChatOutput]:
@@ -352,6 +357,7 @@ async def chat(
                 use_mcp = use_mcp,
                 query=query,
                 mcp_client=mcp_client,
+                use_memory=use_memory,
             )
             chat_iterator = full_chain.invoke({
                 "input": query

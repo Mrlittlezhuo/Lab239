@@ -153,6 +153,10 @@ async def chat_completions(
     for key in list(extra):
         delattr(body, key)
 
+    # 界面"本次不使用个人偏好"（会话级）：只让本轮不注入个人记忆，
+    # 不删除数据，也不影响会话摘要与自动记忆提取。
+    use_memory = bool(extra.get("use_memory", True))
+
     # check tools & tool_choice in request body
     if isinstance(body.tool_choice, str):
         if t := get_tool(body.tool_choice):
@@ -229,6 +233,7 @@ async def chat_completions(
             model_name=body.model,
             history_len=Settings.model_settings.HISTORY_LEN,
             max_steps=extra.get("agent_max_steps"),
+            use_memory=use_memory,
         )
         if isinstance(result, dict):
             result["conversation_id"] = conversation_id
@@ -265,6 +270,7 @@ async def chat_completions(
             # 否则模型会挑一个必然失败的工具（假 key、占位连接串、只有管理员
             # 能用的 shell），用户看到的只是"工具没生效"
             available_tools=available_tools(user, get_tool()),
+            use_memory=use_memory,
         )
 
     result = await chat(
@@ -280,6 +286,7 @@ async def chat_completions(
         max_tokens=body.max_tokens,
         session=session,
         owner_id=user.id,
+        use_memory=use_memory,
     )
     # 保留可供客户端取得的会话 ID
     if isinstance(result, dict):

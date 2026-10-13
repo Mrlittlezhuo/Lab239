@@ -78,6 +78,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 ),
                 return_direct: bool = Body(False, description="直接返回检索结果，不送入 LLM"),
                 conversation_id: Optional[str] = Body(None, description="当前用户会话 ID"),
+                use_memory: bool = Body(True, description="本轮是否使用个人记忆（个人偏好/长期记忆）"),
                 request: Request = None,
                 user: UserModel = Depends(require_password_changed),
                 session: Session = Depends(get_db),
@@ -312,13 +313,15 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 prompt_name = "empty"
             prompt_template = get_prompt_template("rag", prompt_name)
             input_msg = History(role="user", content=prompt_template).to_msg_template(False)
-            # 用户记忆注入：与普通聊天同一套记忆（长期记忆 + 较早内容摘要），
-            # 作为独立系统消息置于 RAG 输入之前（当前用户本轮表达优先）。
-            # 失败/无记忆时为空，不改变原行为，也不阻断正常回答。
+            # 用户记忆注入：与普通聊天同一套记忆（个人偏好 + 长期记忆 + 较早
+            # 内容摘要），作为独立系统消息置于 RAG 输入之前（当前用户本轮表达
+            # 优先）。失败/无记忆时为空，不改变原行为，也不阻断正常回答。
+            # 只影响"怎么解释和呈现"：检索范围、引用、文档原文、知识库权限
+            # 都在此之前已经确定，个人偏好不参与（设计方案 §4.3）。
             _mem_msgs = [
                 History(role=m["role"], content=m["content"]).to_msg_template(False)
                 for m in memory_service.memory_system_messages(
-                    session, user_id, query, conversation_id
+                    session, user_id, query, conversation_id, use_memory=use_memory
                 )
             ]
             chat_prompt = ChatPromptTemplate.from_messages(
