@@ -24,6 +24,9 @@ from chatchat.server.api_server.chat_routes import chat_router
 from chatchat.server.api_server.conversation_routes import conversation_router
 from chatchat.server.api_server.kb_routes import kb_router
 from chatchat.server.api_server.memory_routes import memory_router
+from chatchat.server.api_server.session_context_routes import (
+    session_context_router,
+)
 from chatchat.server.api_server.mcp_routes import mcp_router
 from chatchat.server.api_server.openai_routes import openai_router
 from chatchat.server.api_server.research_routes import research_router
@@ -88,6 +91,7 @@ def create_app(run_mode: str = None):
 
     app.include_router(chat_router)
     app.include_router(conversation_router)
+    app.include_router(session_context_router)
     app.include_router(kb_router)
     app.include_router(tool_router)
     app.include_router(openai_router)

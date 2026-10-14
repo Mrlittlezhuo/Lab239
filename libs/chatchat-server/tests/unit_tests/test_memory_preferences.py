@@ -259,8 +259,8 @@ class TestV13Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [13]
-            assert result.final_version == 13
+            assert [m.version for m in result.applied] == [13, 14]
+            assert result.final_version == 14
             assert "category" in {c["name"] for c in inspect(conn).get_columns("memory")}
             assert "memory_preferences_enabled" in {
                 c["name"] for c in inspect(conn).get_columns("user_account")
@@ -290,7 +290,7 @@ class TestV13Migration:
         with engine.connect() as conn:
             result2 = apply_migrations(build_registry(), conn)
             assert result2.applied == []
-            assert result2.final_version == 13
+            assert result2.final_version == 14
             assert conn.execute(text("SELECT COUNT(*) FROM memory")).scalar() == 1
         engine.dispose()
 

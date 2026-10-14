@@ -32,6 +32,7 @@ from chatchat.server.db.repository import (
     search_memories,
     update_memory,
 )
+from chatchat.server.memory.memory_intents import apply_intent, detect_intents
 from chatchat.server.memory.memory_service import (
     PREFERENCE_MAX_COUNT,
     preferences_enabled,
@@ -238,6 +239,83 @@ def clear_my_memories(
     """只删除当前用户的记忆，返回删除条数；不动会话、摘要、知识库。"""
     deleted = delete_all_memories(session, user.id)
     return {"deleted": deleted}
+
+
+# --- “记住 / 忘记”确认卡片（智能聊天记忆第二期设计方案 §4.3）---
+
+
+class IntentDetectRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000, description="用户本轮原话")
+    conversation_id: Optional[str] = Field(
+        None, max_length=32, description="当前会话（用于判断临时对话与仅本会话范围）"
+    )
+
+
+class IntentApplyRequest(BaseModel):
+    kind: str = Field(..., description="remember | forget")
+    content: str = Field(..., min_length=1, max_length=2000)
+    scope: str = Field(..., description="session（仅本会话）| preference（跨会话个人偏好）")
+    conversation_id: Optional[str] = Field(None, max_length=32)
+    category: Optional[str] = Field(None, max_length=32)
+    target_ids: Optional[List[str]] = Field(
+        None, description="forget 时卡片上确认过的记忆 id；不传则按内容匹配"
+    )
+
+
+def _check_conversation(session: Session, conversation_id: Optional[str], user) -> None:
+    """带 conversation_id 时必须属于当前用户，否则 404（不区分不存在/越权）。"""
+    if not conversation_id:
+        return
+    from chatchat.server.db.repository import get_owned_conversation
+
+    if get_owned_conversation(session, conversation_id, user.id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在或无权访问"
+        )
+
+
+@memory_router.post(
+    "/intents", summary="检测“记住/忘记”意图并返回待确认卡片（不写入任何数据）"
+)
+def detect_memory_intents(
+    body: IntentDetectRequest,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    """显式"记住/忘记"不直接写入：先返回卡片，由用户选范围并确认（P2-07~P2-09）。
+
+    只看用户原话，知识库文档片段与模型回答不会触发（P2-12）。
+    """
+    _check_conversation(session, body.conversation_id, user)
+    intents = detect_intents(session, user.id, body.text, body.conversation_id)
+    return {"proposals": [i.to_dict() for i in intents]}
+
+
+@memory_router.post("/intents/apply", summary="确认卡片后才写入（范围由用户选定）")
+def apply_memory_intent(
+    body: IntentApplyRequest,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    """``scope=session`` 写入本会话上下文；``scope=preference`` 写入个人偏好。
+
+    临时对话两种范围都拒绝写入（设计方案 §4.4 / P2-11），错误信息说明原因。
+    """
+    _check_conversation(session, body.conversation_id, user)
+    _reject_category(body.category)
+    try:
+        return apply_intent(
+            session,
+            user.id,
+            kind=body.kind,
+            content=body.content,
+            scope=body.scope,
+            conversation_id=body.conversation_id,
+            category=body.category,
+            target_ids=body.target_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @memory_router.get("/{memory_id}", summary="记忆详情")

@@ -79,6 +79,10 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 return_direct: bool = Body(False, description="直接返回检索结果，不送入 LLM"),
                 conversation_id: Optional[str] = Body(None, description="当前用户会话 ID"),
                 use_memory: bool = Body(True, description="本轮是否使用个人记忆（个人偏好/长期记忆）"),
+                temporary: bool = Body(
+                    False,
+                    description="临时对话：不创建、不保留会话私有上下文（第二期 §4.4）",
+                ),
                 request: Request = None,
                 user: UserModel = Depends(require_password_changed),
                 session: Session = Depends(get_db),
@@ -107,11 +111,13 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 detail="会话不存在或无权访问",
             )
     else:
+        # temporary=True 表示临时对话：会话上下文与个人偏好写入都在记忆层被拦住
         conversation_id = create_conversation(
             session,
             owner_id=user_id,
             chat_type="kb_chat",
             name=(query or "")[:50],
+            temporary=bool(temporary),
         )
     message_id = add_message(
         session=session,

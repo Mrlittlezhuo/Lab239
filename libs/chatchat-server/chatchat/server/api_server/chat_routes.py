@@ -188,12 +188,15 @@ async def chat_completions(
     _require_configured_model(body)
 
     if not conversation_id:
-        # 为当前用户创建默认会话；响应中保留会话 ID 供客户端取得
+        # 为当前用户创建默认会话；响应中保留会话 ID 供客户端取得。
+        # extra.temporary=True 表示临时对话：后续不创建、不保留会话上下文
+        # （智能聊天记忆第二期设计方案 §4.4）。
         conversation_id = create_conversation(
             session,
             owner_id=user.id,
             chat_type="agent_chat",
             name=(body.messages[-1]["content"] or "")[:50],
+            temporary=bool(extra.get("temporary", False)),
         )
 
     client = get_OpenAIClient(model_name=body.model, is_async=True)

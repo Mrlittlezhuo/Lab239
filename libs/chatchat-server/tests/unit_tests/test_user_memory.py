@@ -80,7 +80,7 @@ def temp_user_db(secret, tmp_path):
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 13
+    assert current_version(engine.connect()) == 14
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
     engine.dispose()
@@ -205,7 +205,7 @@ class TestMigration:
             assert {
                 "memory_key", "source_conversation_id", "source_message_id"
             }.issubset(memory_columns)
-        assert current_version(engine.connect()) == 13
+        assert current_version(engine.connect()) == 14
         # 迁移仅覆盖 user_account/openai_file/memory/session_summary，
         # conversation/message/knowledge_* 由模型元数据建表
         Base.metadata.create_all(engine)
@@ -254,7 +254,7 @@ class TestMigration:
         with engine.connect() as conn:
             result = apply_migrations(registry, conn)
         assert result.applied == []
-        assert current_version(engine.connect()) == 13
+        assert current_version(engine.connect()) == 14
 
         s = Session()
         try:
@@ -406,31 +406,49 @@ class TestRemember:
         finally:
             s.close()
 
-    def test_auto_extract_explicit_remember(self, temp_user_db, users):
-        """显式"请记住"在自动记忆开启时可靠写入。"""
+    def test_auto_extract_explicit_remember_needs_confirmation(self, temp_user_db, users):
+        """第二期 §4.3：显式"请记住"不直接写入，先出确认卡片，确认后才写。"""
+        from chatchat.server.memory import memory_intents
+
         S = temp_user_db["Session"]
         s = S()
         try:
             aid = users["alice"]["id"]
-            actions = memory_service.auto_extract(s, aid, "请记住我研究无线通信，偏好简洁中文")
-            assert any("已记住" in a for a in actions)
+            text = "请记住我研究无线通信，偏好简洁中文"
+            assert memory_service.auto_extract(s, aid, text) == []
+            assert list_memories(s, aid, enabled_only=True) == []
+
+            proposals = memory_intents.detect_intents(s, aid, text)
+            assert len(proposals) == 1 and proposals[0].kind == "remember"
+            memory_intents.apply_intent(
+                s, aid, kind="remember", content=proposals[0].content,
+                scope=memory_intents.SCOPE_PREFERENCE, category="technical_background",
+            )
             mems = list_memories(s, aid, enabled_only=True)
             assert any("无线通信" in m.content for m in mems)
-            assert any("简洁" in m.content and "中文" in m.content for m in mems)
-            assert {m.memory_key for m in mems} == {
-                "profile:research", "preference:response_style"
-            }
         finally:
             s.close()
 
-    def test_auto_extract_forget(self, temp_user_db, users):
+    def test_auto_extract_forget_needs_confirmation(self, temp_user_db, users):
+        """§4.3 + P2-09：忘记也要先列出将被停用的对象，确认后才停用。"""
+        from chatchat.server.memory import memory_intents
+
         S = temp_user_db["Session"]
         s = S()
         try:
             aid = users["alice"]["id"]
             memory_service.remember(s, aid, "我研究无线通信", mtype="goal", source="chat")
-            actions = memory_service.auto_extract(s, aid, "请忘记我研究无线通信")
-            assert any("已停用" in a for a in actions)
+            assert memory_service.auto_extract(s, aid, "请忘记我研究无线通信") == []
+            # 未经确认不得停用任何记忆
+            assert any("无线通信" in m.content for m in list_memories(s, aid, enabled_only=True))
+
+            proposals = memory_intents.detect_intents(s, aid, "请忘记我研究无线通信")
+            assert proposals and proposals[0].targets, "卡片必须列出将被停用的记忆"
+            memory_intents.apply_intent(
+                s, aid, kind="forget", content=proposals[0].content,
+                scope=memory_intents.SCOPE_PREFERENCE,
+                target_ids=[t.id for t in proposals[0].targets],
+            )
             assert not any("无线通信" in m.content for m in list_memories(s, aid, enabled_only=True))
         finally:
             s.close()
@@ -471,8 +489,15 @@ class TestRemember:
             actions = memory_service.auto_extract(s, aid, "我研究无线通信")
             assert actions == []
             assert len(list_memories(s, aid, enabled_only=True)) == 0
-            actions = memory_service.auto_extract(s, aid, "请记住我的项目是记忆系统")
-            assert any("已记住" in a for a in actions)
+            # 显式"记住"不受自动开关影响，但同样要经确认卡片（第二期 §4.3）
+            from chatchat.server.memory import memory_intents
+
+            proposals = memory_intents.detect_intents(s, aid, "请记住我的项目是记忆系统")
+            assert proposals
+            memory_intents.apply_intent(
+                s, aid, kind="remember", content=proposals[0].content,
+                scope=memory_intents.SCOPE_PREFERENCE, category="technical_background",
+            )
             assert any("记忆系统" in m.content for m in list_memories(s, aid, enabled_only=True))
         finally:
             s.close()
@@ -482,9 +507,17 @@ class TestRemember:
         s = S()
         try:
             aid = users["alice"]["id"]
+            from chatchat.server.memory import memory_intents
+
             memory_service.auto_extract(s, aid, "我偏好简洁中文")
-            actions = memory_service.auto_extract(s, aid, "忘记我的回答偏好")
-            assert any("已停用" in a for a in actions)
+            assert memory_service.auto_extract(s, aid, "忘记我的回答偏好") == []
+            proposals = memory_intents.detect_intents(s, aid, "忘记我的回答偏好")
+            assert proposals and proposals[0].targets
+            memory_intents.apply_intent(
+                s, aid, kind="forget", content=proposals[0].content,
+                scope=memory_intents.SCOPE_PREFERENCE,
+                target_ids=[t.id for t in proposals[0].targets],
+            )
             assert memory_service.recall_memories(s, aid, "以后怎么回答我") == []
         finally:
             s.close()
@@ -666,7 +699,15 @@ class TestSummary:
             for i in range(5):
                 add_message(s, conv, aid, "llm_chat", f"q{i}", response=f"a{i}")
             result = memory_service.summarize_conversation(s, aid, conv, threshold=12)
-            assert result is None
+            # 第二期：历史不足阈值时不生成摘要正文，但结构化槽位照常刷新——
+            # 用户刚确认的结论要立刻能在会话抽屉里看到（设计方案 P2-01），
+            # 不能等到历史够长才更新。
+            assert result is not None
+            assert (result.summary or "") == ""
+            assert result.topic is not None and result.topic.text == "q0"
+            from chatchat.server.db.repository import session_summary_repository
+            row = session_summary_repository.get_session_summary(s, conv, aid)
+            assert row is not None and (row.summary or "") == ""
         finally:
             s.close()
 
@@ -848,9 +889,11 @@ class TestPromptInjection:
             # 摘要应已生成并写入 session_summary（每会话一行）
             row = summary_repo.get_session_summary(s, conv, aid)
             assert row is not None
-            # 短期上下文应包含"较早内容摘要"段
+            # 会话上下文段应包含摘要正文（第二期把标题改为"本会话上下文"，
+            # 摘要作为其中的一个槽位）
             short = memory_service.build_short_term_context(s, aid, conv, "历史问题")
-            assert "【较早内容摘要】" in short
+            assert "【本会话上下文" in short
+            assert "较早内容摘要" in short
         finally:
             s.close()
 

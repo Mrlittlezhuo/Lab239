@@ -45,6 +45,10 @@
   空表示非用户管理的个人偏好），``user_account`` 增加
   ``memory_preferences_enabled``（个人记忆注入总开关）；只加列加索引，
   不改列不删表，旧记忆行 ``category`` 为 NULL，行为不变。
+- v14（智能聊天记忆第二期）：``session_summary`` 增加 topic/goal/confirmed/
+  constraints/open_questions 与 ``pinned_json``（会话私有上下文的结构化槽位），
+  ``conversation`` 增加 ``temporary``（临时对话，不保留会话上下文）；只加列，
+  不新建表、不迁移行，既有摘要文本与摘要位置标记原样保留。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -921,6 +925,42 @@ def _v13_memory_preferences(conn: Connection) -> None:
             conn.execute(text(stmt))
 
 
+# --- v14（智能聊天记忆第二期）：会话私有上下文与临时对话 ---
+
+_SESSION_SUMMARY_ADD_COLUMNS_V14 = [
+    # 会话上下文的结构化槽位（设计方案 §3）。全部 NOT NULL DEFAULT ''，
+    # 旧摘要行只多出一段空槽位，summary 原文一字不改。
+    "topic VARCHAR(200) NOT NULL DEFAULT ''",
+    "goal VARCHAR(500) NOT NULL DEFAULT ''",
+    "confirmed TEXT NOT NULL DEFAULT ''",
+    "constraints TEXT NOT NULL DEFAULT ''",
+    "open_questions TEXT NOT NULL DEFAULT ''",
+    # 用户手工编辑/确认过的条目（含来源消息位置），自动摘要更新时不得静默
+    # 覆盖这些结论（设计方案 §4.2）。
+    "pinned_json TEXT NOT NULL DEFAULT '[]'",
+]
+
+_CONVERSATION_ADD_COLUMNS_V14 = [
+    # 临时对话：不创建、不更新、不保留会话上下文（设计方案 §4.4）。
+    # 默认 FALSE，既有会话行为不变。
+    "temporary BOOLEAN NOT NULL DEFAULT 0",
+]
+
+
+def _v14_session_context(conn: Connection) -> None:
+    """v14：把会话摘要扩展为结构化会话上下文，并为会话加临时对话标记。
+
+    - ``session_summary`` 增加 topic/goal/confirmed/constraints/open_questions
+      与 ``pinned_json``：会话上下文仍复用"每会话一行"的既有表，不新建表、
+      不迁移行，既有 ``summary`` 与摘要位置标记原样保留；
+    - ``conversation.temporary``：临时对话标记，默认 0；
+    - 只加列，不改列、不删表、不重建，知识库与向量索引不受影响；重复执行
+      安全（列存在性检查）；失败即回滚且版本不记录。
+    """
+    _add_missing_columns(conn, "session_summary", _SESSION_SUMMARY_ADD_COLUMNS_V14)
+    _add_missing_columns(conn, "conversation", _CONVERSATION_ADD_COLUMNS_V14)
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -935,6 +975,7 @@ _MIGRATIONS = [
     (11, "research_report", _v11_research_report),
     (12, "research_run_stage_artifacts", _v12_research_run_stage),
     (13, "memory_preferences", _v13_memory_preferences),
+    (14, "session_context", _v14_session_context),
 ]
 
 

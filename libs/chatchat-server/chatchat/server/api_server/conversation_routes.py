@@ -34,6 +34,10 @@ from chatchat.server.db.repository.message_repository import list_messages
 class ConversationCreate(BaseModel):
     name: str = Field("", max_length=50, description="对话框名称")
     chat_type: str = Field("llm_chat", max_length=50, description="聊天类型")
+    temporary: bool = Field(
+        False,
+        description="临时对话：不创建、不更新、不保留会话私有上下文（第二期 §4.4）",
+    )
 
 
 class ConversationRename(BaseModel):
@@ -44,6 +48,7 @@ class ConversationOut(BaseModel):
     id: str
     name: Optional[str] = None
     chat_type: Optional[str] = None
+    temporary: bool = False
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
 
@@ -65,6 +70,7 @@ def _conv_out(c: ConversationModel) -> ConversationOut:
         id=c.id,
         name=c.name,
         chat_type=c.chat_type,
+        temporary=bool(getattr(c, "temporary", False)),
         create_time=c.create_time,
         update_time=c.update_time,
     )
@@ -92,7 +98,9 @@ def create_my_conversation(
     user: UserModel = Depends(require_password_changed),
     session: Session = Depends(get_db),
 ) -> ConversationOut:
-    conv_id = create_conversation(session, user.id, body.chat_type, body.name)
+    conv_id = create_conversation(
+        session, user.id, body.chat_type, body.name, temporary=bool(body.temporary)
+    )
     c = get_owned_conversation(session, conv_id, user.id)
     return _conv_out(c)
 

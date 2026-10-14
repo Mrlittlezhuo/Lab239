@@ -10,6 +10,8 @@
 - 个人偏好（智能聊天记忆第一期）：用户在"我的记忆"页保存、带 ``category``
   的记忆，按固定优先级少量注入，作为辅助上下文而非命令；受用户级总开关与
   单次请求的"本次不使用"共同控制。
+- 会话私有上下文（智能聊天记忆第二期）：见 :mod:`session_context`；显式
+  "记住/忘记"改走确认卡片（见 :mod:`memory_intents`），不再由本模块直接写入。
 - 所有模型/提取/摘要失败都不阻断正常回答（调用方 try/except）。
 """
 from __future__ import annotations
@@ -25,6 +27,7 @@ from chatchat.server.db.repository import memory_repository as memory_repo
 from chatchat.server.db.repository import session_summary_repository as summary_repo
 from chatchat.server.db.repository import user_repository as user_repo
 from chatchat.server.db.repository.message_repository import list_messages
+from chatchat.server.memory import session_context
 
 # ---------------------------------------------------------------------------
 # 常量 / 默认值
@@ -37,9 +40,22 @@ RECALL_MAX_CHARS = 1500
 #: 默认短期上下文窗口（保留最近 N 条消息为"近期轮次"）
 SUMMARY_THRESHOLD = 12
 
-#: 显式意图正则（中文"请记住/帮我记/忘掉/忘记"）
-_REMEMBER_RE = re.compile(r"(请记住|请记住以下|帮我记住|请记住我|我要你记住|记住我|记下来)")
-_FORGET_RE = re.compile(r"(请忘记|忘掉|忘记我|忘记以下|不用记住|别记住|删除记忆|清除记忆)")
+#: 显式意图正则（中文"请记住/帮我记/忘掉/忘记"）。
+#: 第二期设计方案 §4.3 的示例是裸"记住：…""忘记：…"，所以带冒号或句首的
+#: 裸动词也算显式意图；即使命中得不准，代价也只是多出一张待确认卡片，
+#: 用户点"不保存"即可，不会静默写入任何记忆。
+_REMEMBER_RE = re.compile(
+    r"(请记住|请记住以下|帮我记住|请记住我|我要你记住|记住我|记住以下|记下来"
+    r"|记住[：:，,]|^记住)"
+)
+_FORGET_RE = re.compile(
+    r"(请忘记|忘掉|忘记我|忘记以下|不用记住|别记住|删除记忆|清除记忆"
+    r"|忘记[：:，,]|^忘记)"
+)
+
+#: 显式"记住/忘记"是否必须先经确认卡片（第二期设计方案 §4.3 要求：是）。
+#: 为真时 auto_extract 不写显式意图，写入只发生在 /memories/intents 的确认里。
+EXPLICIT_REQUIRES_CONFIRMATION = True
 
 #: 记忆注入的清晰独立上下文段标题
 MEMORY_SECTION_HEADER = "【你的记忆（以下为用户长期信息，供参考）】"
@@ -357,8 +373,29 @@ def forget(
     - 未给定 content：停用全部记忆（"忘掉一切"）。
     返回被停用的条数。
     """
-    raw = (content or "").strip()
-    target = _strip_forget_prefix(raw)
+    target = _strip_forget_prefix((content or "").strip())
+    key_prefixes, type_filter, forget_all = forget_match_plan(target)
+
+    affected = 0
+    for m in memory_repo.list_memories(session, owner_id, enabled_only=False):
+        if m.enabled is False:
+            continue
+        if matches_forget(m, target, key_prefixes, type_filter, forget_all):
+            m.enabled = False
+            affected += 1
+    if affected:
+        session.commit()
+    return affected
+
+
+def forget_match_plan(
+    target: str
+) -> tuple[list[str], Optional[str], bool]:
+    """把"忘记 X"的措辞解析成匹配条件：主题键前缀 / 类型 / 是否忘记全部。
+
+    确认卡片用它列出"将被停用的记忆"，因此卡片上看到的与实际停用的必须是
+    同一批（设计方案 §4.3：忘记也要展示将被删除或重置的对象）。
+    """
     key_prefixes: list[str] = []
     type_filter: str | None = None
     if re.search(r"回答|回复|风格|简洁|详细|语言", target):
@@ -374,31 +411,32 @@ def forget(
     if re.search(r"目标|计划", target):
         key_prefixes.append("goal")
     forget_all = not target or bool(re.search(r"全部|所有|一切", target))
+    return key_prefixes, type_filter, forget_all
 
-    affected = 0
-    for m in memory_repo.list_memories(session, owner_id, enabled_only=False):
-        if m.enabled is False:
-            continue
-        matched = forget_all
-        if type_filter and m.type == type_filter:
-            matched = True
-        if any(
-            m.memory_key == prefix or m.memory_key.startswith(f"{prefix}:")
-            for prefix in key_prefixes
-        ):
-            matched = True
-        normalized_target = _norm(target)
-        if normalized_target and (
-            normalized_target in _norm(m.content)
-            or _norm(m.content) in normalized_target
-        ):
-            matched = True
-        if matched:
-            m.enabled = False
-            affected += 1
-    if affected:
-        session.commit()
-    return affected
+
+def matches_forget(
+    m,
+    target: str,
+    key_prefixes: Sequence[str],
+    type_filter: Optional[str],
+    forget_all: bool,
+) -> bool:
+    """一条记忆是否落在"忘记 X"的范围内。"""
+    if forget_all:
+        return True
+    if type_filter and m.type == type_filter:
+        return True
+    if any(
+        m.memory_key == prefix or m.memory_key.startswith(f"{prefix}:")
+        for prefix in key_prefixes
+    ):
+        return True
+    normalized_target = _norm(target)
+    if normalized_target and (
+        normalized_target in _norm(m.content) or _norm(m.content) in normalized_target
+    ):
+        return True
+    return False
 
 
 def auto_extract(
@@ -419,8 +457,31 @@ def auto_extract(
     q = (query or "").strip()
     if not q or session is None or not owner_id:
         return actions
+
+    # 设计方案 §4.4 / P2-11：临时对话不写入任何记忆，包括跨会话个人偏好。
+    # 会话上下文侧由 session_context 拦住，长期记忆侧在这里拦住。
+    if source_conversation_id:
+        try:
+            from chatchat.server.db.repository import (
+                conversation_repository as conv_repo,
+            )
+
+            if conv_repo.conversation_is_temporary(
+                session, source_conversation_id, owner_id
+            ):
+                return actions
+        except Exception:
+            pass
+
     explicit_forget = bool(_FORGET_RE.search(q))
     explicit_remember = bool(_REMEMBER_RE.search(q))
+
+    # 设计方案 §4.3：显式"记住/忘记"不直接写入，先出确认卡片（范围由用户选，
+    # "忘记"要列出将被停用的对象）。卡片走 /memories/intents，确认后才写。
+    # 关掉这个常量只给脚本类调用留逃生口，界面路径始终走确认卡片。
+    if (explicit_forget or explicit_remember) and EXPLICIT_REQUIRES_CONFIRMATION:
+        return actions
+
     if explicit_forget:
         n = forget(session, owner_id, content=q)
         if n:
@@ -554,52 +615,23 @@ def summarize_conversation(
     conversation_id: str,
     threshold: int = SUMMARY_THRESHOLD,
     summarizer: Callable[[str, str], str] = rule_based_summarizer,
-) -> Optional[summary_repo.SessionSummaryModel]:
-    """当历史超过阈值时，对"超出窗口且尚未摘要"的较早消息做增量摘要。
+    force: bool = False,
+) -> Optional[session_context.SessionContext]:
+    """更新会话私有上下文（含较早历史的增量摘要）。
 
-    - 近期轮次（最近 threshold 条）保持原样，不并入摘要；
-    - 只摘要尚未覆盖的较早消息（用 summarized_message_id 定位），避免每轮
-      重复总结全部历史；
-    - 摘要写入 ``session_summary``（每会话一行），记录覆盖位置；
-    - 摘要失败返回 None，不阻断聊天（调用方 try/except）。
+    第二期把"摘要"扩展为"会话上下文"：主题、目标、已确认事项、限制条件、
+    待解决问题 + 摘要正文，实现见 :mod:`session_context`。
+
+    - 近期轮次（最近 threshold 条）保持原样，不并入摘要（设计方案 §4.1）；
+    - 只摘要尚未覆盖的较早消息（用 summarized_message_id 定位）；
+    - 用户手工编辑过的结论不被更早的内容静默覆盖（设计方案 §4.2）；
+    - 临时对话不写入（设计方案 §4.4）；
+    - 失败返回 None，不阻断聊天（调用方 try/except）。
     """
-    if not owner_id or not conversation_id:
-        return None
-    try:
-        messages = list_messages(session, conversation_id, owner_id)
-    except Exception:
-        return None
-    n = len(messages)
-    if n <= threshold:
-        return None
-    recent_cut = n - threshold  # 近期轮次起点索引
-    existing = summary_repo.get_session_summary(session, conversation_id, owner_id)
-    covered_id = existing.summarized_message_id if existing else None
-    existing_summary = existing.summary if existing else ""
-    covered_idx = -1
-    if covered_id:
-        for i, m in enumerate(messages):
-            if m.id == covered_id:
-                covered_idx = i
-                break
-    # 只摘要"比近期轮次更早"且"尚未覆盖"的消息
-    to_summarize = messages[covered_idx + 1: recent_cut]
-    if not to_summarize:
-        return existing
-    older_text = get_recent_window_text(to_summarize)
-    try:
-        new_summary = summarizer(existing_summary, older_text)
-        return summary_repo.upsert_session_summary(
-            session,
-            owner_id=owner_id,
-            conversation_id=conversation_id,
-            summary=new_summary,
-            summarized_message_id=to_summarize[-1].id,
-            summarized_count=recent_cut,
-        )
-    except Exception:
-        # 摘要器或写入失败都不阻断聊天：返回 None，由调用方忽略。
-        return None
+    return session_context.refresh_session_context(
+        session, owner_id, conversation_id, threshold=threshold, force=force,
+        summarizer=summarizer,
+    )
 
 
 def get_summary_text(
@@ -622,17 +654,13 @@ def build_short_term_context(
     query: str,
     threshold: int = SUMMARY_THRESHOLD,
 ) -> str:
-    """短期上下文注入：会话摘要（若有）+ 近期轮次占位说明。
+    """会话上下文注入段（主题/目标/已确认/限制/待解决 + 较早内容摘要）。
 
-    近期原始轮次仍由聊天链路的 ``filter_message`` 提供；这里只提供"超出窗口
-    的摘要"段落，使新会话/重启后仍能召回早期内容，且摘要与长期记忆分开。
+    近期原始轮次仍由聊天链路的 ``filter_message`` 提供，最近的关键消息始终
+    以完整原文参与回答；这里只补"本会话已经讨论到哪里"，使重启后仍能延续，
+    且与长期记忆、个人偏好分段清晰（设计方案 §5）。临时对话返回空串。
     """
-    if session is None or not owner_id or not conversation_id:
-        return ""
-    text = get_summary_text(session, owner_id, conversation_id)
-    if text:
-        text = "【较早内容摘要】\n" + text
-    return text
+    return session_context.build_context_segment(session, owner_id, conversation_id)
 
 
 def memory_system_messages(
@@ -650,7 +678,9 @@ def memory_system_messages(
     1. 个人偏好段（用户在"我的记忆"页保存、带 ``category`` 的记忆，按
        §5 优先级少量注入）；
     2. 长期记忆段（召回 ``memory`` 表中不属于个人偏好的行，enabled、owner 匹配）；
-    3. 较早内容摘要段（``session_summary``，仅短期上下文，不当长期事实）。
+    3. 会话上下文段（``session_summary``：主题/目标/已确认事项/限制条件/
+       待解决问题 + 较早内容摘要；仅当前会话有效，不当长期事实，临时对话
+       不注入）。
 
     ``use_memory=False`` 对应界面上的"本次不使用个人偏好"：跳过上面 1、2 两段
     （即"我的记忆"页列出的内容本轮一律不用），会话摘要不受影响；只影响本次
@@ -685,6 +715,7 @@ __all__ = [
     "RECALL_MAX_COUNT",
     "RECALL_MAX_CHARS",
     "SUMMARY_THRESHOLD",
+    "EXPLICIT_REQUIRES_CONFIRMATION",
     "MEMORY_SECTION_HEADER",
     "PREFERENCE_MAX_COUNT",
     "PREFERENCE_SECTION_HEADER",
@@ -700,6 +731,8 @@ __all__ = [
     "format_preferences",
     "remember",
     "forget",
+    "forget_match_plan",
+    "matches_forget",
     "auto_extract",
     "summarize_conversation",
     "get_summary_text",

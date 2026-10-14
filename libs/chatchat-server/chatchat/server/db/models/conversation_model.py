@@ -1,4 +1,14 @@
-from sqlalchemy import JSON, Column, DateTime, Index, Integer, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 
 from chatchat.server.db.base import Base
 
@@ -16,6 +26,15 @@ class ConversationModel(Base):
     name = Column(String(50), comment="对话框名称")
     chat_type = Column(String(50), comment="聊天类型")
     owner_id = Column(String(32), comment="所属用户ID")
+    temporary = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        # server_default 与 v14 迁移的 DDL 保持一致：既有行以及绕过 ORM 的
+        # 写入（迁移脚本、运维 SQL）也拿得到默认值
+        server_default=text("0"),
+        comment="临时对话：不创建、不更新、不保留会话私有上下文",
+    )
     create_time = Column(DateTime, default=func.now(), comment="创建时间")
     update_time = Column(DateTime, comment="最后活动时间")
 

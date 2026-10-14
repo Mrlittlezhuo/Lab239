@@ -24,8 +24,13 @@ def create_conversation(
     chat_type: str,
     name: str = "",
     conversation_id: str | None = None,
+    temporary: bool = False,
 ) -> str:
-    """新增会话；owner 由服务端写入，不接受客户端指定。"""
+    """新增会话；owner 由服务端写入，不接受客户端指定。
+
+    ``temporary=True`` 表示临时对话：后续不创建、不更新、不保留会话私有
+    上下文（智能聊天记忆第二期设计方案 §4.4）。
+    """
     if not owner_id:
         raise ValueError("owner_id 不能为空")
     if not conversation_id:
@@ -36,6 +41,7 @@ def create_conversation(
         chat_type=chat_type,
         name=name,
         owner_id=owner_id,
+        temporary=bool(temporary),
         create_time=now,
         update_time=now,
     )
@@ -117,11 +123,32 @@ def delete_owned_conversation(
     session.commit()
 
 
+def conversation_is_temporary(
+    session: Session, conversation_id: str, owner_id: str
+) -> bool:
+    """该会话是否为临时对话（不存在/不属于该用户一律按 False 处理）。
+
+    记忆与摘要层据此跳过会话上下文的读写；读不到就当普通会话，
+    宁可不省这一步，也不因为一次查询失败而改变既有聊天行为。
+    """
+    if not conversation_id or not owner_id:
+        return False
+    return bool(
+        session.query(ConversationModel.temporary)
+        .filter(
+            ConversationModel.id == conversation_id,
+            ConversationModel.owner_id == owner_id,
+        )
+        .scalar()
+    )
+
+
 __all__ = [
     "ConversationNotOwned",
     "create_conversation",
     "list_conversations",
     "get_owned_conversation",
+    "conversation_is_temporary",
     "rename_owned_conversation",
     "delete_owned_conversation",
 ]
