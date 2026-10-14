@@ -87,6 +87,8 @@ async def kb_chat_endpoint(
         # FieldInfo 对象，直接调用时 bool() 恒为真，会把所有没带会话 id 的
         # 知识库对话都建成临时会话（第二期 §4.4 的漏洞）。
         temporary=bool(extra.get("temporary", False)),
+        # 会话所在项目空间：只有该项目的范围记忆能在本会话里召回（第三期 §4.4）
+        project_id=extra.get("project_id") or None,
     )
     return ret
 

@@ -595,5 +595,67 @@ def test_temp_kb_mode_rejects_other_users_temp_kb(client, kbchat_app, temp_user_
         s.close()
 
 
+def test_kb_chat_tags_new_conversation_with_own_project(
+    client, kbchat_app, temp_user_db, secret
+):
+    """新建知识库对话时带上 project_id：会话被记入该项目空间（第三期 §4.4）。
+
+    项目范围记忆只在选定该项目的会话里召回，因此会话与项目的关联必须由
+    请求建立，而不是靠前端事后补写。
+    """
+    from chatchat.server.db.repository import research_repository as research_repo
+
+    hdr, uid = _headers_of(temp_user_db, "iris")
+    s = temp_user_db["Session"]()
+    try:
+        project = research_repo.create_project(s, uid, "我的项目", "研究问题")
+        project_id = project.id
+    finally:
+        s.close()
+
+    with client.stream(
+        "POST", "/kb_chat", headers=hdr, json=_kb_chat_body(project_id=project_id)
+    ) as resp:
+        assert resp.status_code == 200
+        _assert_no_error_chunks(_iter_sse_chunks(resp))
+
+    s = temp_user_db["Session"]()
+    try:
+        conv = s.query(ConversationModel).order_by(ConversationModel.create_time).all()[-1]
+        assert conv.project_id == project_id
+    finally:
+        s.close()
+
+
+def test_kb_chat_rejects_foreign_project_without_creating_anything(
+    client, kbchat_app, temp_user_db, secret
+):
+    """project_id 属于别人 → 404，且不建会话、不写消息。"""
+    from chatchat.server.db.repository import research_repository as research_repo
+
+    _owner_uid, _owner = _mk_user(temp_user_db, "owner")
+    hdr, _uid = _headers_of(temp_user_db, "intruder")
+    s = temp_user_db["Session"]()
+    try:
+        project = research_repo.create_project(s, _owner_uid, "别人的项目", "研究问题")
+        project_id = project.id
+    finally:
+        s.close()
+
+    r = client.post(
+        "/kb_chat",
+        headers=hdr,
+        json=_kb_chat_body(project_id=project_id, stream=False),
+    )
+    assert r.status_code == 404
+
+    s = temp_user_db["Session"]()
+    try:
+        assert s.query(ConversationModel).count() == 0
+        assert s.query(MessageModel).count() == 0
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

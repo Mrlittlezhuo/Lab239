@@ -83,6 +83,10 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                     False,
                     description="临时对话：不创建、不保留会话私有上下文（第二期 §4.4）",
                 ),
+                project_id: Optional[str] = Body(
+                    None,
+                    description="会话所在项目空间：只有该项目的范围记忆能在本会话召回（第三期 §4.4）",
+                ),
                 request: Request = None,
                 user: UserModel = Depends(require_password_changed),
                 session: Session = Depends(get_db),
@@ -111,6 +115,20 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 detail="会话不存在或无权访问",
             )
     else:
+        # project_id 必须是当前用户自己的项目，否则等于把别人的项目空间
+        # 挂到会话上，项目范围记忆就会被带进本轮上下文（第三期 §4.4）。
+        project = None
+        if project_id:
+            from chatchat.server.db.repository import (
+                research_repository as research_repo,
+            )
+
+            project = research_repo.get_owned_project(session, project_id, user_id)
+            if project is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="项目不存在或无权访问",
+                )
         # temporary=True 表示临时对话：会话上下文与个人偏好写入都在记忆层被拦住
         conversation_id = create_conversation(
             session,
@@ -118,6 +136,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             chat_type="kb_chat",
             name=(query or "")[:50],
             temporary=bool(temporary),
+            project_id=project.id if project else None,
         )
     message_id = add_message(
         session=session,

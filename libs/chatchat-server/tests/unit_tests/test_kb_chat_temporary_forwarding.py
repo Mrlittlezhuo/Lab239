@@ -77,3 +77,14 @@ def test_conversation_id_and_use_memory_forwarded(monkeypatch):
         )
     assert calls[0]["conversation_id"] == "conv-9"
     assert calls[0]["use_memory"] is False
+
+
+def test_project_id_forwarded(monkeypatch):
+    """会话所在项目空间必须转发给 kb_chat，否则项目范围记忆无法按 §4.4 生效。"""
+    app, calls = _build_app(monkeypatch)
+    with TestClient(app) as client:
+        assert _post(client, {"project_id": "p-1"}).status_code == 200
+        assert _post(client, {"project_id": ""}).status_code == 200
+    assert calls[0]["project_id"] == "p-1"
+    # 空串按"未选定项目"处理，不能变成 "" 写进会话
+    assert calls[1]["project_id"] is None
