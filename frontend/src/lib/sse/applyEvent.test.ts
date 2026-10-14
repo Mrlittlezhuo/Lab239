@@ -186,8 +186,66 @@ describe("applySseEvent Agent 正文预览", () => {
         agent_step: { seq: 1, tool_name: "search_internet", status: "completed" },
       }),
     ]);
-    expect(msg.agent?.steps).toHaveLength(2);
+    // 一步只有一行：started 与 finished 是同一个 seq
+    expect(msg.agent?.steps).toHaveLength(1);
     expect(msg.agent?.liveAnswer).toBe("边判断边出字");
+  });
+
+  /**
+   * 现场：知识库任务面板出现"步骤 1 未勾选 + 步骤 2 已勾选"两行同样的工具。
+   * 原因是 step_started / step_finished 被当成两个步骤 append，编号又退回数组
+   * 下标，所以完成状态落在第二行上。
+   */
+  it("同一步的 started/finished 按 seq 合并成一行，完成状态不被拆走", () => {
+    const msg = run([
+      agentFrame({
+        agent_event: "step_started",
+        agent_step: {
+          seq: 1,
+          type: "tool_call",
+          tool_name: "search_local_knowledgebase",
+          status: "running",
+        },
+      }),
+      agentFrame({
+        agent_event: "step_finished",
+        agent_step: {
+          seq: 1,
+          type: "tool_call",
+          tool_name: "search_local_knowledgebase",
+          status: "completed",
+          output_summary: "命中 3 条",
+        },
+      }),
+      agentFrame({ agent_event: "run_completed", agent_final_result: "答案" }),
+    ]);
+    expect(msg.agent?.steps).toHaveLength(1);
+    expect(msg.agent?.steps[0]).toMatchObject({
+      seq: 1,
+      status: "completed",
+      output_summary: "命中 3 条",
+    });
+  });
+
+  it("多步按 seq 排列；replanned 只补新步骤，不丢已完成的历史步骤", () => {
+    const msg = run([
+      agentFrame({
+        agent_event: "step_finished",
+        agent_step: { seq: 1, tool_name: "search_local_knowledgebase", status: "completed" },
+      }),
+      agentFrame({
+        agent_event: "step_started",
+        agent_step: { seq: 2, tool_name: "search_local_knowledgebase", status: "running" },
+      }),
+      agentFrame({
+        agent_event: "replanned",
+        agent_steps: [{ goal: "补充：换关键词再查", tool_name: "search_internet" }],
+      }),
+    ]);
+    expect(msg.agent?.steps).toHaveLength(3);
+    expect(msg.agent?.steps[0]).toMatchObject({ seq: 1, status: "completed" });
+    expect(msg.agent?.steps[1]).toMatchObject({ seq: 2, status: "running" });
+    expect(msg.agent?.steps[2]).toMatchObject({ tool_name: "search_internet" });
   });
 
   it("run_completed：最终答案落到正文，预览清空", () => {

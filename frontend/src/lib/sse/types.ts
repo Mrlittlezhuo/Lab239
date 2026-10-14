@@ -15,11 +15,17 @@ export interface RouteResultData {
 }
 
 export interface AgentStepData {
+  /** 服务端步骤标识（agent_step.seq，1 起）；step_started/step_finished 靠它合并成一行 */
+  seq?: number;
   step?: number;
+  type?: string; // tool_call | answer
+  goal?: string;
   tool_name?: string;
   tool_input?: unknown;
   tool_output?: unknown;
-  status?: string;
+  output_summary?: string;
+  error_summary?: string;
+  status?: string; // running | completed | failed | cancelled
   thought?: string;
   [key: string]: unknown;
 }

@@ -67,7 +67,9 @@ export function AgentRunPanel({ agent }: { agent: UiAgentRun }) {
                   <Circle className="h-3.5 w-3.5" />
                 )}
                 <span className="font-medium">
-                  步骤 {String(step.step ?? i + 1)}
+                  {/* 服务端用 seq 标识步骤；不能退回数组下标，
+                      否则一步被重复渲染时编号会跟着错位 */}
+                  步骤 {String(step.seq ?? step.step ?? i + 1)}
                 </span>
                 <span className="text-muted-foreground">
                   {String(step.tool_name ?? "")}

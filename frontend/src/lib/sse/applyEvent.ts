@@ -1,4 +1,4 @@
-import type { SseEvent } from "@/lib/sse/types";
+import type { AgentStepData, SseEvent } from "@/lib/sse/types";
 import type { UiAgentRun, UiMessage, UiToolCall } from "@/hooks/useChatStream";
 
 /**
@@ -12,6 +12,35 @@ import type { UiAgentRun, UiMessage, UiToolCall } from "@/hooks/useChatStream";
 const REPLAY_STATUSES = new Set([3, 4]);
 /** 收尾块：正文一个字都没流出来时才拿来兜底，否则同样重复。 */
 const FINAL_STATUSES = new Set([5, -999]);
+
+/** 服务端步骤标识（agent_step.seq）；旧载荷里的 step 作为兜底。 */
+function stepKey(s: AgentStepData): number | undefined {
+  return s.seq ?? s.step;
+}
+
+/**
+ * 步骤时间线合并。
+ *
+ * 同一步会先发 ``step_started``（running）再发 ``step_finished``
+ * （completed/failed），服务端用同一个 ``seq`` 标识，因此必须落到同一行。
+ * 早先的写法是直接 append，界面上就变成"步骤 1 没勾 + 步骤 2 已勾"两行。
+ * ``replanned`` 只带新补充的步骤，同样不能把已完成的历史步骤整组替换掉。
+ */
+function mergeSteps(
+  existing: AgentStepData[],
+  event: Extract<SseEvent, { kind: "agent" }>,
+): AgentStepData[] {
+  const out = [...existing];
+  const put = (s: AgentStepData) => {
+    const key = stepKey(s);
+    const at = key === undefined ? -1 : out.findIndex((x) => stepKey(x) === key);
+    if (at >= 0) out[at] = { ...out[at], ...s };
+    else out.push(s);
+  };
+  if (event.step && !event.steps) put(event.step);
+  else if (event.steps) for (const s of event.steps) put(s);
+  return out;
+}
 
 /**
  * 把一条 SSE 事件应用到消息列表的最后一条 assistant 消息上（不可变更新）。
@@ -105,16 +134,13 @@ export function applySseEvent(prev: UiMessage[], event: SseEvent): UiMessage[] {
         runId: event.runId ?? m.agent?.runId,
         status: event.event,
         plan: event.plan ?? m.agent?.plan,
-        steps: event.steps ?? m.agent?.steps ?? [],
+        steps: mergeSteps(m.agent?.steps ?? [], event),
         finalResult: event.finalResult ?? m.agent?.finalResult,
         error: event.error ?? m.agent?.error,
         // 到终态就丢掉预览：正文改用最终答案，同一段字不显示两遍
         livePlan: terminal ? undefined : m.agent?.livePlan,
         liveAnswer: terminal ? undefined : m.agent?.liveAnswer,
       };
-      if (event.step && !event.steps) {
-        agent.steps = [...(m.agent?.steps ?? []), event.step];
-      }
       // Agent 轮的回答此前只有刷新后（从库里读）才出现在正文里，流式期间
       // 正文一直是空的；终态时把最终答案落到正文。
       const content =
