@@ -135,6 +135,7 @@ async def resume_agent_run(
         None, description="工具配置；缺省时使用完整工具注册表"
     ),
     use_mcp: bool = Body(False, description="是否加载启用的 MCP 工具"),
+    use_memory: bool = Body(True, description="本轮是否使用个人记忆（个人偏好/长期记忆）"),
 ):
     """恢复必须通过认证上下文校验运行归属（任务 014 §5/§7）。
 
@@ -152,6 +153,7 @@ async def resume_agent_run(
             stream=stream,
             tool_config=tool_config,
             use_mcp=use_mcp,
+            use_memory=use_memory,
         )
     except LookupError:
         raise HTTPException(

@@ -80,6 +80,9 @@ async def kb_chat_endpoint(
         user=user,
         session=session,
         conversation_id=extra.get("conversation_id"),
+        # 前端"本次不使用个人偏好"开关（会话级）；只影响本轮提示上下文，
+        # 不参与检索与引用（见 kb_chat）。
+        use_memory=bool(extra.get("use_memory", True)),
     )
     return ret
 

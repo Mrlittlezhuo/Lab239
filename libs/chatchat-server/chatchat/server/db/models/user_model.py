@@ -72,6 +72,12 @@ class UserModel(Base):
         default=True,
         comment="是否允许自动提取长期记忆（用户可关闭）",
     )
+    memory_preferences_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="是否把已启用的个人偏好注入新对话（关闭不删除数据）",
+    )
     create_time = Column(
         DateTime,
         nullable=False,

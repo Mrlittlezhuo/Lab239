@@ -101,6 +101,8 @@ class SmartConversationState(TypedDict, total=False):
     chat_model_config: Dict[str, Any]
     auto_use_mcp: bool
     available_tools: Dict[str, Any]
+    # 本轮是否使用个人记忆（界面"本次不使用个人偏好"），透传给记忆注入层
+    use_memory: bool
     # —— 路由与执行分支（route 节点写入） ——
     route_result: Optional[RouteResult]
     execution_mode: str
@@ -300,6 +302,7 @@ async def direct_answer_node(state: SmartConversationState) -> dict:
         max_tokens=state.get("max_tokens"),
         session=state["session"],
         owner_id=state["owner_id"],
+        use_memory=bool(state.get("use_memory", True)),
     )
     return {"branch_result": result}
 
@@ -319,6 +322,7 @@ async def knowledge_task_node(state: SmartConversationState) -> dict:
         model_name=state.get("model_name"),
         history_len=state.get("history_len"),
         max_steps=ONE_STEP_MAX_STEPS,
+        use_memory=bool(state.get("use_memory", True)),
     )
     return {"branch_result": result}
 
@@ -349,6 +353,7 @@ async def single_tool_task_node(state: SmartConversationState) -> dict:
         model_name=state.get("model_name"),
         history_len=state.get("history_len"),
         max_steps=ONE_STEP_MAX_STEPS,
+        use_memory=bool(state.get("use_memory", True)),
     )
     return {"branch_result": result}
 
@@ -378,6 +383,7 @@ async def multi_step_agent_node(state: SmartConversationState) -> dict:
         use_mcp=mcp_enabled,
         model_name=state.get("model_name"),
         history_len=state.get("history_len"),
+        use_memory=bool(state.get("use_memory", True)),
     )
     return {"branch_result": result}
 

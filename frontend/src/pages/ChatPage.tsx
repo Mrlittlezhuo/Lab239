@@ -7,6 +7,7 @@ import { listMessages } from "@/api/conversations";
 import { ChatSettings } from "@/components/chat/ChatSettings";
 import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
+import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +24,12 @@ export function ChatPage() {
   const prefs = useChatPrefs();
   const chat = useChatStream({
     conversationId,
-    onConversationId: (id) => navigate(`/chat/${id}`, { replace: true }),
+    onConversationId: (id) => {
+      // 新会话拿到真实 id 后，把"本次不使用个人偏好"的选择带过去，
+      // 否则首轮之后这个开关就失效了
+      prefs.mergeMemoryOff("new", id);
+      navigate(`/chat/${id}`, { replace: true });
+    },
   });
 
   useEffect(() => {
@@ -67,6 +73,7 @@ export function ChatPage() {
         <div className="flex items-center justify-between border-b pb-3">
           <h1 className="text-lg font-semibold">智能聊天</h1>
           <div className="flex items-center gap-2">
+            <MemoryUsageBadge conversationKey={draftKey} />
             <Button variant="outline" size="sm" onClick={handleExport} title="导出 Markdown">
               <Download className="h-4 w-4" />
               导出
@@ -93,6 +100,7 @@ export function ChatPage() {
               useMcp: prefs.useMcp,
               imageDataUrl,
               visionModel: prefs.visionModel,
+              useMemory: !prefs.memoryOff[draftKey],
             });
           }}
           onStop={chat.stop}

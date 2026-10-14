@@ -33,6 +33,8 @@ export interface ChatCompletionRequest {
   auto_agent?: boolean;
   agent_run?: boolean;
   use_mcp?: boolean;
+  /** false = 本轮不使用个人记忆（界面"本次不使用个人偏好"）；缺省表示使用 */
+  use_memory?: boolean;
   metadata?: Record<string, unknown>;
   chat_model_config?: ChatModelConfig;
   tool_input?: Record<string, unknown>;

@@ -41,6 +41,10 @@
   （读原文/提取证据/证据复核/覆盖分析/比较/报告/报告复核）；SQLite 无法
   对已有表增删 CHECK 约束，故按官方做法重建表并按列交集拷贝全部行，
   幂等、失败整体回滚，行 id（= LangGraph thread_id）不变。
+- v13（智能聊天记忆第一期）：``memory`` 增加 ``category``（个人偏好类别，
+  空表示非用户管理的个人偏好），``user_account`` 增加
+  ``memory_preferences_enabled``（个人记忆注入总开关）；只加列加索引，
+  不改列不删表，旧记忆行 ``category`` 为 NULL，行为不变。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -879,6 +883,44 @@ def _v12_research_run_stage(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+# --- v13（智能聊天记忆第一期）：个人偏好类别与注入总开关 ---
+
+_MEMORY_ADD_COLUMNS_V13 = [
+    # 空 = 不是用户在"我的记忆"页管理的个人偏好（例如自动提取的长期事实），
+    # 因此旧行不需要回填，也不改变既有召回行为。
+    "category VARCHAR(32)",
+]
+
+_USER_ACCOUNT_ADD_COLUMNS_V13 = [
+    "memory_preferences_enabled BOOLEAN NOT NULL DEFAULT 1",
+]
+
+_V13_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_memory_owner_category ON memory (owner_id, category)",
+]
+
+
+def _v13_memory_preferences(conn: Connection) -> None:
+    """v13：为个人偏好记忆加类别列与用户级注入开关（智能聊天记忆第一期）。
+
+    - ``memory.category``：个人偏好类别（answer_style / technical_background /
+      work_style / long_term_goal）。可空，旧行为 NULL，因此**不回填、不改动
+      任何既有记忆行**；类别取值由应用层白名单校验——SQLite 不能对已有表
+      追加 ``CHECK``，加约束需要整表重建，收益不值。
+    - ``user_account.memory_preferences_enabled``：个人记忆注入总开关，默认
+      TRUE，与 v6 的 ``memory_auto_enabled``（自动提取开关）职责不同；关闭
+      只停止注入，**不删除**已保存的记忆。
+    - 只加列加索引，不改列、不删表、不重建，知识库与向量索引不受影响；
+      重复执行安全（列存在性检查 + ``IF NOT EXISTS``）；失败即回滚且版本
+      不记录（由迁移框架保证）。
+    """
+    _add_missing_columns(conn, "memory", _MEMORY_ADD_COLUMNS_V13)
+    _add_missing_columns(conn, "user_account", _USER_ACCOUNT_ADD_COLUMNS_V13)
+    if "memory" in inspect(conn).get_table_names():
+        for stmt in _V13_INDEXES:
+            conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -892,6 +934,7 @@ _MIGRATIONS = [
     (10, "research_comparison", _v10_research_comparison),
     (11, "research_report", _v11_research_report),
     (12, "research_run_stage_artifacts", _v12_research_run_stage),
+    (13, "memory_preferences", _v13_memory_preferences),
 ]
 
 

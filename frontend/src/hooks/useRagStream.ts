@@ -13,6 +13,8 @@ export interface RagSendOptions {
   temperature: number | null;
   topK?: number;
   scoreThreshold?: number;
+  /** 本轮是否使用个人记忆；false 对应"本次不使用个人偏好"（仅当前会话） */
+  useMemory?: boolean;
 }
 
 let keySeq = 0;
@@ -74,6 +76,8 @@ export function useRagStream(options: {
         req.score_threshold = opts.scoreThreshold;
       if (conversationIdRef.current)
         req.conversation_id = conversationIdRef.current;
+      // 个人偏好只影响"怎么解释和呈现"，检索范围、引用与文档原文不受影响
+      if (opts.useMemory === false) req.use_memory = false;
 
       const controller = new AbortController();
       abortRef.current = controller;

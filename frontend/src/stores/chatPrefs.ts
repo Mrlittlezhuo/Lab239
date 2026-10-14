@@ -21,6 +21,11 @@ interface ChatPrefsState {
   useMcp: boolean;
   /** 会话输入草稿（key=conversationId 或 "new"），登出/刷新不丢 */
   drafts: Record<string, string>;
+  /**
+   * 会话级"本次不使用个人偏好"（key=conversationId 或 "new"）。
+   * 只影响当前会话的后续请求，不删除服务端保存的偏好；新会话不受影响。
+   */
+  memoryOff: Record<string, boolean>;
   setModel: (model: string) => void;
   setVisionModel: (model: string) => void;
   setTemperature: (t: number | null) => void;
@@ -29,6 +34,9 @@ interface ChatPrefsState {
   setUseMcp: (v: boolean) => void;
   setDraft: (conversationKey: string, text: string) => void;
   clearDraft: (conversationKey: string) => void;
+  setMemoryOff: (conversationKey: string, off: boolean) => void;
+  /** 新会话拿到真实 id 后，把 "new" 上的选择搬过去，避免首轮之后失效 */
+  mergeMemoryOff: (fromKey: string, toKey: string) => void;
 }
 
 export const useChatPrefs = create<ChatPrefsState>()(
@@ -41,6 +49,7 @@ export const useChatPrefs = create<ChatPrefsState>()(
       selectedTools: [],
       useMcp: false,
       drafts: {},
+      memoryOff: {},
       setModel: (model) => set({ model }),
       setVisionModel: (visionModel) => set({ visionModel }),
       setTemperature: (temperature) => set({ temperature }),
@@ -54,6 +63,20 @@ export const useChatPrefs = create<ChatPrefsState>()(
           const next = { ...s.drafts };
           delete next[conversationKey];
           return { drafts: next };
+        }),
+      setMemoryOff: (conversationKey, off) =>
+        set((s) => {
+          const next = { ...s.memoryOff };
+          if (off) next[conversationKey] = true;
+          else delete next[conversationKey];
+          return { memoryOff: next };
+        }),
+      mergeMemoryOff: (fromKey, toKey) =>
+        set((s) => {
+          if (!s.memoryOff[fromKey]) return s;
+          const next = { ...s.memoryOff, [toKey]: true };
+          delete next[fromKey];
+          return { memoryOff: next };
         }),
     }),
     { name: "chatchat.chatPrefs" },

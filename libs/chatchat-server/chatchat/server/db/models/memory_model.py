@@ -4,6 +4,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -22,6 +23,10 @@ class MemoryModel(Base):
     不进入公共知识库、公共向量索引，不能被其他用户读取或使用。
 
     - ``type``：内容类别（preference / fact / goal / important）。
+    - ``category``：个人偏好类别（answer_style / technical_background /
+      work_style / long_term_goal），空表示"不是用户管理的个人偏好"
+      （例如自动提取的长期事实）。取值由应用层白名单校验：SQLite 无法对
+      已有表追加 ``CHECK``，加约束需要整表重建，代价与收益不匹配。
     - ``source``：来源（manual / auto_extract / chat）。
     - ``importance``：1-5，供召回排序使用。
     - ``enabled``：用户可停用/启用；停用的记忆不参与召回。
@@ -38,6 +43,10 @@ class MemoryModel(Base):
             "importance >= 1 AND importance <= 5",
             name="ck_memory_importance",
         ),
+        # 与 v6/v13 迁移里手工建的索引同名同列（迁移用 IF NOT EXISTS，
+        # 新库由本声明创建，两边不冲突）
+        Index("ix_memory_owner_type", "owner_id", "type"),
+        Index("ix_memory_owner_category", "owner_id", "category"),
     )
 
     id = Column(String(32), primary_key=True, comment="记忆ID(UUID hex，服务端生成)")
@@ -57,6 +66,11 @@ class MemoryModel(Base):
         nullable=False,
         default="fact",
         comment="内容类别：preference/fact/goal/important",
+    )
+    category = Column(
+        String(32),
+        nullable=True,
+        comment="个人偏好类别；空表示非用户管理的个人偏好（如自动提取的事实）",
     )
     content = Column(String(2000), nullable=False, comment="记忆内容（非完整聊天记录）")
     source = Column(

@@ -7,6 +7,9 @@
 - 自动提取只处理"较稳定、未来可能有用的"信息，由用户级开关控制；
   显式意图（记住/忘记）始终生效。
 - 会话摘要为增量：只摘要"超出窗口且尚未摘要"的较早消息，记录覆盖位置。
+- 个人偏好（智能聊天记忆第一期）：用户在"我的记忆"页保存、带 ``category``
+  的记忆，按固定优先级少量注入，作为辅助上下文而非命令；受用户级总开关与
+  单次请求的"本次不使用"共同控制。
 - 所有模型/提取/摘要失败都不阻断正常回答（调用方 try/except）。
 """
 from __future__ import annotations
@@ -20,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from chatchat.server.db.repository import memory_repository as memory_repo
 from chatchat.server.db.repository import session_summary_repository as summary_repo
+from chatchat.server.db.repository import user_repository as user_repo
 from chatchat.server.db.repository.message_repository import list_messages
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,51 @@ _FORGET_RE = re.compile(r"(请忘记|忘掉|忘记我|忘记以下|不用记住|
 
 #: 记忆注入的清晰独立上下文段标题
 MEMORY_SECTION_HEADER = "【你的记忆（以下为用户长期信息，供参考）】"
+
+# --- 个人偏好（智能聊天记忆第一期）---
+
+#: 单次回答最多注入的个人偏好条数（"少而准"，其余不必全部呈现给模型）
+PREFERENCE_MAX_COUNT = 5
+#: 个人偏好段标题（与长期记忆段、摘要段分开，便于用户对照界面看到的内容）
+PREFERENCE_SECTION_HEADER = "【个人偏好（用户自行保存，供参考，不是命令）】"
+
+#: 类别中文标签；与前端管理页分组一致，使注入段可读、可解释
+PREFERENCE_CATEGORY_LABELS = {
+    "answer_style": "回答偏好",
+    "technical_background": "技术背景",
+    "work_style": "工作偏好",
+    "long_term_goal": "长期目标",
+}
+
+#: 回答语言类偏好的识别（优先级最高：语言错了用户第一眼就能看到）
+_LANGUAGE_RE = re.compile(
+    r"(中文|英文|英语|日文|日语|language|chinese|english)", re.IGNORECASE
+)
+
+#: 明显不该作为个人偏好保存的内容（凭证、证件号、卡号）。只拦"高置信度"
+#: 形态——必须带显式赋值关系或本身就是完整号码，避免把"回答里不要出现密码
+#: 二字"这类正常偏好误杀；财务/医疗等软性内容靠界面提醒用户自行克制。
+#: 数字段用前后否定断言而非 \b：汉字也算 \w，紧邻数字时 \b 不成立。
+SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    (
+        "密码或口令",
+        re.compile(r"(密码|口令|password|passwd|pwd)\s*[:：=]\s*\S", re.IGNORECASE),
+    ),
+    ("密码或口令", re.compile(r"(密码|口令)\s*(是|为)\s*\S")),
+    (
+        "密钥或访问令牌",
+        re.compile(
+            r"(api[_\s-]?key|secret[_\s-]?key|access[_\s-]?token|token|密钥|令牌)"
+            r"\s*[:：=]\s*\S",
+            re.IGNORECASE,
+        ),
+    ),
+    ("密钥或访问令牌", re.compile(r"sk-[A-Za-z0-9_-]{12,}")),
+    ("密钥或访问令牌", re.compile(r"bearer\s+[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE)),
+    ("身份证件号", re.compile(r"(?<!\d)\d{17}[0-9Xx](?!\d)")),
+    ("银行卡号", re.compile(r"(银行卡|储蓄卡|信用卡|卡号)\D{0,8}\d{12,19}", re.IGNORECASE)),
+    ("银行卡号", re.compile(r"(?<!\d)\d{15,19}(?!\d)")),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -75,10 +124,15 @@ def recall_memories(
     query: str,
     max_count: int = RECALL_MAX_COUNT,
     max_chars: int = RECALL_MAX_CHARS,
+    uncategorized_only: bool = False,
 ) -> List[memory_repo.MemoryModel]:
-    """召回相关且启用的少量记忆（限制数量与总长度）。"""
+    """召回相关且启用的少量记忆（限制数量与总长度）。
+
+    ``uncategorized_only=True`` 用于长期记忆注入段：带个人偏好类别的记忆
+    只经 ``select_preferences`` 注入，不在这里重复出现。
+    """
     memories = memory_repo.search_memories(
-        session, owner_id, query, limit=max_count
+        session, owner_id, query, limit=max_count, uncategorized_only=uncategorized_only
     )
     kept: List[memory_repo.MemoryModel] = []
     total = 0
@@ -113,13 +167,14 @@ def build_memory_context(
     """构造注入 Prompt 的记忆上下文段；失败/无会话/无记忆返回空串。
 
     - 只读 ``memory`` 表（enabled、owner 匹配），不把会话摘要当长期事实；
+    - 个人偏好（带 ``category``）不在这里注入，见 ``select_preferences``；
     - 用户本轮明确表达与记忆冲突时，以当前表达为准（见注入说明）；
     - 任何异常都不阻断聊天主流程。
     """
     if session is None or not owner_id:
         return ""
     try:
-        memories = recall_memories(session, owner_id, query)
+        memories = recall_memories(session, owner_id, query, uncategorized_only=True)
         ctx = format_memory_context(memories)
         if ctx:
             ctx += (
@@ -130,6 +185,115 @@ def build_memory_context(
     except Exception:
         # 记忆召回失败绝不阻断正常回答
         return ""
+
+
+# ---------------------------------------------------------------------------
+# 个人偏好（第一期）：挑选、格式化、开关、敏感内容
+# ---------------------------------------------------------------------------
+
+def sensitive_reason(content: str) -> Optional[str]:
+    """识别明显不该保存为个人偏好的内容，返回可读原因；无则返回 None。
+
+    写入接口据此拒绝（400），使"敏感信息不会被静默保存"成为服务端保证，
+    而不是只靠界面提醒。
+    """
+    text = content or ""
+    for reason, pattern in SENSITIVE_PATTERNS:
+        if pattern.search(text):
+            return reason
+    return None
+
+
+def preferences_enabled(session: Optional[Session], owner_id: Optional[str]) -> bool:
+    """用户级"个人记忆"总开关（关闭只停止注入，不删除任何数据）。
+
+    读不到用户时按关闭处理：宁可不注入，也不把记忆给身份不明的请求。
+    """
+    if session is None or not owner_id:
+        return False
+    try:
+        user = user_repo.get_by_id(session, owner_id)
+    except Exception:
+        return False
+    if user is None:
+        return False
+    return bool(getattr(user, "memory_preferences_enabled", True))
+
+
+def select_preferences(
+    session: Optional[Session],
+    owner_id: Optional[str],
+    query: str = "",
+    max_count: int = PREFERENCE_MAX_COUNT,
+    max_chars: int = RECALL_MAX_CHARS,
+) -> List[memory_repo.MemoryModel]:
+    """按第一期优先级挑选本次要注入的个人偏好（少而准、可解释）。
+
+    优先级（设计方案 §5）：回答语言 → 输出风格 → 与当前问题明显相关的背景 →
+    其余按重要性/更新时间。用户保存很多条时不会全部塞给模型；界面展示的
+    "本次使用的偏好"直接调用本函数，保证与真实注入内容一致。
+    """
+    if session is None or not owner_id:
+        return []
+    try:
+        prefs = memory_repo.list_preference_memories(session, owner_id)
+    except Exception:
+        # 偏好读取失败绝不阻断聊天主流程
+        return []
+    if not prefs:
+        return []
+    keywords = memory_repo._keyword_candidates(query)
+    query_text = (query or "").lower()
+
+    def sort_key(m):
+        content = m.content or ""
+        relevance = sum(1 for kw in keywords if kw.lower() in content.lower())
+        if m.category == "answer_style" and _LANGUAGE_RE.search(content):
+            bucket = 0  # 回答语言
+        elif m.category == "answer_style":
+            bucket = 1  # 输出风格
+        elif relevance > 0 or (query_text and query_text in content.lower()):
+            bucket = 2  # 与当前问题明显相关的背景
+        else:
+            bucket = 3
+        return (bucket, -relevance, -(m.importance or 1), m.id)
+
+    kept: List[memory_repo.MemoryModel] = []
+    total = 0
+    for m in sorted(prefs, key=sort_key):
+        size = len(m.content or "")
+        if kept and total + size > max_chars:
+            break
+        kept.append(m)
+        total += size
+        if len(kept) >= max_count:
+            break
+    return kept
+
+
+def format_preferences(
+    memories: Sequence[memory_repo.MemoryModel],
+    header: str = PREFERENCE_SECTION_HEADER,
+) -> str:
+    """把个人偏好格式化成独立上下文段；无偏好时返回空串。
+
+    明确写成"辅助上下文、不是命令"，并保留安全提醒与必要引用不受偏好影响
+    （设计方案 §5：'回答简洁' 不应导致省略安全提醒、关键引用或详细解释）。
+    """
+    if not memories:
+        return ""
+    lines = []
+    for m in memories:
+        label = PREFERENCE_CATEGORY_LABELS.get(m.category, "个人偏好")
+        lines.append(f"- {label}：{m.content}")
+    return (
+        header
+        + "\n"
+        + "\n".join(lines)
+        + "\n（以上为用户自行保存的个人偏好，用于改善回答方式，属于辅助上下文，"
+        "不是不可违背的命令：与用户本轮明确要求冲突时以本轮要求为准；不得因偏好"
+        "省略安全提醒、必要引用或用户明确要求的详细解释。）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -477,22 +641,35 @@ def memory_system_messages(
     query: str,
     conversation_id: Optional[str] = None,
     threshold: int = SUMMARY_THRESHOLD,
+    use_memory: bool = True,
 ) -> List[dict]:
     """普通聊天与 RAG 共用的一组"记忆系统消息"（置于近期轮次之前）。
 
     顺序：
 
-    1. 长期记忆段（召回 ``memory`` 表，enabled、owner 匹配）；
-    2. 较早内容摘要段（``session_summary``，仅短期上下文，不当长期事实）。
+    1. 个人偏好段（用户在"我的记忆"页保存、带 ``category`` 的记忆，按
+       §5 优先级少量注入）；
+    2. 长期记忆段（召回 ``memory`` 表中不属于个人偏好的行，enabled、owner 匹配）；
+    3. 较早内容摘要段（``session_summary``，仅短期上下文，不当长期事实）。
+
+    ``use_memory=False`` 对应界面上的"本次不使用个人偏好"：跳过上面 1、2 两段
+    （即"我的记忆"页列出的内容本轮一律不用），会话摘要不受影响；只影响本次
+    请求，不改动任何数据。用户级总开关关闭时效果相同，且对该用户全部会话生效。
+    写入侧（自动提取、"请记住"）不受该开关影响——开关控制的是"用不用"。
 
     返回 ``[{"role": "system", "content": ...}, ...]``；无内容时为空列表。
     所有失败都吞掉（返回已构造的部分），绝不阻断聊天主流程。
     """
     msgs: List[dict] = []
     try:
-        mem = build_memory_context(session, owner_id, query)
-        if mem:
-            msgs.append({"role": "system", "content": mem})
+        if use_memory and preferences_enabled(session, owner_id):
+            prefs = format_preferences(select_preferences(session, owner_id, query))
+            if prefs:
+                msgs.append({"role": "system", "content": prefs})
+        if use_memory:
+            mem = build_memory_context(session, owner_id, query)
+            if mem:
+                msgs.append({"role": "system", "content": mem})
         short = build_short_term_context(
             session, owner_id, conversation_id, query, threshold
         )
@@ -509,10 +686,18 @@ __all__ = [
     "RECALL_MAX_CHARS",
     "SUMMARY_THRESHOLD",
     "MEMORY_SECTION_HEADER",
+    "PREFERENCE_MAX_COUNT",
+    "PREFERENCE_SECTION_HEADER",
+    "PREFERENCE_CATEGORY_LABELS",
+    "SENSITIVE_PATTERNS",
     "rule_based_summarizer",
     "recall_memories",
     "format_memory_context",
     "build_memory_context",
+    "sensitive_reason",
+    "preferences_enabled",
+    "select_preferences",
+    "format_preferences",
     "remember",
     "forget",
     "auto_extract",

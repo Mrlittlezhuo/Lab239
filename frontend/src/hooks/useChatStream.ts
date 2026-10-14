@@ -67,6 +67,8 @@ export interface SendOptions {
   imageDataUrl?: string;
   /** 图片解析轮使用的 image2text 模型（有 imageDataUrl 时必填） */
   visionModel?: string;
+  /** 本轮是否使用个人记忆；false 对应"本次不使用个人偏好"（仅当前会话） */
+  useMemory?: boolean;
 }
 
 let keySeq = 0;
@@ -190,6 +192,8 @@ export function useChatStream(options: {
           if (conversationIdRef.current) {
             req.conversation_id = conversationIdRef.current;
           }
+          // 只在关闭时带上：默认（使用个人记忆）不新增字段，请求形状与旧版一致
+          if (opts.useMemory === false) req.use_memory = false;
           switch (opts.toolMode) {
             case "auto":
               req.auto_agent = true;

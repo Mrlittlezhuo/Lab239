@@ -189,8 +189,13 @@ def _build_memory_messages(
     query: str,
     conversation_id: str,
     message_id: Optional[str],
+    use_memory: bool = True,
 ) -> List[Dict[str, str]]:
-    """沿用现有记忆机制：自动提取 + 会话摘要 + 记忆注入；失败不阻断运行。"""
+    """沿用现有记忆机制：自动提取 + 会话摘要 + 记忆注入；失败不阻断运行。
+
+    ``use_memory=False``（界面"本次不使用个人偏好"）只跳过注入，自动提取与
+    会话摘要照常进行。
+    """
     if session is None or not owner_id:
         return []
     try:
@@ -213,7 +218,7 @@ def _build_memory_messages(
             {"role": m.get("role", "system"), "content": m.get("content", "")}
             for m in (
                 memory_service.memory_system_messages(
-                    session, owner_id, query, conversation_id
+                    session, owner_id, query, conversation_id, use_memory=use_memory
                 )
                 or []
             )
@@ -349,12 +354,15 @@ async def agent_run_chat(
     model_name: Optional[str] = None,
     history_len: Optional[int] = None,
     max_steps: Optional[int] = None,
+    use_memory: bool = True,
 ) -> Any:
     """执行一次单 Agent 任务闭环。
 
     流式返回 ``EventSourceResponse``（SSE 事件带 ``agent_event`` / ``run_id``
     等额外字段）；非流式返回聚合结果 dict。所有路径收敛到运行终态，并把
     最终可见文本写回来源消息。
+
+    ``use_memory=False`` 表示本轮不使用个人记忆（界面"本次不使用个人偏好"）。
     """
     if not owner_id:
         raise ValueError("owner_id 不能为空（必须来自服务端认证上下文）")
@@ -362,7 +370,7 @@ async def agent_run_chat(
     base_tools = _build_tools(tool_config)
     history = _build_history(session, conversation_id, owner_id, history_len)
     memory_messages = _build_memory_messages(
-        session, owner_id, query, conversation_id, message_id
+        session, owner_id, query, conversation_id, message_id, use_memory=use_memory
     )
     planner = _build_planner(model_name)
 
@@ -419,6 +427,7 @@ async def agent_run_resume(
     tool_config: Optional[Dict[str, Any]] = None,
     use_mcp: bool = False,
     stream: bool = True,
+    use_memory: bool = True,
 ) -> Any:
     """从 checkpoint 断点恢复一个中断的运行（任务 014 §7，仅后端）。
 
@@ -474,7 +483,8 @@ async def agent_run_resume(
                 {"role": m.get("role", "system"), "content": m.get("content", "")}
                 for m in (
                     memory_service.memory_system_messages(
-                        ctx_session, owner_id, goal, conversation_id
+                        ctx_session, owner_id, goal, conversation_id,
+                        use_memory=use_memory,
                     )
                     or []
                 )

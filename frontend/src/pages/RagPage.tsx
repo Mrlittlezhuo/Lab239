@@ -10,6 +10,7 @@ import type { RagMode } from "@/api/rag";
 import { getServerModels } from "@/api/server";
 import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
+import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,7 +40,11 @@ export function RagPage() {
   const prefs = useChatPrefs();
   const rag = useRagStream({
     conversationId,
-    onConversationId: (id) => navigate(`/rag/${id}`, { replace: true }),
+    onConversationId: (id) => {
+      // 新会话拿到真实 id 后，把"本次不使用个人偏好"的选择带过去
+      prefs.mergeMemoryOff("rag:new", `rag:${id}`);
+      navigate(`/rag/${id}`, { replace: true });
+    },
   });
 
   // 知识库管理页的「去对话」用 /rag?kb=<名字> 过来：不带会话 id，
@@ -131,7 +136,10 @@ export function RagPage() {
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="space-y-2 border-b pb-3">
-          <h1 className="text-lg font-semibold">知识库对话</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-lg font-semibold">知识库对话</h1>
+            <MemoryUsageBadge conversationKey={draftKey} />
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Select value={mode} onValueChange={(v) => setMode(v as RagMode)}>
               <SelectTrigger className="w-28">
@@ -280,6 +288,7 @@ export function RagPage() {
               temperature: prefs.temperature,
               topK,
               scoreThreshold,
+              useMemory: !prefs.memoryOff[draftKey],
             });
           }}
           onStop={rag.stop}

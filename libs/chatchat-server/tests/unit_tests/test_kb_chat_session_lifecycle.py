@@ -137,8 +137,9 @@ class MemoryRecorder:
     def summarize_conversation(self, session, owner_id, conversation_id):
         self.summarize_calls.append((owner_id, conversation_id))
 
-    def memory_system_messages(self, session, owner_id, query, conversation_id):
-        self.memory_messages_calls.append((owner_id, conversation_id))
+    def memory_system_messages(self, session, owner_id, query, conversation_id, **kwargs):
+        # kwargs 里带 use_memory（"本次不使用个人偏好"），一并记录以便断言透传
+        self.memory_messages_calls.append((owner_id, conversation_id, kwargs))
         return list(self.memory_messages)
 
 
@@ -394,6 +395,29 @@ def test_streaming_kb_chat_persists_reply_after_session_close(client, kbchat_app
     assert [c[0] for c in mem.auto_extract_calls] == [uid]
     assert [c[0] for c in mem.summarize_calls] == [uid]
     assert [c[0] for c in mem.memory_messages_calls] == [uid]
+
+
+def test_kb_chat_passes_use_memory_flag_to_memory_layer(
+    client, kbchat_app, temp_user_db, secret
+):
+    """请求体的 use_memory=false（界面"本次不使用个人偏好"）必须到达记忆层。
+
+    记忆注入只影响"怎么解释和呈现"，检索与引用不受影响，因此这里只断言
+    透传本身与回答仍然正常产出。
+    """
+    hdr, uid = _headers_of(temp_user_db, "alice")
+    with client.stream(
+        "POST", "/kb_chat", headers=hdr, json=_kb_chat_body(use_memory=False)
+    ) as resp:
+        assert resp.status_code == 200
+        chunks = _iter_sse_chunks(resp)
+
+    _assert_no_error_chunks(chunks)
+    mem = kbchat_app.state.memory
+    assert [c[0] for c in mem.memory_messages_calls] == [uid]
+    assert mem.memory_messages_calls[0][2].get("use_memory") is False
+    # 写入侧不受该开关影响
+    assert [c[0] for c in mem.auto_extract_calls] == [uid]
 
 
 def test_streaming_kb_chat_existing_conversation_id(client, kbchat_app, temp_user_db, secret):

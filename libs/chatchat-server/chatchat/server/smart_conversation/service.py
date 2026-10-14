@@ -112,11 +112,15 @@ async def run_smart_conversation(
     chat_model_config: Optional[Dict[str, Any]] = None,
     auto_use_mcp: bool = False,
     available_tools: Optional[Dict[str, Any]] = None,
+    use_memory: bool = True,
 ):
     """运行一次智能对话总图并返回统一输出。
 
     请求身份（owner_id / conversation_id / message_id / session）必须由调用方
     从服务端认证上下文注入，本函数不接受请求体中的用户身份。
+
+    ``use_memory=False`` 表示本轮不使用个人记忆（界面"本次不使用个人偏好"），
+    由各执行分支透传给记忆注入层。
     """
     graph = get_smart_conversation_graph()
     # 根 span：覆盖路由、图执行与（流式时）响应迭代器的真实消费过程。
@@ -148,6 +152,7 @@ async def run_smart_conversation(
                     chat_model_config=chat_model_config or {},
                     auto_use_mcp=bool(auto_use_mcp),
                     available_tools=dict(available_tools or {}),
+                    use_memory=bool(use_memory),
                 )
             )
     except BaseException as exc:
