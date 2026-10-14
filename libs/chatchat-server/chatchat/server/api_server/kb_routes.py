@@ -83,6 +83,10 @@ async def kb_chat_endpoint(
         # 前端"本次不使用个人偏好"开关（会话级）；只影响本轮提示上下文，
         # 不参与检索与引用（见 kb_chat）。
         use_memory=bool(extra.get("use_memory", True)),
+        # 临时对话标记必须显式转发：kb_chat 的默认值是 Body(...) 这个
+        # FieldInfo 对象，直接调用时 bool() 恒为真，会把所有没带会话 id 的
+        # 知识库对话都建成临时会话（第二期 §4.4 的漏洞）。
+        temporary=bool(extra.get("temporary", False)),
     )
     return ret
 
