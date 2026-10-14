@@ -27,6 +27,7 @@ from chatchat.server.db.repository import (
     get_owned_conversation,
     list_conversations,
     rename_owned_conversation,
+    set_conversation_project,
 )
 from chatchat.server.db.repository.message_repository import list_messages
 
@@ -38,10 +39,21 @@ class ConversationCreate(BaseModel):
         False,
         description="临时对话：不创建、不更新、不保留会话私有上下文（第二期 §4.4）",
     )
+    project_id: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="会话所在项目空间（第三期 §4.4）；项目范围记忆只在此会话内召回",
+    )
 
 
 class ConversationRename(BaseModel):
     name: str = Field("", max_length=50, description="对话框名称")
+
+
+class ConversationProject(BaseModel):
+    """设置/清除会话的项目空间；传 null 或空串表示清除。"""
+
+    project_id: Optional[str] = Field(None, max_length=32)
 
 
 class ConversationOut(BaseModel):
@@ -49,6 +61,7 @@ class ConversationOut(BaseModel):
     name: Optional[str] = None
     chat_type: Optional[str] = None
     temporary: bool = False
+    project_id: Optional[str] = None
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
 
@@ -71,6 +84,7 @@ def _conv_out(c: ConversationModel) -> ConversationOut:
         name=c.name,
         chat_type=c.chat_type,
         temporary=bool(getattr(c, "temporary", False)),
+        project_id=getattr(c, "project_id", None),
         create_time=c.create_time,
         update_time=c.update_time,
     )
@@ -98,11 +112,31 @@ def create_my_conversation(
     user: UserModel = Depends(require_password_changed),
     session: Session = Depends(get_db),
 ) -> ConversationOut:
+    _require_owned_project(session, user, body.project_id)
     conv_id = create_conversation(
-        session, user.id, body.chat_type, body.name, temporary=bool(body.temporary)
+        session,
+        user.id,
+        body.chat_type,
+        body.name,
+        temporary=bool(body.temporary),
+        project_id=body.project_id,
     )
     c = get_owned_conversation(session, conv_id, user.id)
     return _conv_out(c)
+
+
+def _require_owned_project(
+    session: Session, user: UserModel, project_id: Optional[str]
+) -> None:
+    """会话只能挂到当前用户自己的项目上；不存在/越权统一 404。"""
+    if not project_id:
+        return
+    from chatchat.server.db.repository import research_repository as research_repo
+
+    if research_repo.get_owned_project(session, project_id, user.id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在或无权访问"
+        )
 
 
 @conversation_router.get("", summary="当前用户会话列表（update_time DESC）")
@@ -140,6 +174,33 @@ def rename_my_conversation(
 ) -> ConversationOut:
     try:
         c = rename_owned_conversation(session, conversation_id, user.id, body.name)
+    except ConversationNotOwned:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在或无权操作"
+        )
+    return _conv_out(c)
+
+
+@conversation_router.patch(
+    "/{conversation_id}/project",
+    summary="设置/清除会话的项目空间（第三期 §4.4）",
+)
+def set_my_conversation_project(
+    conversation_id: str,
+    body: ConversationProject,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> ConversationOut:
+    """选定项目后，只有该项目的范围记忆能在该会话里被召回；清除后一律不用。
+
+    放在会话上而不是每次请求带上，是为了让普通聊天、知识库对话与 Agent
+    任务三条链路都自动遵守同一条范围规则，也不会因为漏传参数而串项目。
+    """
+    _require_owned_project(session, user, body.project_id)
+    try:
+        c = set_conversation_project(
+            session, conversation_id, user.id, body.project_id or None
+        )
     except ConversationNotOwned:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在或无权操作"

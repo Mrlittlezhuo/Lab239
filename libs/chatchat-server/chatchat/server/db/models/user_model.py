@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    text,
 )
 
 from chatchat.server.db.base import Base
@@ -77,6 +78,35 @@ class UserModel(Base):
         nullable=False,
         default=True,
         comment="是否把已启用的个人偏好注入新对话（关闭不删除数据）",
+    )
+    # --- 智能聊天记忆第三期：跨会话相关记忆召回开关（v15）---
+    memory_recall_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("1"),
+        comment="跨会话相关记忆总开关（关闭只停止召回，不删除记忆；个人偏好不受影响）",
+    )
+    memory_recall_decisions_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("1"),
+        comment="是否召回已确认的历史决策/背景/待办",
+    )
+    memory_recall_project_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+        comment="是否召回项目范围记忆（仅在会话选定该项目时生效）",
+    )
+    memory_recall_general_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+        comment="是否召回未确认的一般历史会话结论（默认关闭，需用户主动开启）",
     )
     create_time = Column(
         DateTime,

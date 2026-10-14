@@ -25,11 +25,15 @@ def create_conversation(
     name: str = "",
     conversation_id: str | None = None,
     temporary: bool = False,
+    project_id: str | None = None,
 ) -> str:
     """新增会话；owner 由服务端写入，不接受客户端指定。
 
     ``temporary=True`` 表示临时对话：后续不创建、不更新、不保留会话私有
     上下文（智能聊天记忆第二期设计方案 §4.4）。
+
+    ``project_id`` 表示会话所在的项目空间：项目范围记忆只在这个会话里参与
+    召回（智能聊天记忆第三期设计方案 §4.4）。
     """
     if not owner_id:
         raise ValueError("owner_id 不能为空")
@@ -42,6 +46,7 @@ def create_conversation(
         name=name,
         owner_id=owner_id,
         temporary=bool(temporary),
+        project_id=project_id or None,
         create_time=now,
         update_time=now,
     )
@@ -119,8 +124,48 @@ def delete_owned_conversation(
     session.query(MessageModel).filter(
         MessageModel.conversation_id == conversation_id
     ).delete(synchronize_session=False)
+    # 会话内的"本次不使用"记录随会话一起清理：会话都没了，留着只会成为
+    # 无主数据（长期记忆本身仍保留，见上）。
+    from chatchat.server.db.repository.memory_repository import (
+        clear_ignored_memory_ids,
+    )
+
+    clear_ignored_memory_ids(session, conversation_id)
     session.delete(c)
     session.commit()
+
+
+def conversation_project_id(
+    session: Session, conversation_id: str, owner_id: str
+) -> str | None:
+    """该会话选定的项目 id（不存在/不属于该用户返回 None）。
+
+    记忆层据此决定项目范围记忆能否参与本次召回（设计方案 §4.4）：
+    没有选定项目就一律不注入项目记忆。
+    """
+    if not conversation_id or not owner_id:
+        return None
+    return (
+        session.query(ConversationModel.project_id)
+        .filter(
+            ConversationModel.id == conversation_id,
+            ConversationModel.owner_id == owner_id,
+        )
+        .scalar()
+    )
+
+
+def set_conversation_project(
+    session: Session, conversation_id: str, owner_id: str, project_id: str | None
+) -> ConversationModel:
+    """设置/清除会话的项目空间；不可见会话抛 ConversationNotOwned。"""
+    c = get_owned_conversation(session, conversation_id, owner_id)
+    if c is None:
+        raise ConversationNotOwned(conversation_id)
+    c.project_id = project_id or None
+    c.update_time = datetime.now()
+    session.commit()
+    return c
 
 
 def conversation_is_temporary(
@@ -149,6 +194,8 @@ __all__ = [
     "list_conversations",
     "get_owned_conversation",
     "conversation_is_temporary",
+    "conversation_project_id",
+    "set_conversation_project",
     "rename_owned_conversation",
     "delete_owned_conversation",
 ]

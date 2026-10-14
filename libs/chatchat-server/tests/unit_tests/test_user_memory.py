@@ -80,7 +80,7 @@ def temp_user_db(secret, tmp_path):
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 14
+    assert current_version(engine.connect()) == 15
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
     engine.dispose()
@@ -205,7 +205,7 @@ class TestMigration:
             assert {
                 "memory_key", "source_conversation_id", "source_message_id"
             }.issubset(memory_columns)
-        assert current_version(engine.connect()) == 14
+        assert current_version(engine.connect()) == 15
         # 迁移仅覆盖 user_account/openai_file/memory/session_summary，
         # conversation/message/knowledge_* 由模型元数据建表
         Base.metadata.create_all(engine)
@@ -254,7 +254,7 @@ class TestMigration:
         with engine.connect() as conn:
             result = apply_migrations(registry, conn)
         assert result.applied == []
-        assert current_version(engine.connect()) == 14
+        assert current_version(engine.connect()) == 15
 
         s = Session()
         try:
@@ -838,8 +838,11 @@ class TestPromptInjection:
             system_msgs = [h for h in history
                           if isinstance(h, dict) and h.get("role") == "system"]
             assert any("无线通信" in (h.get("content") or "") for h in system_msgs)
-            # 该 memory 段在最前（第一条即记忆段），近期轮次在其后
-            assert "【你的记忆" in system_msgs[0]["content"]
+            # 第三期：长期记忆段改由跨会话召回产生，标题明确写"来自以往会话"，
+            # 与个人偏好段、会话上下文段分开；仍是第一条 system 消息。
+            from chatchat.server.memory import cross_session_recall
+
+            assert cross_session_recall.RECALL_SECTION_HEADER in system_msgs[0]["content"]
         finally:
             s.close()
 

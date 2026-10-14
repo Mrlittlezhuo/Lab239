@@ -267,8 +267,8 @@ class TestV14Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [14]
-            assert result.final_version == 14
+            assert [m.version for m in result.applied] == [14, 15]
+            assert result.final_version == 15
 
         cols = {c["name"] for c in inspect(engine).get_columns("session_summary")}
         assert {
@@ -303,7 +303,7 @@ class TestV14Migration:
             apply_migrations(build_registry(), conn)
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 14
+            assert second.final_version == 15
         engine.dispose()
 
 

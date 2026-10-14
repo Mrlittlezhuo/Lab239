@@ -240,7 +240,7 @@ def temp_db(secret, tmp_path):
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 14
+    assert current_version(engine.connect()) == 15
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine, "owner_id": None}
     engine.dispose()

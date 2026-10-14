@@ -35,6 +35,11 @@ class ConversationModel(Base):
         server_default=text("0"),
         comment="临时对话：不创建、不更新、不保留会话私有上下文",
     )
+    project_id = Column(
+        String(32),
+        nullable=True,
+        comment="会话所在项目空间（research_project.id）；项目范围记忆只在此会话内召回",
+    )
     create_time = Column(DateTime, default=func.now(), comment="创建时间")
     update_time = Column(DateTime, comment="最后活动时间")
 

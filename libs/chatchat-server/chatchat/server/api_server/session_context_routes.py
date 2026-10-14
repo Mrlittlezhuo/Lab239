@@ -37,6 +37,10 @@ class ContextOut(BaseModel):
     summary: str = ""
     summarized_count: int = 0
     update_time: Optional[datetime] = None
+    #: 与 ``confirmed`` 一一对应：该条已确认事项是否已保存为跨会话记忆（第三期 §4.3）
+    confirmed_saved: List[bool] = Field(default_factory=list)
+    #: 会话所在项目空间（第三期 §4.4）；项目范围记忆只在此会话内召回
+    project_id: Optional[str] = None
 
 
 class ContextEdit(BaseModel):
@@ -57,18 +61,44 @@ def _require_owned(session: Session, conversation_id: str, user: UserModel) -> N
         )
 
 
-def _out(context: session_context.SessionContext) -> ContextOut:
+def _out(
+    context: session_context.SessionContext, session: Optional[Session] = None
+) -> ContextOut:
+    """映射为响应。
+
+    ``confirmed_saved`` 需要查当前用户的记忆表，因此只在有 session 时给出：
+    抽屉里据此把"保存为跨会话记忆"变成"已保存"，避免重复保存（第三期 §4.3）。
+    """
+    confirmed = [i.text for i in context.confirmed]
+    saved: List[bool] = []
+    project_id = None
+    if session is not None:
+        from chatchat.server.db.repository import conversation_repository as conv_repo
+        from chatchat.server.memory import cross_session_recall
+
+        for text in confirmed:
+            saved.append(
+                cross_session_recall._find_same_content_memory(
+                    session, context.owner_id, text
+                )
+                is not None
+            )
+        project_id = conv_repo.conversation_project_id(
+            session, context.conversation_id, context.owner_id
+        )
     return ContextOut(
         conversation_id=context.conversation_id,
         temporary=bool(context.temporary),
         topic=(context.topic.text if context.topic else ""),
         goal=(context.goal.text if context.goal else ""),
-        confirmed=[i.text for i in context.confirmed],
+        confirmed=confirmed,
         constraints=[i.text for i in context.constraints],
         open_questions=[i.text for i in context.open_questions],
         summary=context.summary or "",
         summarized_count=context.summarized_count,
         update_time=context.update_time,
+        confirmed_saved=saved,
+        project_id=project_id,
     )
 
 
@@ -84,7 +114,7 @@ def get_context(
         context = session_context.SessionContext(
             conversation_id=conversation_id, owner_id=user.id
         )
-    return _out(context)
+    return _out(context, session)
 
 
 @session_context_router.patch("/{conversation_id}/context", summary="编辑本会话上下文")
@@ -112,7 +142,7 @@ def edit_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="临时对话不保存会话上下文；请退出临时对话后再编辑",
         )
-    return _out(updated)
+    return _out(updated, session)
 
 
 @session_context_router.post(
@@ -138,7 +168,7 @@ def refresh_context(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="更新会话上下文失败"
         )
-    return _out(updated)
+    return _out(updated, session)
 
 
 @session_context_router.delete("/{conversation_id}/context", summary="重置本会话上下文")
@@ -151,6 +181,96 @@ def reset_context(
     _require_owned(session, conversation_id, user)
     session_context.reset_session_context(session, user.id, conversation_id)
     return {"reset": True, "conversation_id": conversation_id}
+
+
+# --- 跨会话记忆：候选提升与会话内"本次不使用"（第三期设计方案 §4.2、§4.3）---
+
+
+class IgnoreRequest(BaseModel):
+    memory_id: str = Field(..., min_length=1, max_length=32)
+
+
+@session_context_router.get(
+    "/{conversation_id}/promotions",
+    summary="本会话已确认事项里「值得保存为跨会话记忆」的候选（只提出，不写入）",
+)
+def list_promotions(
+    conversation_id: str,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    """系统可以提出候选，但绝不自动升级为跨会话记忆（设计方案 §4.3 / P3-13）。"""
+    _require_owned(session, conversation_id, user)
+    from chatchat.server.memory import cross_session_recall
+
+    candidates = cross_session_recall.promotion_candidates(
+        session, user.id, conversation_id
+    )
+    return {"candidates": [c.to_dict() for c in candidates]}
+
+
+@session_context_router.get(
+    "/{conversation_id}/memory-ignores", summary="本会话「本次不使用」的记忆 id"
+)
+def list_ignores(
+    conversation_id: str,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    _require_owned(session, conversation_id, user)
+    from chatchat.server.db.repository import memory_repository as memory_repo
+
+    return {
+        "memory_ids": sorted(
+            memory_repo.list_ignored_memory_ids(session, conversation_id, user.id)
+        )
+    }
+
+
+@session_context_router.post(
+    "/{conversation_id}/memory-ignores",
+    summary="本次不使用：只让该记忆在本会话内不被召回（原记录保留）",
+)
+def add_ignore(
+    conversation_id: str,
+    body: IgnoreRequest,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    """设计方案 §4.2 / P3-04：仅本次回答及当前会话忽略，其他会话不受影响。
+
+    记录放在服务端而不是浏览器里，普通聊天、知识库对话与 Agent 任务才会
+    一起遵守；重复调用幂等。
+    """
+    _require_owned(session, conversation_id, user)
+    from chatchat.server.db.repository import memory_repository as memory_repo
+
+    try:
+        memory_repo.ignore_memory(session, conversation_id, user.id, body.memory_id)
+    except memory_repo.MemoryNotOwned:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="记忆不存在或无权访问"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return {"ignored": True, "conversation_id": conversation_id, "memory_id": body.memory_id}
+
+
+@session_context_router.delete(
+    "/{conversation_id}/memory-ignores/{memory_id}",
+    summary="取消「本次不使用」（只影响本会话）",
+)
+def remove_ignore(
+    conversation_id: str,
+    memory_id: str,
+    user: UserModel = Depends(require_password_changed),
+    session: Session = Depends(get_db),
+) -> dict:
+    _require_owned(session, conversation_id, user)
+    from chatchat.server.db.repository import memory_repository as memory_repo
+
+    removed = memory_repo.unignore_memory(session, conversation_id, user.id, memory_id)
+    return {"removed": removed, "conversation_id": conversation_id, "memory_id": memory_id}
 
 
 __all__ = ["session_context_router"]

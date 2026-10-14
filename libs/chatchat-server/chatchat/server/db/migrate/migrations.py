@@ -49,6 +49,12 @@
   constraints/open_questions 与 ``pinned_json``（会话私有上下文的结构化槽位），
   ``conversation`` 增加 ``temporary``（临时对话，不保留会话上下文）；只加列，
   不新建表、不迁移行，既有摘要文本与摘要位置标记原样保留。
+- v15（智能聊天记忆第三期）：``memory`` 增加 kind/scope/project_id/project_name/
+  confirmed/expires_at/superseded_by/supersedes（跨会话召回所需的类别、范围、
+  有效期与替代链），``user_account`` 增加 4 个召回开关，``conversation`` 增加
+  ``project_id``（会话所在项目空间）；新增 ``memory_revision``（编辑留痕）与
+  ``conversation_memory_ignore``（"本次不使用"）。只加列建新表，不改列不删表，
+  既有记忆行按来源回填 ``confirmed``，内容与其他列一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -961,6 +967,122 @@ def _v14_session_context(conn: Connection) -> None:
     _add_missing_columns(conn, "conversation", _CONVERSATION_ADD_COLUMNS_V14)
 
 
+# --- v15（智能聊天记忆第三期）：跨会话相关记忆召回 ---
+
+_MEMORY_ADD_COLUMNS_V15 = [
+    # 记忆类别（decision/background/project_rule/conclusion/todo/fact）。
+    # 旧行统一取 fact：不猜测旧数据的类别，只让它落在"一般记忆"里。
+    "kind VARCHAR(32) NOT NULL DEFAULT 'fact'",
+    # personal / project：项目范围记忆只在对应项目空间内参与召回（§4.4）。
+    "scope VARCHAR(16) NOT NULL DEFAULT 'personal'",
+    "project_id VARCHAR(32)",
+    # 项目名称快照：项目被删除后，记忆仍能说明自己来自哪个项目。
+    "project_name VARCHAR(200)",
+    # 已确认标记：只有用户明确给出/确认的内容才算"已确认决策"（§3）。
+    # 默认 0，随后按来源回填（见 _v15_cross_session_recall）。
+    "confirmed BOOLEAN NOT NULL DEFAULT 0",
+    # 有效期：到期后不再自动召回，记录仍保留（§4.5）。
+    "expires_at TIMESTAMP",
+    # 替代链：新决策生效后旧决策标记为已被替代，不再注入但仍可查看（§4.5）。
+    "superseded_by VARCHAR(32)",
+    "supersedes VARCHAR(32)",
+]
+
+_USER_ACCOUNT_ADD_COLUMNS_V15 = [
+    # 跨会话相关记忆总开关（关闭后只保留第一期个人偏好，§4.1 / P3-11）。
+    "memory_recall_enabled BOOLEAN NOT NULL DEFAULT 1",
+    # 分项开关：默认只开"已确认决策"；项目内记忆与一般历史会话结论需用户主动开启。
+    "memory_recall_decisions_enabled BOOLEAN NOT NULL DEFAULT 1",
+    "memory_recall_project_enabled BOOLEAN NOT NULL DEFAULT 0",
+    "memory_recall_general_enabled BOOLEAN NOT NULL DEFAULT 0",
+]
+
+_CONVERSATION_ADD_COLUMNS_V15 = [
+    # 会话所在项目空间：项目范围记忆只在该会话中参与召回（§4.4）。
+    "project_id VARCHAR(32)",
+]
+
+_MEMORY_REVISION_TABLE = """
+CREATE TABLE IF NOT EXISTS memory_revision (
+    id VARCHAR(32) PRIMARY KEY,
+    memory_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    content VARCHAR(2000) NOT NULL,
+    kind VARCHAR(32) NOT NULL DEFAULT '',
+    scope VARCHAR(16) NOT NULL DEFAULT '',
+    project_id VARCHAR(32),
+    project_name VARCHAR(200),
+    expires_at TIMESTAMP,
+    reason VARCHAR(32) NOT NULL DEFAULT 'edit',
+    create_time TIMESTAMP NOT NULL
+)
+"""
+
+_CONVERSATION_MEMORY_IGNORE_TABLE = """
+CREATE TABLE IF NOT EXISTS conversation_memory_ignore (
+    conversation_id VARCHAR(32) NOT NULL,
+    owner_id VARCHAR(32) NOT NULL,
+    memory_id VARCHAR(32) NOT NULL,
+    create_time TIMESTAMP NOT NULL,
+    PRIMARY KEY (conversation_id, memory_id)
+)
+"""
+
+#: ``memory`` 上的索引单独判表是否存在：只跑过部分迁移的历史库里可能
+#: 还没有 memory 表（与 v13 同一处理方式）
+_V15_MEMORY_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_memory_owner_scope ON memory (owner_id, scope)",
+]
+
+_V15_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_memory_revision_owner_memory "
+    "ON memory_revision (owner_id, memory_id)",
+    "CREATE INDEX IF NOT EXISTS ix_conversation_memory_ignore_owner "
+    "ON conversation_memory_ignore (owner_id)",
+]
+
+#: 自动提取的来源标记：这些内容不是用户明确确认的结论（§3：不召回未确认猜测）。
+_AUTO_SOURCES_V15 = ("auto_extract", "auto", "extract")
+
+
+def _v15_cross_session_recall(conn: Connection) -> None:
+    """v15：为跨会话召回补齐记忆元数据、用户开关与两张辅助表。
+
+    - ``memory`` 只加列：旧行的 content/type/category/importance/enabled 一律
+      不动；``confirmed`` 按来源回填——用户在管理页或聊天里明确写下的内容
+      （source 为 user/manual/chat 等）算已确认，自动提取的
+      （auto_extract/auto/extract）保持 0，落在"一般历史会话结论"里由用户
+      主动开启才召回（设计方案 §3、§4.1）。回填语句可重复执行。
+    - ``user_account`` 增加 4 个召回开关，默认值即设计方案 §4.1 的默认勾选。
+    - 新建 ``memory_revision``（编辑留痕）与 ``conversation_memory_ignore``
+      （"本次不使用"），均为 ``IF NOT EXISTS``，重复执行不改动已有内容。
+    - 不改列、不删表、不重建，知识库与向量索引不受影响；失败即回滚且版本
+      不记录（由迁移框架保证）。
+    """
+    tables = inspect(conn).get_table_names()
+    _add_missing_columns(conn, "memory", _MEMORY_ADD_COLUMNS_V15)
+    _add_missing_columns(conn, "user_account", _USER_ACCOUNT_ADD_COLUMNS_V15)
+    _add_missing_columns(conn, "conversation", _CONVERSATION_ADD_COLUMNS_V15)
+
+    if "memory" in tables:
+        placeholders = ", ".join(f":s{i}" for i in range(len(_AUTO_SOURCES_V15)))
+        conn.execute(
+            text(
+                "UPDATE memory SET confirmed = 1 "
+                f"WHERE COALESCE(source, '') NOT IN ({placeholders}) "
+                "AND confirmed = 0"
+            ),
+            {f"s{i}": s for i, s in enumerate(_AUTO_SOURCES_V15)},
+        )
+        for stmt in _V15_MEMORY_INDEXES:
+            conn.execute(text(stmt))
+
+    conn.execute(text(_MEMORY_REVISION_TABLE))
+    conn.execute(text(_CONVERSATION_MEMORY_IGNORE_TABLE))
+    for stmt in _V15_INDEXES:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -976,6 +1098,7 @@ _MIGRATIONS = [
     (12, "research_run_stage_artifacts", _v12_research_run_stage),
     (13, "memory_preferences", _v13_memory_preferences),
     (14, "session_context", _v14_session_context),
+    (15, "cross_session_recall", _v15_cross_session_recall),
 ]
 
 

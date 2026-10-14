@@ -191,12 +191,26 @@ async def chat_completions(
         # 为当前用户创建默认会话；响应中保留会话 ID 供客户端取得。
         # extra.temporary=True 表示临时对话：后续不创建、不保留会话上下文
         # （智能聊天记忆第二期设计方案 §4.4）。
+        # extra.project_id 表示会话所在项目空间：只有该项目的范围记忆能在
+        # 这个会话里被召回（智能聊天记忆第三期设计方案 §4.4）。
+        project_id = extra.get("project_id") or None
+        if project_id:
+            from chatchat.server.db.repository import (
+                research_repository as research_repo,
+            )
+
+            if research_repo.get_owned_project(session, project_id, user.id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="项目不存在或无权访问",
+                )
         conversation_id = create_conversation(
             session,
             owner_id=user.id,
             chat_type="agent_chat",
             name=(body.messages[-1]["content"] or "")[:50],
             temporary=bool(extra.get("temporary", False)),
+            project_id=project_id,
         )
 
     client = get_OpenAIClient(model_name=body.model, is_async=True)

@@ -12,6 +12,10 @@
   单次请求的"本次不使用"共同控制。
 - 会话私有上下文（智能聊天记忆第二期）：见 :mod:`session_context`；显式
   "记住/忘记"改走确认卡片（见 :mod:`memory_intents`），不再由本模块直接写入。
+- 跨会话相关记忆召回（智能聊天记忆第三期）：见 :mod:`cross_session_recall`。
+  原先不受开关管辖的"长期记忆段"由它取代：只有用户级总开关与分项开关允许、
+  且与当前问题真正相关的已确认记忆才会注入，界面展示的"本次参考了哪些记忆"
+  与注入内容同源。
 - 所有模型/提取/摘要失败都不阻断正常回答（调用方 try/except）。
 """
 from __future__ import annotations
@@ -27,7 +31,7 @@ from chatchat.server.db.repository import memory_repository as memory_repo
 from chatchat.server.db.repository import session_summary_repository as summary_repo
 from chatchat.server.db.repository import user_repository as user_repo
 from chatchat.server.db.repository.message_repository import list_messages
-from chatchat.server.memory import session_context
+from chatchat.server.memory import cross_session_recall, session_context
 
 # ---------------------------------------------------------------------------
 # 常量 / 默认值
@@ -670,14 +674,17 @@ def memory_system_messages(
     conversation_id: Optional[str] = None,
     threshold: int = SUMMARY_THRESHOLD,
     use_memory: bool = True,
+    project_id: Optional[str] = None,
 ) -> List[dict]:
     """普通聊天与 RAG 共用的一组"记忆系统消息"（置于近期轮次之前）。
 
-    顺序：
+    顺序（设计方案第三期 §5：个人偏好 + 当前会话摘要 + 0~数条相关历史记忆 +
+    当前用户问题 + 知识库检索结果）：
 
     1. 个人偏好段（用户在"我的记忆"页保存、带 ``category`` 的记忆，按
        §5 优先级少量注入）；
-    2. 长期记忆段（召回 ``memory`` 表中不属于个人偏好的行，enabled、owner 匹配）；
+    2. 相关历史记忆段（第三期：跨会话召回的已确认决策/背景/项目规则/待办，
+       受用户级总开关与分项开关管辖，"本次不使用"的条目跳过）；
     3. 会话上下文段（``session_summary``：主题/目标/已确认事项/限制条件/
        待解决问题 + 较早内容摘要；仅当前会话有效，不当长期事实，临时对话
        不注入）。
@@ -686,6 +693,9 @@ def memory_system_messages(
     （即"我的记忆"页列出的内容本轮一律不用），会话摘要不受影响；只影响本次
     请求，不改动任何数据。用户级总开关关闭时效果相同，且对该用户全部会话生效。
     写入侧（自动提取、"请记住"）不受该开关影响——开关控制的是"用不用"。
+
+    ``project_id`` 不传时由召回层取会话选定的项目（第三期 §4.4：项目范围记忆
+    只在该项目空间内参与）。
 
     返回 ``[{"role": "system", "content": ...}, ...]``；无内容时为空列表。
     所有失败都吞掉（返回已构造的部分），绝不阻断聊天主流程。
@@ -697,9 +707,11 @@ def memory_system_messages(
             if prefs:
                 msgs.append({"role": "system", "content": prefs})
         if use_memory:
-            mem = build_memory_context(session, owner_id, query)
-            if mem:
-                msgs.append({"role": "system", "content": mem})
+            segment, _used = cross_session_recall.build_recall_segment(
+                session, owner_id, query, conversation_id, project_id
+            )
+            if segment:
+                msgs.append({"role": "system", "content": segment})
         short = build_short_term_context(
             session, owner_id, conversation_id, query, threshold
         )
