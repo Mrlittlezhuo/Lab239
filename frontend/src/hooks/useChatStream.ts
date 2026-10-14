@@ -7,6 +7,8 @@ import {
   visionChatCompletion,
 } from "@/api/chat";
 import type { MessageRecord } from "@/api/conversations";
+import type { MemoryProposal } from "@/api/memory";
+import { detectProposals } from "@/lib/memoryIntents";
 import { applySseEvent } from "@/lib/sse/applyEvent";
 import type {
   AgentPlanData,
@@ -56,6 +58,12 @@ export interface UiMessage {
   imageDataUrl?: string; // 视觉输入附件展示
   /** 该轮的行为说明（例如图片解析不落库），渲染为浅色提示 */
   note?: string;
+  /**
+   * 本轮触发的“记住 / 忘记”确认卡片（第二期 §4.3）。
+   * 只是待确认建议，未点「确认保存」前服务端没有任何写入；
+   * 刷新页面后卡片会消失（未确认的内容本来就没保存）。
+   */
+  proposals?: MemoryProposal[];
 }
 
 export interface SendOptions {
@@ -69,6 +77,8 @@ export interface SendOptions {
   visionModel?: string;
   /** 本轮是否使用个人记忆；false 对应"本次不使用个人偏好"（仅当前会话） */
   useMemory?: boolean;
+  /** 临时对话：新建会话时带上，该会话不创建、不保留会话私有上下文（§4.4） */
+  temporary?: boolean;
 }
 
 let keySeq = 0;
@@ -108,6 +118,12 @@ export function useChatStream(options: {
   const abortRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
+
+  const patchByKey = useCallback((key: string, patch: Partial<UiMessage>) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.key === key ? { ...m, ...patch } : m)),
+    );
+  }, []);
 
   const updateLastAssistant = useCallback(
     (fn: (m: UiMessage) => UiMessage) => {
@@ -156,6 +172,17 @@ export function useChatStream(options: {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setStreaming(true);
 
+      // “记住 / 忘记”确认卡片：与回答并行，只看用户本轮原话（P2-12）。
+      // 检测失败不打断回答；未点「确认保存」前服务端没有任何写入。
+      if (trimmed) {
+        void detectProposals(trimmed, conversationIdRef.current).then(
+          (proposals) => {
+            if (proposals.length > 0)
+              patchByKey(assistantMsg.key, { proposals });
+          },
+        );
+      }
+
       const controller = new AbortController();
       abortRef.current = controller;
       try {
@@ -194,6 +221,8 @@ export function useChatStream(options: {
           }
           // 只在关闭时带上：默认（使用个人记忆）不新增字段，请求形状与旧版一致
           if (opts.useMemory === false) req.use_memory = false;
+          // 临时对话同理：只在开启时带上，服务端据此标记新建的会话
+          if (opts.temporary) req.temporary = true;
           switch (opts.toolMode) {
             case "auto":
               req.auto_agent = true;
@@ -229,7 +258,7 @@ export function useChatStream(options: {
         abortRef.current = null;
       }
     },
-    [handleEvent, onConversationId, streaming, updateLastAssistant],
+    [handleEvent, onConversationId, patchByKey, streaming, updateLastAssistant],
   );
 
   const stop = useCallback(() => {
@@ -245,14 +274,7 @@ export function useChatStream(options: {
     setMessages(msgs);
   }, []);
 
-  const patchMessage = useCallback(
-    (key: string, patch: Partial<UiMessage>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.key === key ? { ...m, ...patch } : m)),
-      );
-    },
-    [],
-  );
+  const patchMessage = patchByKey;
 
   return {
     messages,

@@ -17,6 +17,8 @@ export interface RagChatRequest {
   conversation_id?: string;
   /** false = 本轮不使用个人记忆（界面"本次不使用个人偏好"）；缺省表示使用 */
   use_memory?: boolean;
+  /** 临时对话：新建会话时带上，该会话不创建、不保留会话私有上下文（§4.4） */
+  temporary?: boolean;
 }
 
 /**

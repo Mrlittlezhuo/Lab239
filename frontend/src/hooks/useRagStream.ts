@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import type { RagChatRequest, RagMode } from "@/api/rag";
 import { streamRagChat } from "@/api/rag";
+import { detectProposals } from "@/lib/memoryIntents";
 import { applySseEvent } from "@/lib/sse/applyEvent";
 import type { SseEvent } from "@/lib/sse/types";
 import type { UiMessage } from "@/hooks/useChatStream";
@@ -15,6 +16,8 @@ export interface RagSendOptions {
   scoreThreshold?: number;
   /** 本轮是否使用个人记忆；false 对应"本次不使用个人偏好"（仅当前会话） */
   useMemory?: boolean;
+  /** 临时对话：新建会话时带上，该会话不创建、不保留会话私有上下文（§4.4） */
+  temporary?: boolean;
 }
 
 let keySeq = 0;
@@ -30,6 +33,12 @@ export function useRagStream(options: {
   const abortRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
+
+  const patchByKey = useCallback((key: string, patch: Partial<UiMessage>) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.key === key ? { ...m, ...patch } : m)),
+    );
+  }, []);
 
   const handleEvent = useCallback(
     (event: SseEvent) => {
@@ -65,6 +74,14 @@ export function useRagStream(options: {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setStreaming(true);
 
+      // 确认卡片只看用户本轮原话：检索到的知识库文档不会触发（P2-12），
+      // 因为服务端这一步收到的只有下面这条用户消息。
+      void detectProposals(trimmed, conversationIdRef.current).then(
+        (proposals) => {
+          if (proposals.length > 0) patchByKey(assistantMsg.key, { proposals });
+        },
+      );
+
       const req: RagChatRequest = {
         messages: [{ role: "user", content: trimmed }],
         model: opts.model,
@@ -78,6 +95,8 @@ export function useRagStream(options: {
         req.conversation_id = conversationIdRef.current;
       // 个人偏好只影响"怎么解释和呈现"，检索范围、引用与文档原文不受影响
       if (opts.useMemory === false) req.use_memory = false;
+      // 临时对话同理：只在开启时带上，服务端据此标记新建的会话
+      if (opts.temporary) req.temporary = true;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -109,7 +128,7 @@ export function useRagStream(options: {
         abortRef.current = null;
       }
     },
-    [handleEvent, streaming],
+    [handleEvent, patchByKey, streaming],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -118,11 +137,7 @@ export function useRagStream(options: {
     setMessages([]);
   }, []);
   const setInitialMessages = useCallback((msgs: UiMessage[]) => setMessages(msgs), []);
-  const patchMessage = useCallback(
-    (key: string, patch: Partial<UiMessage>) =>
-      setMessages((prev) => prev.map((m) => (m.key === key ? { ...m, ...patch } : m))),
-    [],
-  );
+  const patchMessage = patchByKey;
 
   return { messages, streaming, send, stop, reset, setInitialMessages, patchMessage };
 }

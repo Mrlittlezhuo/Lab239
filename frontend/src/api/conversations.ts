@@ -4,6 +4,8 @@ export interface Conversation {
   id: string;
   name: string | null;
   chat_type: string | null;
+  /** 临时对话：不创建、不保留会话私有上下文（第二期设计方案 §4.4） */
+  temporary: boolean;
   create_time: string | null;
   update_time: string | null;
 }
@@ -32,10 +34,12 @@ export function listConversations(chatType?: string): Promise<Conversation[]> {
 export function createConversation(
   name = "",
   chatType = "agent_chat",
+  temporary = false,
 ): Promise<Conversation> {
   return postJson<Conversation>("/conversations", {
     name,
     chat_type: chatType,
+    temporary,
   });
 }
 

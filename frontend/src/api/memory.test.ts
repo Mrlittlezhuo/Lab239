@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyIntent,
   clearAllMemories,
   createMemory,
+  detectIntents,
   listUsedPreferences,
   setPreferencesEnabled,
   updateMemory,
@@ -108,5 +110,42 @@ describe("memory api", () => {
     expect(method).toBe("DELETE");
     expect(url.replace(/\/$/, "")).toMatch(/\/memories$/);
     expect(res.deleted).toBe(3);
+  });
+
+  /**
+   * 确认卡片（第二期 §4.3）：检测只读、写入是另一个请求。
+   * 钉住"不保存就什么都不发生"这条契约的接口侧。
+   */
+  it("detectIntents 只调检测接口，不带写入", async () => {
+    const fetchMock = stubFetch({ proposals: [] });
+    await detectIntents("记住：本次任务不用自动路由", "c1");
+    const { url, method, body } = called(fetchMock);
+    expect(method).toBe("POST");
+    expect(url.replace(/\/$/, "")).toMatch(/\/memories\/intents$/);
+    expect(JSON.parse(String(body))).toEqual({
+      text: "记住：本次任务不用自动路由",
+      conversation_id: "c1",
+    });
+    expect(fetchMock.mock.calls).toHaveLength(1);
+  });
+
+  it("applyIntent 把用户选定的范围与类别发给 /memories/intents/apply", async () => {
+    const fetchMock = stubFetch({ scope: "preference", kind: "remember", message: "已保存" });
+    await applyIntent({
+      kind: "remember",
+      content: "以后默认中文回答",
+      scope: "preference",
+      conversation_id: "c1",
+      category: "answer_style",
+    });
+    const { url, method, body } = called(fetchMock);
+    expect(method).toBe("POST");
+    expect(url).toContain("/memories/intents/apply");
+    expect(JSON.parse(String(body))).toMatchObject({
+      kind: "remember",
+      content: "以后默认中文回答",
+      scope: "preference",
+      category: "answer_style",
+    });
   });
 });

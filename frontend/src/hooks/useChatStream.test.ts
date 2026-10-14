@@ -65,13 +65,29 @@ describe("messagesToMarkdown", () => {
  * use_mcp，而服务端 auto_agent 分支只读全局 AUTO_ROUTE_USE_MCP，
  * 结果智能对话永远用不到 MCP 工具。
  */
-function mockFetch() {
-  const fn = vi.fn(async (_url: string, _init: RequestInit) =>
-    new Response('data: {"choices":[{"delta":{"content":"好的"}}]}\n\n', {
+/**
+ * 打桩 fetch：聊天流返回一个 token 帧，意图检测返回 `proposals`。
+ *
+ * 每次 send 现在有两个请求：聊天流 + `POST /memories/intents`（确认卡片检测）。
+ * 断言聊天载荷时必须按 URL 取，不能再假设只有一个请求。
+ */
+function mockFetch({
+  proposals = [],
+  failDetect = false,
+}: { proposals?: unknown[]; failDetect?: boolean } = {}) {
+  const fn = vi.fn(async (url: string, _init: RequestInit) => {
+    if (String(url).includes("/memories/intents")) {
+      if (failDetect) throw new Error("检测接口不可用");
+      return new Response(JSON.stringify({ proposals }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response('data: {"choices":[{"delta":{"content":"好的"}}]}\n\n', {
       status: 200,
       headers: { "content-type": "text/event-stream" },
-    }),
-  );
+    });
+  });
   vi.stubGlobal("fetch", fn);
   return fn as unknown as { mock: { calls: [string, RequestInit][] } };
 }
@@ -95,8 +111,11 @@ async function bodyFor(over: Partial<SendOptions> = {}) {
   await act(async () => {
     await result.current.send("打开浏览器看看官网今天的公告", options(over));
   });
-  expect(fetchMock.mock.calls).toHaveLength(1);
-  return JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<
+  const chatCall = fetchMock.mock.calls.find(([url]) =>
+    String(url).includes("/chat/chat/completions"),
+  );
+  expect(chatCall).toBeTruthy();
+  return JSON.parse((chatCall as [string, RequestInit])[1].body as string) as Record<
     string,
     unknown
   >;
@@ -142,5 +161,96 @@ describe("send 请求载荷", () => {
   it("默认使用个人记忆时不带 use_memory（请求形状与旧版一致）", async () => {
     const body = await bodyFor();
     expect("use_memory" in body).toBe(false);
+  });
+
+  it("临时对话时带 temporary=true", async () => {
+    const body = await bodyFor({ temporary: true });
+    expect(body.temporary).toBe(true);
+  });
+
+  it("默认不是临时对话时不带 temporary（请求形状与旧版一致）", async () => {
+    const body = await bodyFor();
+    expect("temporary" in body).toBe(false);
+  });
+});
+
+/**
+ * “记住 / 忘记”确认卡片（第二期设计方案 §4.3）。
+ *
+ * 关键契约：检测只是只读建议 —— 发送一轮消息不能产生任何写入请求，
+ * 检测接口出错也不能打断正常回答。
+ */
+describe("确认卡片检测", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const proposal = {
+    kind: "remember",
+    content: "本项目不用自动模型路由",
+    recommended_scope: "session",
+    scope_reason: "内容限定了本次任务/当前项目，默认只记本会话",
+    recommended_category: null,
+    conversation_temporary: false,
+    targets: [],
+    note: "",
+  };
+
+  /** 让检测请求的 promise 链跑完（它在 send 之外并行解析）。 */
+  async function flush() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("检测到的建议挂在本轮助手消息上，且没有任何写入请求", async () => {
+    const fetchMock = mockFetch({ proposals: [proposal] });
+    const { result } = renderHook(() =>
+      useChatStream({ conversationId: "c1", onConversationId: () => {} }),
+    );
+    await act(async () => {
+      await result.current.send("记住：本项目不用自动模型路由", options());
+    });
+    await flush();
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1].proposals).toEqual([proposal]);
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(
+      urls.filter((u) => u.includes("/memories/intents/apply")),
+    ).toHaveLength(0);
+    const detectCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/memories/intents"),
+    ) as [string, RequestInit];
+    expect(JSON.parse(detectCall[1].body as string)).toMatchObject({
+      text: "记住：本项目不用自动模型路由",
+      conversation_id: "c1",
+    });
+  });
+
+  it("没有意图时不挂卡片", async () => {
+    mockFetch();
+    const { result } = renderHook(() =>
+      useChatStream({ conversationId: "c1", onConversationId: () => {} }),
+    );
+    await act(async () => {
+      await result.current.send("今天天气怎么样", options());
+    });
+    await flush();
+    expect(result.current.messages[1].proposals).toBeUndefined();
+  });
+
+  it("检测接口失败不影响回答", async () => {
+    mockFetch({ failDetect: true });
+    const { result } = renderHook(() =>
+      useChatStream({ conversationId: "c1", onConversationId: () => {} }),
+    );
+    await act(async () => {
+      await result.current.send("忘记我的回答偏好", options());
+    });
+    await flush();
+    const assistant = result.current.messages[1];
+    expect(assistant.content).toBe("好的");
+    expect(assistant.error).toBeUndefined();
+    expect(assistant.proposals).toBeUndefined();
   });
 });

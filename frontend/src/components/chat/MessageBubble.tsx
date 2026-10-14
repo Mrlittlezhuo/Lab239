@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { FeedbackBar } from "@/components/chat/FeedbackBar";
+import { MemoryProposalCard } from "@/components/chat/MemoryProposalCard";
 import { ReferenceList } from "@/components/chat/ReferenceList";
 import { RouteBadge } from "@/components/chat/RouteBadge";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
@@ -12,9 +13,11 @@ import type { UiMessage } from "@/hooks/useChatStream";
 export function MessageBubble({
   message,
   onFeedback,
+  conversationId,
 }: {
   message: UiMessage;
   onFeedback: (key: string, score: number) => void;
+  conversationId?: string;
 }) {
   const isUser = message.role === "user";
   return (
@@ -63,6 +66,14 @@ export function MessageBubble({
               {message.note}
             </div>
           )}
+          {!message.streaming &&
+            (message.proposals ?? []).map((proposal, i) => (
+              <MemoryProposalCard
+                key={`${message.key}-p${i}`}
+                proposal={proposal}
+                conversationId={conversationId}
+              />
+            ))}
           {!message.streaming && (
             <FeedbackBar
               messageId={message.serverMessageId}

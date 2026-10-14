@@ -37,7 +37,10 @@ export function ConversationSidebar({
     queryClient.invalidateQueries({ queryKey: ["conversations"] });
 
   const createMutation = useMutation({
-    mutationFn: () => createConversation("", chatType),
+    // temporary=true 创建临时会话：不生成、不保留会话私有上下文（§4.4）。
+    // 会话一旦创建，临时标记就不能再改，所以只能在这里选一次。
+    mutationFn: (temporary: boolean) =>
+      createConversation("", chatType, temporary),
     onSuccess: (conv) => {
       invalidate();
       onSelect(conv.id);
@@ -63,15 +66,26 @@ export function ConversationSidebar({
 
   return (
     <div className="flex h-full w-60 shrink-0 flex-col border-r">
-      <div className="p-2">
+      <div className="space-y-1 p-2">
         <Button
           size="sm"
           className="w-full"
-          onClick={() => createMutation.mutate()}
+          onClick={() => createMutation.mutate(false)}
           disabled={createMutation.isPending}
         >
           <Plus className="h-4 w-4" />
           新建会话
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full"
+          title="临时对话：不生成、不保留本会话上下文，也不能写入个人偏好"
+          onClick={() => createMutation.mutate(true)}
+          disabled={createMutation.isPending}
+        >
+          <Plus className="h-4 w-4" />
+          新建临时会话
         </Button>
       </div>
       <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-2">
@@ -105,9 +119,17 @@ export function ConversationSidebar({
                 }}
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate">
-                {conv.name || "未命名会话"}
-              </span>
+              <>
+                <span className="min-w-0 flex-1 truncate">
+                  {conv.name || "未命名会话"}
+                </span>
+                {conv.temporary && (
+                  // 临时会话不保留会话上下文，列表里必须看得出来
+                  <span className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground">
+                    临时
+                  </span>
+                )}
+              </>
             )}
             <button
               type="button"

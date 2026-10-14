@@ -26,6 +26,12 @@ interface ChatPrefsState {
    * 只影响当前会话的后续请求，不删除服务端保存的偏好；新会话不受影响。
    */
   memoryOff: Record<string, boolean>;
+  /**
+   * 会话级"临时对话"（key=conversationId 或 "new"）：新建会话时带上，
+   * 服务端把会话标记为 temporary，之后不创建、不保留会话私有上下文，
+   * 也不能写入个人偏好（第二期设计方案 §4.4）。会话创建后以服务端标记为准。
+   */
+  temporary: Record<string, boolean>;
   setModel: (model: string) => void;
   setVisionModel: (model: string) => void;
   setTemperature: (t: number | null) => void;
@@ -35,8 +41,10 @@ interface ChatPrefsState {
   setDraft: (conversationKey: string, text: string) => void;
   clearDraft: (conversationKey: string) => void;
   setMemoryOff: (conversationKey: string, off: boolean) => void;
+  setTemporary: (conversationKey: string, on: boolean) => void;
   /** 新会话拿到真实 id 后，把 "new" 上的选择搬过去，避免首轮之后失效 */
   mergeMemoryOff: (fromKey: string, toKey: string) => void;
+  mergeTemporary: (fromKey: string, toKey: string) => void;
 }
 
 export const useChatPrefs = create<ChatPrefsState>()(
@@ -50,6 +58,7 @@ export const useChatPrefs = create<ChatPrefsState>()(
       useMcp: false,
       drafts: {},
       memoryOff: {},
+      temporary: {},
       setModel: (model) => set({ model }),
       setVisionModel: (visionModel) => set({ visionModel }),
       setTemperature: (temperature) => set({ temperature }),
@@ -71,12 +80,26 @@ export const useChatPrefs = create<ChatPrefsState>()(
           else delete next[conversationKey];
           return { memoryOff: next };
         }),
+      setTemporary: (conversationKey, on) =>
+        set((s) => {
+          const next = { ...s.temporary };
+          if (on) next[conversationKey] = true;
+          else delete next[conversationKey];
+          return { temporary: next };
+        }),
       mergeMemoryOff: (fromKey, toKey) =>
         set((s) => {
           if (!s.memoryOff[fromKey]) return s;
           const next = { ...s.memoryOff, [toKey]: true };
           delete next[fromKey];
           return { memoryOff: next };
+        }),
+      mergeTemporary: (fromKey, toKey) =>
+        set((s) => {
+          if (!s.temporary[fromKey]) return s;
+          const next = { ...s.temporary, [toKey]: true };
+          delete next[fromKey];
+          return { temporary: next };
         }),
     }),
     { name: "chatchat.chatPrefs" },

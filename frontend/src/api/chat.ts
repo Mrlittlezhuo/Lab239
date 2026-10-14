@@ -35,6 +35,12 @@ export interface ChatCompletionRequest {
   use_mcp?: boolean;
   /** false = 本轮不使用个人记忆（界面"本次不使用个人偏好"）；缺省表示使用 */
   use_memory?: boolean;
+  /**
+   * 临时对话：新建会话时带上，服务端把会话标记为 temporary，
+   * 之后不创建、不保留会话私有上下文，也不能写入个人偏好
+   * （第二期设计方案 §4.4）。已有会话以服务端标记为准。
+   */
+  temporary?: boolean;
   metadata?: Record<string, unknown>;
   chat_model_config?: ChatModelConfig;
   tool_input?: Record<string, unknown>;

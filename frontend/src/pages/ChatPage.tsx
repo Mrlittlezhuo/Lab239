@@ -9,6 +9,7 @@ import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
+import { SessionContextBadge } from "@/components/chat/SessionContextBadge";
 import { Button } from "@/components/ui/button";
 import {
   historyToUiMessages,
@@ -25,9 +26,10 @@ export function ChatPage() {
   const chat = useChatStream({
     conversationId,
     onConversationId: (id) => {
-      // 新会话拿到真实 id 后，把"本次不使用个人偏好"的选择带过去，
-      // 否则首轮之后这个开关就失效了
+      // 新会话拿到真实 id 后，把会话级开关（本次不使用个人偏好、临时对话）
+      // 带到真实 id 上，否则首轮之后这些开关就失效了
       prefs.mergeMemoryOff("new", id);
+      prefs.mergeTemporary("new", id);
       navigate(`/chat/${id}`, { replace: true });
     },
   });
@@ -73,6 +75,10 @@ export function ChatPage() {
         <div className="flex items-center justify-between border-b pb-3">
           <h1 className="text-lg font-semibold">智能聊天</h1>
           <div className="flex items-center gap-2">
+            <SessionContextBadge
+              conversationId={conversationId}
+              conversationKey={draftKey}
+            />
             <MemoryUsageBadge conversationKey={draftKey} />
             <Button variant="outline" size="sm" onClick={handleExport} title="导出 Markdown">
               <Download className="h-4 w-4" />
@@ -84,6 +90,7 @@ export function ChatPage() {
         <div className="flex-1 overflow-y-auto py-4">
           <MessageList
             messages={chat.messages}
+            conversationId={conversationId}
             onFeedback={(key, score) => chat.patchMessage(key, { feedbackScore: score })}
           />
         </div>
@@ -101,6 +108,7 @@ export function ChatPage() {
               imageDataUrl,
               visionModel: prefs.visionModel,
               useMemory: !prefs.memoryOff[draftKey],
+              temporary: prefs.temporary[draftKey] === true,
             });
           }}
           onStop={chat.stop}

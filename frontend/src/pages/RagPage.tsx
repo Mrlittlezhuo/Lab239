@@ -12,6 +12,7 @@ import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
+import { SessionContextBadge } from "@/components/chat/SessionContextBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,8 +42,9 @@ export function RagPage() {
   const rag = useRagStream({
     conversationId,
     onConversationId: (id) => {
-      // 新会话拿到真实 id 后，把"本次不使用个人偏好"的选择带过去
+      // 新会话拿到真实 id 后，把会话级开关（不使用个人偏好、临时对话）带过去
       prefs.mergeMemoryOff("rag:new", `rag:${id}`);
+      prefs.mergeTemporary("rag:new", `rag:${id}`);
       navigate(`/rag/${id}`, { replace: true });
     },
   });
@@ -138,7 +140,13 @@ export function RagPage() {
         <div className="space-y-2 border-b pb-3">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">知识库对话</h1>
-            <MemoryUsageBadge conversationKey={draftKey} />
+            <div className="flex items-center gap-2">
+              <SessionContextBadge
+                conversationId={conversationId}
+                conversationKey={draftKey}
+              />
+              <MemoryUsageBadge conversationKey={draftKey} />
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Select value={mode} onValueChange={(v) => setMode(v as RagMode)}>
@@ -268,6 +276,7 @@ export function RagPage() {
         <div className="flex-1 overflow-y-auto py-4">
           <MessageList
             messages={rag.messages}
+            conversationId={conversationId}
             onFeedback={(key, score) => rag.patchMessage(key, { feedbackScore: score })}
           />
         </div>
@@ -289,6 +298,7 @@ export function RagPage() {
               topK,
               scoreThreshold,
               useMemory: !prefs.memoryOff[draftKey],
+              temporary: prefs.temporary[draftKey] === true,
             });
           }}
           onStop={rag.stop}

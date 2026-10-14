@@ -85,6 +85,58 @@ export function setPreferencesEnabled(
   return patchJson("/memories/preferences", undefined, { query: { enabled } });
 }
 
+/**
+ * “记住 / 忘记”确认卡片（第二期设计方案 §4.3）。
+ *
+ * 检测只读：服务端只看用户本轮原话，知识库文档片段与模型回答不会触发。
+ * 真正的写入发生在 `applyIntent`，因此用户点"不保存"时不会有任何数据变化。
+ */
+export type MemoryScope = "session" | "preference";
+
+export interface IntentTarget {
+  id: string;
+  content: string;
+  category?: MemoryCategory | null;
+}
+
+export interface MemoryProposal {
+  kind: "remember" | "forget";
+  content: string;
+  /** null = 含义不明确，界面不预选，要求用户选范围 */
+  recommended_scope: MemoryScope | null;
+  scope_reason: string;
+  recommended_category: MemoryCategory | null;
+  conversation_temporary: boolean;
+  /** forget 时列出将被停用的记忆，避免误删 */
+  targets: IntentTarget[];
+  note: string;
+}
+
+export interface ApplyIntentInput {
+  kind: "remember" | "forget";
+  content: string;
+  scope: MemoryScope;
+  conversation_id?: string | null;
+  category?: MemoryCategory | null;
+  target_ids?: string[];
+}
+
+export function detectIntents(
+  text: string,
+  conversationId?: string | null,
+): Promise<{ proposals: MemoryProposal[] }> {
+  return postJson("/memories/intents", {
+    text,
+    conversation_id: conversationId ?? null,
+  });
+}
+
+export function applyIntent(
+  input: ApplyIntentInput,
+): Promise<{ scope: string; kind: string; message: string }> {
+  return postJson("/memories/intents/apply", input);
+}
+
 export function getAutoMemory(): Promise<{ auto_memory: boolean }> {
   return getJson("/memories/auto");
 }
