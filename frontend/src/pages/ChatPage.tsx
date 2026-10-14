@@ -9,6 +9,8 @@ import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
+import { ProjectSelect } from "@/components/chat/ProjectSelect";
+import { RecalledMemoriesPanel } from "@/components/chat/RecalledMemoriesPanel";
 import { SessionContextBadge } from "@/components/chat/SessionContextBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +32,9 @@ export function ChatPage() {
       // 带到真实 id 上，否则首轮之后这些开关就失效了
       prefs.mergeMemoryOff("new", id);
       prefs.mergeTemporary("new", id);
+      // 项目选择已经随首轮请求写进会话，本地这条"新会话"默认值就此了结：
+      // 再开新会话时回到"不选项目"，保证普通聊天默认不带项目记忆（§4.4）
+      prefs.clearProjectChoice("new");
       navigate(`/chat/${id}`, { replace: true });
     },
   });
@@ -56,6 +61,9 @@ export function ChatPage() {
 
   const draftKey = conversationId ?? "new";
   const draft = prefs.drafts[draftKey] ?? "";
+  // 召回与注入都以本轮用户问题为准，因此取最近一条用户消息
+  const lastQuery =
+    [...chat.messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
   function handleExport() {
     if (chat.messages.length === 0) {
@@ -75,6 +83,10 @@ export function ChatPage() {
         <div className="flex items-center justify-between border-b pb-3">
           <h1 className="text-lg font-semibold">智能聊天</h1>
           <div className="flex items-center gap-2">
+            <ProjectSelect
+              conversationId={conversationId}
+              conversationKey={draftKey}
+            />
             <SessionContextBadge
               conversationId={conversationId}
               conversationKey={draftKey}
@@ -93,6 +105,11 @@ export function ChatPage() {
             conversationId={conversationId}
             onFeedback={(key, score) => chat.patchMessage(key, { feedbackScore: score })}
           />
+          {/* 回答下方列出本轮真正注入的历史记忆（第三期 §4.2、§7） */}
+          <RecalledMemoriesPanel
+            query={lastQuery}
+            conversationId={conversationId}
+          />
         </div>
         <Composer
           value={draft}
@@ -109,6 +126,8 @@ export function ChatPage() {
               visionModel: prefs.visionModel,
               useMemory: !prefs.memoryOff[draftKey],
               temporary: prefs.temporary[draftKey] === true,
+              // 只在会话还没建立时决定项目空间；已有会话以服务端记录为准
+              projectId: prefs.projectChoice[draftKey],
             });
           }}
           onStop={chat.stop}

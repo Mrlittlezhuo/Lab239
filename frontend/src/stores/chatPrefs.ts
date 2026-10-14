@@ -32,6 +32,12 @@ interface ChatPrefsState {
    * 也不能写入个人偏好（第二期设计方案 §4.4）。会话创建后以服务端标记为准。
    */
   temporary: Record<string, boolean>;
+  /**
+   * 会话选定的项目空间（key=conversationId 或 "new"，值=project_id）。
+   * 只有该项目的范围记忆能在这个会话里被召回（第三期设计方案 §4.4）；
+   * 会话创建后以服务端记录为准，这里只负责"新会话还没建好时"的选择。
+   */
+  projectChoice: Record<string, string>;
   setModel: (model: string) => void;
   setVisionModel: (model: string) => void;
   setTemperature: (t: number | null) => void;
@@ -45,6 +51,9 @@ interface ChatPrefsState {
   /** 新会话拿到真实 id 后，把 "new" 上的选择搬过去，避免首轮之后失效 */
   mergeMemoryOff: (fromKey: string, toKey: string) => void;
   mergeTemporary: (fromKey: string, toKey: string) => void;
+  setProjectChoice: (conversationKey: string, projectId: string) => void;
+  clearProjectChoice: (conversationKey: string) => void;
+  mergeProjectChoice: (fromKey: string, toKey: string) => void;
 }
 
 export const useChatPrefs = create<ChatPrefsState>()(
@@ -59,6 +68,7 @@ export const useChatPrefs = create<ChatPrefsState>()(
       drafts: {},
       memoryOff: {},
       temporary: {},
+      projectChoice: {},
       setModel: (model) => set({ model }),
       setVisionModel: (visionModel) => set({ visionModel }),
       setTemperature: (temperature) => set({ temperature }),
@@ -100,6 +110,27 @@ export const useChatPrefs = create<ChatPrefsState>()(
           const next = { ...s.temporary, [toKey]: true };
           delete next[fromKey];
           return { temporary: next };
+        }),
+      setProjectChoice: (conversationKey, projectId) =>
+        set((s) => {
+          const next = { ...s.projectChoice };
+          if (projectId) next[conversationKey] = projectId;
+          else delete next[conversationKey];
+          return { projectChoice: next };
+        }),
+      clearProjectChoice: (conversationKey) =>
+        set((s) => {
+          if (!(conversationKey in s.projectChoice)) return s;
+          const next = { ...s.projectChoice };
+          delete next[conversationKey];
+          return { projectChoice: next };
+        }),
+      mergeProjectChoice: (fromKey, toKey) =>
+        set((s) => {
+          if (!s.projectChoice[fromKey]) return s;
+          const next = { ...s.projectChoice, [toKey]: s.projectChoice[fromKey] };
+          delete next[fromKey];
+          return { projectChoice: next };
         }),
     }),
     { name: "chatchat.chatPrefs" },

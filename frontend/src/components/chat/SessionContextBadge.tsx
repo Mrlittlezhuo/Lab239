@@ -6,10 +6,14 @@ import { toast } from "sonner";
 import {
   editSessionContext,
   getSessionContext,
+  listPromotionCandidates,
   refreshSessionContext,
   resetSessionContext,
+  type PromotionCandidate,
   type SessionContextEdit,
 } from "@/api/sessionContext";
+import { PromoteMemoryDialog } from "@/components/chat/PromoteMemoryDialog";
+import { kindLabel } from "@/components/memory/categories";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,6 +67,13 @@ export function SessionContextBadge({
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<EditForm | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  /** 待提升为跨会话记忆的条目（范围/类别/有效期在弹窗里选定） */
+  const [promote, setPromote] = useState<{
+    content: string;
+    candidate?: PromotionCandidate;
+  } | null>(null);
+  /** 用户点「不保存」的候选：本次抽屉里不再显示，服务端也不会写入 */
+  const [dismissed, setDismissed] = useState<string[]>([]);
   const prefs = useChatPrefs();
   const queryClient = useQueryClient();
 
@@ -72,10 +83,21 @@ export function SessionContextBadge({
     enabled: !!conversationId,
   });
 
-  const invalidate = () =>
+  // 第三期 §4.3：系统可以提出"值得保存"的候选，但只提出，不自动升级
+  const { data: promotionData } = useQuery({
+    queryKey: ["session-promotions", conversationId],
+    queryFn: () => listPromotionCandidates(conversationId as string),
+    enabled: open && !!conversationId,
+  });
+
+  const invalidate = () => {
     queryClient.invalidateQueries({
       queryKey: ["session-context", conversationId],
     });
+    queryClient.invalidateQueries({
+      queryKey: ["session-promotions", conversationId],
+    });
+  };
 
   const refreshMutation = useMutation({
     mutationFn: () => refreshSessionContext(conversationId as string),
@@ -301,7 +323,58 @@ export function SessionContextBadge({
                   <span>{data.goal || "（尚未识别出目标）"}</span>
                 </div>
 
-                <ContextList title="已确认事项" items={data.confirmed} />
+                <ConfirmedList
+                  items={data.confirmed}
+                  saved={data.confirmed_saved ?? []}
+                  onSave={(content) => setPromote({ content })}
+                />
+
+                {(promotionData?.candidates ?? []).filter(
+                  (c) => !dismissed.includes(c.content) && !c.already_saved,
+                ).length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">值得保存为跨会话记忆</div>
+                    <p className="text-xs text-muted-foreground">
+                      系统只提出建议，不会自动保存；是否保存、保存成什么类别和范围
+                      都由你决定，点「不保存」不会写入任何内容。
+                    </p>
+                    {(promotionData?.candidates ?? [])
+                      .filter((c) => !dismissed.includes(c.content) && !c.already_saved)
+                      .map((c) => (
+                        <div
+                          key={c.content}
+                          className="space-y-2 rounded-md border p-3 text-sm"
+                        >
+                          <p className="whitespace-pre-wrap">{c.content}</p>
+                          <p className="text-xs text-muted-foreground">
+                            建议：{kindLabel(c.recommended_kind)} ·{" "}
+                            {c.recommended_scope === "project"
+                              ? `项目内${c.project_name ? `：${c.project_name}` : ""}`
+                              : "个人"}
+                            {c.reason ? ` · ${c.reason}` : ""}
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => setPromote({ content: c.content, candidate: c })}
+                            >
+                              保存为跨会话记忆…
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                setDismissed((prev) => [...prev, c.content])
+                              }
+                            >
+                              不保存
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
                 <ContextList title="限制条件" items={data.constraints} />
                 <ContextList title="待解决问题" items={data.open_questions} />
 
@@ -377,7 +450,64 @@ export function SessionContextBadge({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 范围/类别/有效期由用户选定；点取消不会发出任何请求（P3-13） */}
+      <PromoteMemoryDialog
+        open={promote !== null}
+        onOpenChange={(next) => {
+          if (!next) setPromote(null);
+        }}
+        content={promote?.content ?? ""}
+        conversationId={conversationId}
+        candidate={promote?.candidate}
+      />
     </>
+  );
+}
+
+/**
+ * 已确认事项列表 + 「保存为跨会话记忆」（第三期 §4.3）。
+ *
+ * 默认这些内容只在本会话内生效；只有用户点保存并选定范围/类别/有效期后，
+ * 它才进入跨会话记忆。已经保存过的条目显示「已保存」，避免重复保存。
+ */
+function ConfirmedList({
+  items,
+  saved,
+  onSave,
+}: {
+  items: string[];
+  saved: boolean[];
+  onSave: (content: string) => void;
+}) {
+  return (
+    <div>
+      <div className="text-sm font-medium">已确认事项</div>
+      {items.length > 0 ? (
+        <ul className="mt-1 space-y-2 rounded-md border p-3 text-sm">
+          {items.map((item, i) => (
+            <li key={`${i}-${item}`} className="flex flex-wrap items-start gap-2">
+              <span className="min-w-0 flex-1 whitespace-pre-wrap">{item}</span>
+              {saved[i] ? (
+                <Badge variant="secondary">已保存为跨会话记忆</Badge>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => onSave(item)}>
+                  保存为跨会话记忆
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 rounded-md border p-3 text-sm text-muted-foreground">
+          （暂无）
+        </p>
+      )}
+      <p className="mt-1 text-xs text-muted-foreground">
+        这些内容默认只用于当前会话；保存为跨会话记忆后，其他会话遇到相关
+        问题才会参考它。
+      </p>
+    </div>
   );
 }
 

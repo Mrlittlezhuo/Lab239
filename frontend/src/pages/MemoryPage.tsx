@@ -8,18 +8,21 @@ import {
   deleteMemory,
   getAutoMemory,
   listMemories,
-  listUsedPreferences,
   setAutoMemory,
-  setPreferencesEnabled,
   updateMemory,
   type Memory,
 } from "@/api/memory";
 import {
   MEMORY_SAVE_NOTICE,
   MEMORY_SENSITIVE_NOTICE,
+  expiresLabel,
   groupMemories,
+  kindLabel,
+  statusLabel,
 } from "@/components/memory/categories";
 import { MemoryEditorDialog } from "@/components/memory/MemoryEditorDialog";
+import { MemoryRevisionsDialog } from "@/components/memory/MemoryRevisionsDialog";
+import { RecallSwitchesCard } from "@/components/memory/RecallSwitchesCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +43,7 @@ export function MemoryPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Memory | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [revisions, setRevisions] = useState<Memory | null>(null);
 
   const { data: memories = [] } = useQuery({
     queryKey: ["memories"],
@@ -48,11 +52,6 @@ export function MemoryPage() {
   const { data: auto } = useQuery({
     queryKey: ["memory-auto"],
     queryFn: getAutoMemory,
-  });
-  // 只需要总开关状态；偏好列表本身在聊天页展示
-  const { data: preferenceState } = useQuery({
-    queryKey: ["memory-preferences"],
-    queryFn: () => listUsedPreferences(),
   });
 
   const invalidate = () => {
@@ -86,12 +85,6 @@ export function MemoryPage() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "清空失败"),
   });
 
-  const preferencesMutation = useMutation({
-    mutationFn: setPreferencesEnabled,
-    onSuccess: invalidate,
-    onError: (err) => toast.error(err instanceof Error ? err.message : "开关更新失败"),
-  });
-
   const autoMutation = useMutation({
     mutationFn: setAutoMemory,
     onSuccess: invalidate,
@@ -116,13 +109,6 @@ export function MemoryPage() {
         <h1 className="text-lg font-semibold">我的记忆</h1>
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-sm">
-            个人记忆
-            <Switch
-              checked={preferenceState?.enabled ?? false}
-              onCheckedChange={(v) => preferencesMutation.mutate(v === true)}
-            />
-          </label>
-          <label className="flex items-center gap-2 text-sm">
             自动提取
             <Switch
               checked={auto?.auto_memory ?? false}
@@ -135,6 +121,8 @@ export function MemoryPage() {
           </Button>
         </div>
       </div>
+
+      <RecallSwitchesCard />
 
       <p className="text-xs text-muted-foreground">{MEMORY_SAVE_NOTICE}</p>
       <p className="text-xs text-destructive">{MEMORY_SENSITIVE_NOTICE}</p>
@@ -152,8 +140,27 @@ export function MemoryPage() {
               <div key={m.id} className="rounded-lg border p-3">
                 <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   {!m.category && <Badge variant="secondary">{m.type}</Badge>}
+                  {/* 第三期：类别 / 范围 / 状态 / 有效期，让每条记忆可解释 */}
+                  <Badge variant="outline">{kindLabel(m.kind)}</Badge>
+                  {m.scope === "project" && (
+                    <Badge variant="outline">
+                      项目内{m.project_name ? `：${m.project_name}` : ""}
+                    </Badge>
+                  )}
+                  <Badge
+                    variant={
+                      m.status === "superseded" ||
+                      m.status === "expired" ||
+                      m.status === "disabled"
+                        ? "destructive"
+                        : "secondary"
+                    }
+                  >
+                    {statusLabel(m.status)}
+                  </Badge>
+                  <span>{expiresLabel(m.expires_at)}</span>
                   <span>重要性 {m.importance}</span>
-                  <span>· 来源 {m.source}</span>
+                  {m.source_label && <span>· 来源 {m.source_label}</span>}
                   <div className="ml-auto flex items-center gap-2">
                     <Button
                       variant="outline"
@@ -161,6 +168,13 @@ export function MemoryPage() {
                       onClick={() => openEdit(m)}
                     >
                       编辑
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRevisions(m)}
+                    >
+                      历史
                     </Button>
                     <Button
                       variant="outline"
@@ -220,6 +234,14 @@ export function MemoryPage() {
         onOpenChange={setEditorOpen}
         memory={editing}
         onSaved={invalidate}
+      />
+
+      {/* 编辑与被替代前的内容都留了快照，因此历史始终可查（设计方案 §4.5） */}
+      <MemoryRevisionsDialog
+        open={revisions !== null}
+        onOpenChange={(open) => !open && setRevisions(null)}
+        memoryId={revisions?.id}
+        memoryContent={revisions?.content}
       />
 
       {/* 删除/清空都需要二次确认（设计方案 §4.5：取消时一切保持不变） */}

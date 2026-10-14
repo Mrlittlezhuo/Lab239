@@ -12,6 +12,8 @@ import { Composer } from "@/components/chat/Composer";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { MemoryUsageBadge } from "@/components/chat/MemoryUsageBadge";
 import { MessageList } from "@/components/chat/MessageList";
+import { ProjectSelect } from "@/components/chat/ProjectSelect";
+import { RecalledMemoriesPanel } from "@/components/chat/RecalledMemoriesPanel";
 import { SessionContextBadge } from "@/components/chat/SessionContextBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +47,8 @@ export function RagPage() {
       // 新会话拿到真实 id 后，把会话级开关（不使用个人偏好、临时对话）带过去
       prefs.mergeMemoryOff("rag:new", `rag:${id}`);
       prefs.mergeTemporary("rag:new", `rag:${id}`);
+      // 项目已随首轮请求写进会话；清掉"新会话"默认值，下次默认不带项目（§4.4）
+      prefs.clearProjectChoice("rag:new");
       navigate(`/rag/${id}`, { replace: true });
     },
   });
@@ -128,6 +132,9 @@ export function RagPage() {
   const modelValue = prefs.model || serverModels?.default_llm || "";
   const draftKey = `rag:${conversationId ?? "new"}`;
   const draft = prefs.drafts[draftKey] ?? "";
+  // 召回与注入都以本轮用户问题为准，因此取最近一条用户消息
+  const lastQuery =
+    [...rag.messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
   return (
     <div className="flex h-full">
@@ -141,6 +148,10 @@ export function RagPage() {
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">知识库对话</h1>
             <div className="flex items-center gap-2">
+              <ProjectSelect
+                conversationId={conversationId}
+                conversationKey={draftKey}
+              />
               <SessionContextBadge
                 conversationId={conversationId}
                 conversationKey={draftKey}
@@ -279,6 +290,11 @@ export function RagPage() {
             conversationId={conversationId}
             onFeedback={(key, score) => rag.patchMessage(key, { feedbackScore: score })}
           />
+          {/* 历史记忆只提供背景；知识库问答的事实与引用仍以检索结果为准（P3-15） */}
+          <RecalledMemoriesPanel
+            query={lastQuery}
+            conversationId={conversationId}
+          />
         </div>
         <Composer
           allowImage={false}
@@ -299,6 +315,8 @@ export function RagPage() {
               scoreThreshold,
               useMemory: !prefs.memoryOff[draftKey],
               temporary: prefs.temporary[draftKey] === true,
+              // 只在会话还没建立时决定项目空间；已有会话以服务端记录为准
+              projectId: prefs.projectChoice[draftKey],
             });
           }}
           onStop={rag.stop}

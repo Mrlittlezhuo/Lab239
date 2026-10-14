@@ -19,6 +19,8 @@ export interface RagChatRequest {
   use_memory?: boolean;
   /** 临时对话：新建会话时带上，该会话不创建、不保留会话私有上下文（§4.4） */
   temporary?: boolean;
+  /** 会话所在项目空间：新建会话时带上，项目范围记忆只在本会话召回（第三期 §4.4） */
+  project_id?: string;
 }
 
 /**

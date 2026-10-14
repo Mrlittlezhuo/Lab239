@@ -18,9 +18,24 @@ const api = vi.hoisted(() => ({
   editSessionContext: vi.fn(),
   refreshSessionContext: vi.fn(),
   resetSessionContext: vi.fn(),
+  listPromotionCandidates: vi.fn(),
+  listIgnoredMemoryIds: vi.fn(),
+  ignoreMemory: vi.fn(),
+  unignoreMemory: vi.fn(),
+}));
+
+const researchApi = vi.hoisted(() => ({ listProjects: vi.fn() }));
+const memoryApi = vi.hoisted(() => ({
+  promoteMemory: vi.fn(),
+  getMemory: vi.fn(),
+  listMemoryRevisions: vi.fn(),
 }));
 
 vi.mock("@/api/sessionContext", () => api);
+// 提升弹窗里的项目下拉需要项目列表；打桩避免真实 fetch
+vi.mock("@/api/research", () => researchApi);
+// 保存动作必须发生在用户确认之后，因此这里要能观察它是否被调用
+vi.mock("@/api/memory", () => memoryApi);
 
 const CONTEXT = {
   conversation_id: "c1",
@@ -33,6 +48,9 @@ const CONTEXT = {
   summary: "已讨论第一期只做个人偏好，第二期新增会话上下文。",
   summarized_count: 4,
   update_time: null,
+  // 第三期：第一条已保存为跨会话记忆，第二条还没有
+  confirmed_saved: [true, false],
+  project_id: null,
 };
 
 function renderBadge(conversationId?: string, conversationKey = "c1") {
@@ -61,11 +79,13 @@ describe("SessionContextBadge", () => {
     api.editSessionContext.mockResolvedValue(CONTEXT);
     api.refreshSessionContext.mockResolvedValue(CONTEXT);
     api.resetSessionContext.mockResolvedValue({ reset: true });
-    useChatPrefs.setState({ temporary: {} });
+    api.listPromotionCandidates.mockResolvedValue({ candidates: [] });
+    researchApi.listProjects.mockResolvedValue([]);
+    useChatPrefs.setState({ temporary: {}, projectChoice: {} });
   });
 
   afterEach(() => {
-    useChatPrefs.setState({ temporary: {} });
+    useChatPrefs.setState({ temporary: {}, projectChoice: {} });
     localStorage.clear();
   });
 
@@ -178,5 +198,88 @@ describe("SessionContextBadge", () => {
     );
     // 还没建会话，因此没有任何上下文接口被调用
     expect(api.getSessionContext).not.toHaveBeenCalled();
+  });
+
+  // --- 第三期：把本会话已确认事项保存为跨会话记忆（§4.3）---
+
+  it("已确认事项里未保存的条目给出保存入口，已保存的只显示状态", async () => {
+    renderBadge("c1");
+    await openDrawer();
+    // 第一条 confirmed_saved=true → 只有徽章；第二条可以保存
+    expect(await screen.findByText("已保存为跨会话记忆")).toBeTruthy();
+    const buttons = screen.getAllByRole("button", {
+      name: "保存为跨会话记忆",
+    });
+    expect(buttons).toHaveLength(1);
+    // 打开抽屉只读候选，不会有任何写入
+    expect(memoryApi.promoteMemory).not.toHaveBeenCalled();
+  });
+
+  it("候选卡片只是建议：点不保存后卡片消失，且没有任何写入请求（P3-13）", async () => {
+    api.listPromotionCandidates.mockResolvedValue({
+      candidates: [
+        {
+          content: "暂不做自动模型路由",
+          recommended_kind: "decision",
+          recommended_scope: "personal",
+          project_id: null,
+          project_name: null,
+          reason: "措辞是长期约定",
+          already_saved: false,
+        },
+      ],
+    });
+    renderBadge("c1");
+    await openDrawer();
+    const title = await screen.findByText("值得保存为跨会话记忆");
+    expect(title).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "不保存" }));
+    await waitFor(() =>
+      expect(screen.queryByText("值得保存为跨会话记忆")).toBeNull(),
+    );
+    expect(memoryApi.promoteMemory).not.toHaveBeenCalled();
+  });
+
+  it("保存为跨会话记忆：范围/类别/有效期由用户选定后才写入（P3-01）", async () => {
+    memoryApi.promoteMemory.mockResolvedValue({
+      memory: { id: "m9" },
+      superseded_ids: [],
+    });
+    renderBadge("c1");
+    await openDrawer();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "保存为跨会话记忆" }),
+    );
+    // 弹窗里能看到待保存的内容与"确认保存 / 取消"
+    const confirm = await screen.findByRole("button", { name: "确认保存" });
+    // 列表里一条 + 弹窗里一条：确认前用户能看到将要保存的原文
+    expect(screen.getAllByText("暂不做自动模型路由")).toHaveLength(2);
+    // 默认范围是个人、类别是已确认决策；有效期默认关
+    expect(screen.getByText(/范围为个人/)).toBeTruthy();
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(memoryApi.promoteMemory).toHaveBeenCalledWith({
+        content: "暂不做自动模型路由",
+        kind: "decision",
+        scope: "personal",
+        project_id: null,
+        expires_at: null,
+        conversation_id: "c1",
+      }),
+    );
+  });
+
+  it("点取消不会发出保存请求（系统只提出，不自动升级）", async () => {
+    renderBadge("c1");
+    await openDrawer();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "保存为跨会话记忆" }),
+    );
+    const cancel = await screen.findByRole("button", { name: "取消" });
+    fireEvent.click(cancel);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "确认保存" })).toBeNull(),
+    );
+    expect(memoryApi.promoteMemory).not.toHaveBeenCalled();
   });
 });

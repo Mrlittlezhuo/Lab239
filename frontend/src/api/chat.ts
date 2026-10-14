@@ -41,6 +41,11 @@ export interface ChatCompletionRequest {
    * （第二期设计方案 §4.4）。已有会话以服务端标记为准。
    */
   temporary?: boolean;
+  /**
+   * 会话所在项目空间：新建会话时带上，只有该项目的范围记忆能在本会话里
+   * 被召回（第三期设计方案 §4.4）。服务端只接受当前用户自己的项目。
+   */
+  project_id?: string;
   metadata?: Record<string, unknown>;
   chat_model_config?: ChatModelConfig;
   tool_input?: Record<string, unknown>;

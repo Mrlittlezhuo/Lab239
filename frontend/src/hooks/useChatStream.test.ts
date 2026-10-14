@@ -172,6 +172,16 @@ describe("send 请求载荷", () => {
     const body = await bodyFor();
     expect("temporary" in body).toBe(false);
   });
+
+  it("选定项目空间时带 project_id，服务端据此把新建会话挂到该项目（§4.4）", async () => {
+    const body = await bodyFor({ projectId: "p1" });
+    expect(body.project_id).toBe("p1");
+  });
+
+  it("没选项目时不带 project_id：普通聊天默认不进任何项目空间（P3-10）", async () => {
+    const body = await bodyFor();
+    expect("project_id" in body).toBe(false);
+  });
 });
 
 /**

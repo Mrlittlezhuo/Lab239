@@ -6,6 +6,8 @@ export interface Conversation {
   chat_type: string | null;
   /** 临时对话：不创建、不保留会话私有上下文（第二期设计方案 §4.4） */
   temporary: boolean;
+  /** 会话所在项目空间：只有该项目的范围记忆能在本会话召回（第三期 §4.4） */
+  project_id: string | null;
   create_time: string | null;
   update_time: string | null;
 }
@@ -35,12 +37,32 @@ export function createConversation(
   name = "",
   chatType = "agent_chat",
   temporary = false,
+  projectId?: string | null,
 ): Promise<Conversation> {
   return postJson<Conversation>("/conversations", {
     name,
     chat_type: chatType,
     temporary,
+    project_id: projectId || null,
   });
+}
+
+/**
+ * 改会话所在的项目空间（第三期 §4.4）：传 null 表示回到"无项目"的普通会话。
+ * 服务端只接受当前用户自己的项目，别人的项目返回 404。
+ */
+export function setConversationProject(
+  id: string,
+  projectId: string | null,
+): Promise<Conversation> {
+  return patchJson<Conversation>(`/conversations/${id}/project`, {
+    project_id: projectId || null,
+  });
+}
+
+/** 单个会话详情（聊天页需要知道会话挂在哪个项目空间下）。 */
+export function getConversation(id: string): Promise<Conversation> {
+  return getJson<Conversation>(`/conversations/${id}`);
 }
 
 export function renameConversation(

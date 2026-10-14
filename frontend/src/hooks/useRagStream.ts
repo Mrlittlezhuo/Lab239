@@ -18,6 +18,8 @@ export interface RagSendOptions {
   useMemory?: boolean;
   /** 临时对话：新建会话时带上，该会话不创建、不保留会话私有上下文（§4.4） */
   temporary?: boolean;
+  /** 会话所在项目空间：新建会话时带上，项目范围记忆只在本会话召回（第三期 §4.4） */
+  projectId?: string;
 }
 
 let keySeq = 0;
@@ -97,6 +99,8 @@ export function useRagStream(options: {
       if (opts.useMemory === false) req.use_memory = false;
       // 临时对话同理：只在开启时带上，服务端据此标记新建的会话
       if (opts.temporary) req.temporary = true;
+      // 项目空间：服务端只在要新建会话时用它，已有会话以服务端记录为准
+      if (opts.projectId) req.project_id = opts.projectId;
 
       const controller = new AbortController();
       abortRef.current = controller;
