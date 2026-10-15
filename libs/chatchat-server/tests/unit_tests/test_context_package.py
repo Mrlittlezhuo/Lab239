@@ -6,7 +6,8 @@
    （M-01/M-02/M-06/M-07）；
 2. 摘要掉队时宁可扩大窗口，也不让历史在 Prompt 里凭空消失，并如实标记降级；
 3. 取消/失败的轮次不作为助手说法回放，但用户原话仍参与摘要与槽位；
-4. 记忆段与界面同源：开关只允许收紧，快照 ID 与真实注入一致（§12.3）。
+4. 记忆段与界面同源：开关只允许收紧，快照 ID 与真实注入一致（§12.3）；
+5. 当前消息与会话约束冲突时，本轮注入的上下文段就已采用新说法（§18.2.12）。
 """
 from __future__ import annotations
 
@@ -198,7 +199,40 @@ class TestBoundary:
 
 
 # ============================================================================
-# 2. 记忆段与快照
+# 2. 当前消息优先
+# ============================================================================
+
+
+class TestCurrentTurnWins:
+    def test_negation_in_the_current_turn_updates_the_injected_segment(self, db, users):
+        """§18.2.12：当前消息与会话约束冲突时，本轮注入的段就已经是新说法。
+
+        本轮的用户原话此时还没有助手回答（``response`` 为空），所以它不进最近
+        原文窗口；但槽位必须在同一次构建里被更新，否则模型这一轮看到的仍是
+        旧约束——正是"界面已经改了、Prompt 里没改"的老毛病。
+        """
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论数据库选型", "本项目采用 MySQL 存储会话记录")
+        s = db["Session"]()
+        try:
+            add_message(
+                s, conv, aid, "agent_chat",
+                "不对，改用 PostgreSQL 存储会话记录",
+                response="",
+            )
+        finally:
+            s.close()
+        pkg = _build(db, aid, conv, "不对，改用 PostgreSQL 存储会话记录")
+        assert any("PostgreSQL" in i.text for i in pkg.context.confirmed)
+        assert not any("MySQL" in i.text for i in pkg.context.confirmed)
+        segment = pkg.context_segment
+        assert "PostgreSQL" in segment
+        assert "MySQL" not in segment
+
+
+# ============================================================================
+# 3. 记忆段与快照
 # ============================================================================
 
 
@@ -263,7 +297,7 @@ class TestMemorySnapshot:
 
 
 # ============================================================================
-# 3. 边界情况
+# 4. 边界情况
 # ============================================================================
 
 
