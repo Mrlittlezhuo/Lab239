@@ -80,7 +80,7 @@ def temp_user_db(secret, tmp_path):
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 15
+    assert current_version(engine.connect()) == 16
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
     engine.dispose()
@@ -205,7 +205,7 @@ class TestMigration:
             assert {
                 "memory_key", "source_conversation_id", "source_message_id"
             }.issubset(memory_columns)
-        assert current_version(engine.connect()) == 15
+        assert current_version(engine.connect()) == 16
         # 迁移仅覆盖 user_account/openai_file/memory/session_summary，
         # conversation/message/knowledge_* 由模型元数据建表
         Base.metadata.create_all(engine)
@@ -254,7 +254,7 @@ class TestMigration:
         with engine.connect() as conn:
             result = apply_migrations(registry, conn)
         assert result.applied == []
-        assert current_version(engine.connect()) == 15
+        assert current_version(engine.connect()) == 16
 
         s = Session()
         try:
@@ -641,36 +641,57 @@ class TestSummary:
             assert any("无线通信" in m.content for m in list_memories(s, aid, enabled_only=True))
         finally:
             s.close()
-    def test_incremental_summary_after_threshold(self, temp_user_db, users):
+    def test_summary_covers_only_messages_outside_recent_window(
+        self, temp_user_db, users, monkeypatch
+    ):
+        """摘要只覆盖"最近原文窗口之外"的较早消息（设计方案 §6.2）。
+
+        分界由字符预算算出，不再是"最近 12 条保护窗口"：预算 500 字符时，
+        每条约 91 字符的 15 条消息里只有最新 5 条进窗口，前 10 条必须进摘要，
+        两者之间不留空洞（M-01/M-02）。
+        """
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
         S = temp_user_db["Session"]
         s = S()
         try:
             aid = users["alice"]["id"]
             from chatchat.server.db.repository import create_conversation, add_message
             conv = create_conversation(s, aid, "llm_chat", "conv-sum")
-            # 插入 15 条消息（> threshold 12）
+            # 每条 query 43 字符 + response 40 字符 + 8 开销 = 91 字符
             for i in range(15):
-                add_message(s, conv, aid, "llm_chat", f"问题{i}", response=f"回答{i}")
+                add_message(
+                    s, conv, aid, "llm_chat",
+                    f"问题{i}" + "补" * 40, response="答" * 40,
+                )
             # 用假摘要器：只返回输入文本的固定标记
             calls = []
             def fake_summarizer(existing, older_text):
                 calls.append((existing, older_text))
                 return f"摘要了{len(older_text.splitlines())}行"
-            result = memory_service.summarize_conversation(s, aid, conv, threshold=12, summarizer=fake_summarizer)
+            result = memory_service.summarize_conversation(s, aid, conv, summarizer=fake_summarizer)
             assert result is not None
-            assert result.summarized_count == 3  # 15 - 12 = 3 条超出窗口的较早消息
-            # 近期 12 条保持原序（未被摘要吞并）
+            # 最近窗口 = 最新 5 条（5*91=455 ≤ 500，再加一条就溢出）
+            assert result.summarized_count == 10
+            # 原始消息一条不少：摘要不删除聊天历史（M-10）
             recent = s.query(MessageModel).filter_by(conversation_id=conv).order_by(MessageModel.create_time.asc()).all()
             assert len(recent) == 15
-            assert [m.query for m in recent[-12:]] == [f"问题{i}" for i in range(3, 15)]
-            # 摘要覆盖了最早 3 条
-            assert "问题0" in calls[0][1]
-            assert "问题2" in calls[0][1]
+            # 摘要器只拿到窗口之外的较早消息：问题0..问题9，不含问题10
+            older = calls[0][1]
+            assert "问题0" in older and "问题9" in older
+            assert "问题10" not in older and "问题14" not in older
+            # 模型摘要必须与规则摘要可区分（设计方案 §7.2）
+            from chatchat.server.db.repository.session_summary_repository import (
+                get_session_summary,
+            )
+            row = get_session_summary(s, conv, aid)
+            assert row is not None and row.summary_type == "llm"
+            assert row.summary_status == "succeeded"
         finally:
             s.close()
 
-    def test_summary_not_treated_as_long_term_fact(self, temp_user_db, users):
+    def test_summary_not_treated_as_long_term_fact(self, temp_user_db, users, monkeypatch):
         """摘要写入 session_summary，不进入 memory 表（不被当作长期事实）。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
         S = temp_user_db["Session"]
         s = S()
         try:
@@ -678,8 +699,11 @@ class TestSummary:
             from chatchat.server.db.repository import create_conversation, add_message
             conv = create_conversation(s, aid, "llm_chat", "conv-sum2")
             for i in range(15):
-                add_message(s, conv, aid, "llm_chat", f"q{i}", response=f"a{i}")
-            memory_service.summarize_conversation(s, aid, conv, threshold=12)
+                add_message(
+                    s, conv, aid, "llm_chat",
+                    f"q{i}" + "x" * 40, response="a" * 40,
+                )
+            memory_service.summarize_conversation(s, aid, conv)
             # memory 表仍为空（摘要没被当长期事实入库）
             assert len(list_memories(s, aid, enabled_only=True)) == 0
             # session_summary 有记录
@@ -765,20 +789,46 @@ class TestResilience:
         finally:
             s.close()
 
-    def test_summarizer_failure_returns_none(self, temp_user_db, users):
+    def test_summarizer_failure_keeps_old_summary_and_cursor(
+        self, temp_user_db, users, monkeypatch
+    ):
+        """摘要失败：不覆盖旧摘要、不推进游标、失败可见（设计方案 §7.5 / M-46）。
+
+        旧实现是"失败就返回 None"，界面上看不出摘要有没有在更新；现在会话
+        上下文照常刷新（槽位仍要更新），但摘要侧如实标记失败。
+        """
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
         S = temp_user_db["Session"]
         s = S()
         try:
             aid = users["alice"]["id"]
             from chatchat.server.db.repository import create_conversation, add_message
+            from chatchat.server.db.repository.session_summary_repository import (
+                get_session_summary,
+            )
             conv = create_conversation(s, aid, "llm_chat", "conv-sum4")
             for i in range(15):
-                add_message(s, conv, aid, "llm_chat", f"q{i}", response=f"a{i}")
+                add_message(
+                    s, conv, aid, "llm_chat",
+                    f"q{i}" + "x" * 40, response="a" * 40,
+                )
             def bad_summarizer(existing, older_text):
                 raise RuntimeError("summarizer crashed")
-            result = memory_service.summarize_conversation(s, aid, conv, threshold=12, summarizer=bad_summarizer)
-            # 摘要失败不阻断：返回 None（调用方 try/except）
-            assert result is None
+            result = memory_service.summarize_conversation(
+                s, aid, conv, summarizer=bad_summarizer
+            )
+            # 会话上下文仍然返回（槽位已更新），聊天不被摘要失败阻断
+            assert result is not None
+            assert result.topic is not None
+            assert result.summary_status == "failed"
+            assert "summarizer crashed" in (result.summary_error or "")
+            row = get_session_summary(s, conv, aid)
+            assert row is not None
+            # 游标不推进、旧摘要不被覆盖
+            assert row.summarized_message_id is None
+            assert (row.summary or "") == ""
+            assert row.summary_status == "failed"
+            assert row.summary_updated_at is None
         finally:
             s.close()
 
@@ -856,15 +906,17 @@ class TestPromptInjection:
         S = temp_user_db["Session"]
         s = S()
         try:
+            # 预算压到 500 字符：15 条较长消息里只有最新几条进最近原文窗口，
+            # 较早的必须被摘要覆盖，注入段里才会出现"较早内容摘要"（§6.2）
+            monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
             aid = users["alice"]["id"]
             conv = create_conversation(s, aid, "llm_chat", "摘要会话")
-            # 写入 15 条带回答的消息（真实回答的 metadata 含 intermediate_steps），
-            # 超过默认阈值 12，应触发增量摘要
+            # 写入 15 条带回答的消息（真实回答的 metadata 含 intermediate_steps）
             import json as _json
             for i in range(15):
                 add_message(
                     s, conv, aid, "llm_chat",
-                    query=f"问题{i}", response=f"回答{i}",
+                    query=f"问题{i}" + "补" * 40, response="答" * 40,
                     metadata={"intermediate_steps": _json.dumps([])},
                 )
 

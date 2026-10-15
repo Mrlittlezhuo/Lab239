@@ -55,6 +55,15 @@
   ``project_id``（会话所在项目空间）；新增 ``memory_revision``（编辑留痕）与
   ``conversation_memory_ignore``（"本次不使用"）。只加列建新表，不改列不删表，
   既有记忆行按来源回填 ``confirmed``，内容与其他列一律不动。
+- v16（智能聊天记忆第四期·第一阶段 A）：``session_summary`` 增加
+  ``completed_items``（已完成事项）、``context_start_after_message_id``
+  （重置后从哪条消息之后重新建立上下文）、``version``（乐观锁）、
+  ``summary_type`` / ``summary_status`` / ``summary_error`` /
+  ``summary_updated_at``（摘要来源与执行状态）、``needs_rebuild``
+  （旧摘要覆盖位置不可确认，需重建）、``slots_scanned_through_message_id``
+  / ``slots_scanned_count``（结构化槽位增量游标）。只加列，不改列不删表，
+  既有摘要文本、覆盖位置与用户锁定条目一律保留；按确定判据把
+  "有摘要文本但没有覆盖位置"的旧行标记为待重建，不猜测覆盖位置。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1083,6 +1092,59 @@ def _v15_cross_session_recall(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+# --- v16（智能聊天记忆第四期·第一阶段 A）：上下文正确性字段 ---
+
+_SESSION_SUMMARY_ADD_COLUMNS_V16 = [
+    # 已完成事项（设计方案 §7.1）：与"已确认事项"分开，避免把做完的事
+    # 当成仍然生效的结论。旧行取空串，不猜测历史完成情况。
+    "completed_items TEXT NOT NULL DEFAULT ''",
+    # 重置起点（设计方案 §7.7 / §4.4）：重置只清字段不够，必须记下"从这条
+    # 消息之后重新建立上下文"，否则下一轮全量重扫会把旧结论找回来。
+    "context_start_after_message_id VARCHAR(32)",
+    # 乐观锁版本（设计方案 §7.5）：并发更新同一会话摘要时，只有版本仍一致
+    # 才能同时写入摘要、覆盖位置和新版本号。
+    "version INTEGER NOT NULL DEFAULT 0",
+    # 摘要来源与执行状态（设计方案 §7.2 / §15.1）：规则摘要与模型摘要必须
+    # 能被界面如实区分，失败也不能静默。
+    "summary_type VARCHAR(16) NOT NULL DEFAULT 'rule'",
+    "summary_status VARCHAR(16) NOT NULL DEFAULT 'idle'",
+    "summary_error VARCHAR(500)",
+    "summary_updated_at TIMESTAMP",
+    # 旧库里"有摘要文本、没有覆盖位置"的行（历史 bug：用户编辑上下文会清空
+    # 覆盖位置）。不猜测覆盖位置，只标记待重建（设计方案 §17）。
+    "needs_rebuild BOOLEAN NOT NULL DEFAULT 0",
+    # 结构化槽位增量游标（设计方案 §4.9）：每轮只扫描新增消息，长会话不再
+    # 平方级重扫。slots_scanned_count 同时用于保持条目 message_index 稳定。
+    "slots_scanned_through_message_id VARCHAR(32)",
+    "slots_scanned_count INTEGER NOT NULL DEFAULT 0",
+]
+
+
+def _v16_context_correctness(conn: Connection) -> None:
+    """v16：为会话上下文补齐已完成事项、重置起点、乐观锁与摘要执行状态。
+
+    - ``session_summary`` 只加列：既有 ``summary``、``summarized_message_id``、
+      ``summarized_count``、六个结构化槽位与 ``pinned_json`` 一字不改；
+    - 新列全部带默认值，旧行只多出一段空字段，行为与升级前一致；
+    - 唯一的写操作是按**确定判据**标记待重建：
+      ``summary != '' AND summarized_message_id IS NULL`` 说明摘要文本还在但
+      覆盖位置已不可确认（旧版本用户编辑会清空游标）。这类行标
+      ``needs_rebuild=1``，不猜测覆盖位置、不删除旧摘要；重复执行结果相同；
+    - 不新建表、不改列、不删表、不重建，知识库与向量索引不受影响；
+      失败即回滚且版本不记录（由迁移框架保证）。
+    """
+    _add_missing_columns(conn, "session_summary", _SESSION_SUMMARY_ADD_COLUMNS_V16)
+    if "session_summary" not in inspect(conn).get_table_names():
+        return
+    conn.execute(
+        text(
+            "UPDATE session_summary SET needs_rebuild = 1 "
+            "WHERE COALESCE(summary, '') <> '' "
+            "AND summarized_message_id IS NULL"
+        )
+    )
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1099,6 +1161,7 @@ _MIGRATIONS = [
     (13, "memory_preferences", _v13_memory_preferences),
     (14, "session_context", _v14_session_context),
     (15, "cross_session_recall", _v15_cross_session_recall),
+    (16, "context_correctness", _v16_context_correctness),
 ]
 
 

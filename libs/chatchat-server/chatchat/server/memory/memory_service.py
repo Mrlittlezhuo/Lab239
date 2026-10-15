@@ -115,23 +115,14 @@ SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
 # ---------------------------------------------------------------------------
 
 def rule_based_summarizer(existing_summary: str, older_text: str) -> str:
-    """默认基于规则的轻量摘要：保留已有摘要 + 较早消息的要点行。
+    """规则摘要入口：委托确定性结构化压缩（设计方案 §4.3 / §7.2）。
 
-    不依赖真实模型；对"每轮重复总结全部历史"做增量处理。测试可整体替换
-    本函数（``summarize_conversation(..., summarizer=fake)``）。
+    保留函数名只为兼容既有调用与测试替换点。实现已换掉：旧版是"已有摘要 +
+    新内容"再截前 4000 字，摘要写满后就再也吸收不了新结论；新版按行合并，
+    去重、同槽位冲突替换，超过容量时丢最旧的行而不是截断最新内容。
     """
-    parts: List[str] = []
-    if existing_summary:
-        parts.append(existing_summary)
-    # 把较早消息按"用户/助手"行化，仅保留内容要点
-    for line in (older_text or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts.append(line[:200])
-    text = "\n".join(parts)
-    # 限长，避免无限增长
-    return text[:4000]
+    lines = [line.strip() for line in (older_text or "").splitlines() if line.strip()]
+    return session_context.merge_digest(existing_summary, lines)
 
 
 # ---------------------------------------------------------------------------
@@ -618,23 +609,28 @@ def summarize_conversation(
     owner_id: str,
     conversation_id: str,
     threshold: int = SUMMARY_THRESHOLD,
-    summarizer: Callable[[str, str], str] = rule_based_summarizer,
+    summarizer: Optional[Callable[[str, str], str]] = None,
     force: bool = False,
+    boundary_index: Optional[int] = None,
 ) -> Optional[session_context.SessionContext]:
     """更新会话私有上下文（含较早历史的增量摘要）。
 
     第二期把"摘要"扩展为"会话上下文"：主题、目标、已确认事项、限制条件、
     待解决问题 + 摘要正文，实现见 :mod:`session_context`。
 
-    - 近期轮次（最近 threshold 条）保持原样，不并入摘要（设计方案 §4.1）；
-    - 只摘要尚未覆盖的较早消息（用 summarized_message_id 定位）；
+    - 摘要与最近原文的分界由 ``boundary_index`` 给出；没给就按字符预算算
+      （设计方案 §6.2）。``threshold`` 只为兼容旧调用保留，**不再定义最近
+      轮次的保护窗口**；
+    - 只摘要"游标之后、分界之前"的较早消息；
     - 用户手工编辑过的结论不被更早的内容静默覆盖（设计方案 §4.2）；
     - 临时对话不写入（设计方案 §4.4）；
-    - 失败返回 None，不阻断聊天（调用方 try/except）。
+    - ``summarizer`` 为 None 时用确定性规则摘要；传入自定义摘要器按模型摘要
+      处理（设计方案 §7.2 要求界面区分两者）；
+    - 摘要失败不覆盖旧摘要、不推进游标；整体异常返回 None，不阻断聊天。
     """
     return session_context.refresh_session_context(
         session, owner_id, conversation_id, threshold=threshold, force=force,
-        summarizer=summarizer,
+        summarizer=summarizer, boundary_index=boundary_index,
     )
 
 

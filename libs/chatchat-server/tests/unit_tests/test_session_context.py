@@ -214,6 +214,17 @@ def _load(db, owner_id, conversation_id):
         s.close()
 
 
+def _messages(db, owner_id, conversation_id):
+    """升序取本会话全部消息（与注入层看到的顺序一致）。"""
+    from chatchat.server.db.repository.message_repository import list_messages
+
+    s = db["Session"]()
+    try:
+        return list_messages(s, conversation_id, owner_id)
+    finally:
+        s.close()
+
+
 # ============================================================================
 # 1. v14 迁移：只加列、保留旧摘要、幂等
 # ============================================================================
@@ -267,8 +278,8 @@ class TestV14Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [14, 15]
-            assert result.final_version == 15
+            assert [m.version for m in result.applied] == [14, 15, 16]
+            assert result.final_version == 16
 
         cols = {c["name"] for c in inspect(engine).get_columns("session_summary")}
         assert {
@@ -303,7 +314,83 @@ class TestV14Migration:
             apply_migrations(build_registry(), conn)
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 15
+            assert second.final_version == 16
+        engine.dispose()
+
+
+# ============================================================================
+# 1b. v16 迁移：只加列、保留旧摘要、按判据标记待重建（设计方案 §18.2.1 / M-103）
+# ============================================================================
+
+
+class TestV16Migration:
+    def _legacy_v15(self, tmp_path):
+        """造一个"停在 v15"的库，塞两条旧摘要：一条有覆盖位置、一条没有。"""
+        path = tmp_path / "v15_to_v16.db"
+        engine = create_engine(f"sqlite:///{path}")
+        with engine.connect() as conn:
+            apply_migrations(_registry_upto(15), conn)
+            conn.execute(
+                text(
+                    "INSERT INTO session_summary (id, owner_id, conversation_id, summary, "
+                    "summarized_message_id, summarized_count) VALUES "
+                    "('s-nomark', 'u1', 'c1', '有摘要但没记覆盖位置', NULL, 0),"
+                    "('s-marked', 'u1', 'c2', '有摘要也有覆盖位置', 'm9', 7)"
+                )
+            )
+            conn.commit()
+            assert current_version(conn) == 15
+        return engine
+
+    def test_adds_columns_and_keeps_old_summary(self, secret, tmp_path):
+        engine = self._legacy_v15(tmp_path)
+        with engine.connect() as conn:
+            result = apply_migrations(build_registry(), conn)
+            assert [m.version for m in result.applied] == [16]
+            assert result.final_version == 16
+
+        cols = {c["name"] for c in inspect(engine).get_columns("session_summary")}
+        assert {
+            "completed_items",
+            "context_start_after_message_id",
+            "version",
+            "summary_type",
+            "summary_status",
+            "summary_error",
+            "summary_updated_at",
+            "needs_rebuild",
+            "slots_scanned_through_message_id",
+            "slots_scanned_count",
+        } <= cols
+
+        with engine.connect() as conn:
+            rows = {
+                r[0]: r
+                for r in conn.execute(
+                    text(
+                        "SELECT id, summary, summarized_count, version, needs_rebuild "
+                        "FROM session_summary"
+                    )
+                ).all()
+            }
+            # 旧摘要一字未改，也不因为升级而丢覆盖位置（M-103）
+            assert rows["s-nomark"][1] == "有摘要但没记覆盖位置"
+            assert rows["s-marked"][1] == "有摘要也有覆盖位置"
+            assert rows["s-marked"][2] == 7
+            # 只有"有摘要文本但覆盖位置不可确认"的行被标记待重建
+            assert rows["s-nomark"][4] in (1, True)
+            assert rows["s-marked"][4] in (0, False)
+            assert rows["s-nomark"][3] == 0
+        engine.dispose()
+
+    def test_reapply_is_noop(self, secret, tmp_path):
+        """重复执行不重复加列、不重复标记（幂等，AGENTS.md 数据库底线）。"""
+        engine = self._legacy_v15(tmp_path)
+        with engine.connect() as conn:
+            apply_migrations(build_registry(), conn)
+            second = apply_migrations(build_registry(), conn)
+            assert second.applied == []
+            assert second.final_version == 16
         engine.dispose()
 
 
@@ -352,17 +439,32 @@ class TestDerivation:
         context = _refresh(db, aid, conv, threshold=12)
         assert any("摘要由谁生成" in i.text for i in context.open_questions)
 
-    def test_summary_covers_only_older_messages(self, db, users):
-        """P2-02：摘要只压缩较早内容，最近的关键消息仍以原文参与回答。"""
+    def test_summary_covers_only_messages_outside_the_window(
+        self, db, users, monkeypatch
+    ):
+        """P2-02 + 设计方案 §6.2：摘要只覆盖最近原文窗口之外的较早消息。
+
+        分界由字符预算算出，不再是"最近 12 条保护窗口"：每条消息约 60 字符、
+        预算 500 时最新 8 条进窗口（484 字符，再加一条溢出），前 6 条必须进
+        摘要——摘要覆盖范围与最近原文窗口之间不留空洞（M-01/M-02）。
+        """
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
         aid = users["alice"]["id"]
         conv = _conv(db, aid)
-        _say(db, conv, aid, *[f"较早的问题{i}" for i in range(14)])
-        context = _refresh(db, aid, conv, threshold=12)
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        context = _refresh(db, aid, conv)
         assert context is not None and context.summary
-        assert "较早的问题0" in context.summary
-        # 最近 threshold 条不进摘要
+        assert "较早的问题00" in context.summary
+        assert "较早的问题05" in context.summary
+        # 窗口内的消息不进摘要：仍以完整原文参与回答
+        assert "较早的问题06" not in context.summary
         assert "较早的问题13" not in context.summary
-        assert context.summarized_count == 2
+        assert context.summarized_count == 6
+        # 落库的覆盖位置与摘要来源/状态可回读（设计方案 §15.1）
+        saved = _load(db, aid, conv)
+        assert saved.summarized_message_id is not None
+        assert saved.summary_type == "rule"
+        assert saved.summary_status == "succeeded"
 
     def test_model_answers_are_not_treated_as_conclusions(self, db, users):
         """模型回答不自动成为"已确认事项"（与 P2-12 同一立场）。"""
@@ -912,3 +1014,224 @@ class TestAuth:
     def test_unknown_conversation_is_404(self, db, users, client):
         r = client.get("/conversations/nope/context", headers=_headers(db, "alice"))
         assert r.status_code == 404
+
+
+# ============================================================================
+# 8. 第四期第一阶段 A：上下文正确性（§6.2 无空洞、§7.2 冲突/完成、
+#    §7.5 乐观锁与失败不推进游标、§7.7 重置起点、§4.9 增量扫描）
+# ============================================================================
+
+
+class TestContextCorrectness:
+    def test_summary_and_recent_window_meet_without_hole(self, db, users, monkeypatch):
+        """M-01/M-02：摘要覆盖范围 + 最近原文窗口 = 全部有效历史，中间不留空洞。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, *[f"讨论记忆设计{i:02d}" + "长" * 40 for i in range(12)])
+        context = _refresh(db, aid, conv)
+        assert context is not None
+        window = session_context.select_recent_window(_messages(db, aid, conv))
+        # 摘要正好覆盖到窗口起点之前，不多不少
+        assert context.summarized_count == window.start_index
+        assert window.start_index > 0
+        assert window.start_index < 12
+        # 分界两侧的消息各归其位：窗口外的进了摘要，窗口内的没进
+        summary = context.summary
+        assert f"讨论记忆设计{window.start_index - 1:02d}" in summary
+        assert f"讨论记忆设计{window.start_index:02d}" not in summary
+
+    def test_budget_below_one_turn_still_keeps_latest_turn(self, db, users, monkeypatch):
+        """M-06：单轮就超预算时保留最新一轮并标记截断，不能整段丢掉。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "很长的一个问题" + "长" * 900, response="答" * 300)
+        window = session_context.select_recent_window(_messages(db, aid, conv))
+        assert window.start_index == 0
+        assert window.truncated is True
+
+    def test_negation_replaces_earlier_conclusion(self, db, users):
+        """M-04：否定/替换旧说法后，槽位里只留新说法，不留矛盾的两条。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(
+            db, conv, aid,
+            "讨论数据库选型",
+            "本项目采用 MySQL 存储会话记录",
+            "不对，改用 PostgreSQL 存储会话记录",
+        )
+        context = _refresh(db, aid, conv)
+        texts = [i.text for i in context.confirmed]
+        assert any("PostgreSQL" in t for t in texts)
+        assert not any("MySQL" in t for t in texts)
+
+    def test_completed_items_and_reopen(self, db, users):
+        """M-03/M-05：完成事项单独成槽；"还没做完"把它放回待解决问题。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论登录功能", "我已经把登录接口写好了")
+        context = _refresh(db, aid, conv)
+        assert any("登录接口" in i.text for i in context.completed_items)
+        assert not any("登录接口" in i.text for i in context.open_questions)
+
+        _say(db, conv, aid, "登录接口还没做完")
+        again = _refresh(db, aid, conv)
+        assert not any("登录接口" in i.text for i in again.completed_items)
+        assert any("登录接口" in i.text for i in again.open_questions)
+
+    def test_summary_overflow_drops_oldest_lines(self):
+        """M-03（§4.3）：摘要超容量时丢最旧的行，最新结论始终保留。"""
+        merged = ""
+        for i in range(40):
+            merged = session_context.merge_digest(
+                merged, [f"用户：第{i}条结论" + "补" * 20], max_chars=600
+            )
+        lines = [ln for ln in merged.splitlines() if ln.strip()]
+        assert sum(len(ln) + 1 for ln in lines) <= 601
+        assert "第39条结论" in merged
+        assert "第0条结论" not in merged
+        # 重复行只保留一份
+        twice = session_context.merge_digest(merged, ["用户：第39条结论" + "补" * 20])
+        assert twice.splitlines().count("用户：第39条结论" + "补" * 20) == 1
+
+    def test_user_edit_does_not_clear_summary_cursor(self, db, users, monkeypatch):
+        """M-12：编辑上下文只改正文，不能把摘要覆盖位置清空。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        before = _refresh(db, aid, conv)
+        assert before.summarized_message_id and before.summarized_count == 6
+
+        s = db["Session"]()
+        try:
+            session_context.apply_user_edit(
+                s, aid, conv, topic="手工改过的主题", confirmed=["手工确认的结论"]
+            )
+        finally:
+            s.close()
+        after = _load(db, aid, conv)
+        assert after.topic is not None and after.topic.text == "手工改过的主题"
+        assert after.summary == before.summary
+        assert after.summarized_message_id == before.summarized_message_id
+        assert after.summarized_count == before.summarized_count
+
+    def test_reset_marks_start_and_does_not_resurrect_old_conclusions(
+        self, db, users
+    ):
+        """M-09/M-10：重置落下起点标记，旧结论不会在下一轮被重扫回来。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论旧主题", "确认：旧方案采用 MySQL")
+        first = _refresh(db, aid, conv)
+        assert any("MySQL" in i.text for i in first.confirmed)
+
+        s = db["Session"]()
+        try:
+            session_context.reset_session_context(s, aid, conv)
+        finally:
+            s.close()
+        cleared = _load(db, aid, conv)
+        assert cleared.is_empty()
+        last_id = _messages(db, aid, conv)[-1].id
+        assert cleared.context_start_after_message_id == last_id
+
+        _say(db, conv, aid, "讨论新主题", "确认：新方案采用 PostgreSQL")
+        again = _refresh(db, aid, conv)
+        texts = [i.text for i in again.confirmed]
+        assert any("PostgreSQL" in t for t in texts)
+        assert not any("MySQL" in t for t in texts)
+        # 原始聊天记录不删除
+        assert len(_messages(db, aid, conv)) == 4
+
+    def test_optimistic_lock_conflict_blocks_stale_write(self, db, users):
+        """M-49：并发更新同一会话时，旧版本的任务不能覆盖新摘要。"""
+        from chatchat.server.db.repository import session_summary_repository as repo
+
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论记忆设计")
+        _refresh(db, aid, conv)
+        s = db["Session"]()
+        try:
+            row = repo.get_session_summary(s, conv, aid)
+            stale = row.version
+            # 另一个请求先写了一次
+            repo.upsert_session_summary(
+                s, aid, conv, summary="新任务的摘要", context={"topic": "新主题"}
+            )
+            with pytest.raises(repo.ContextVersionConflict):
+                repo.upsert_session_summary(
+                    s,
+                    aid,
+                    conv,
+                    summary="过期任务的摘要",
+                    summarized_message_id="m1",
+                    summarized_count=3,
+                    expected_version=stale,
+                )
+            after = repo.get_session_summary(s, conv, aid)
+            assert after.summary == "新任务的摘要"
+            assert after.summarized_message_id is None
+        finally:
+            s.close()
+
+    def test_slot_scan_is_incremental_and_keeps_earlier_items(self, db, users):
+        """§4.9：每轮只扫新增消息，早先扫出的条目仍然留在槽位里。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论存储方案", "本项目采用 MySQL 存储会话记录")
+        first = _refresh(db, aid, conv)
+        assert first.slots_scanned_count == 2
+        assert any("MySQL" in i.text for i in first.confirmed)
+
+        _say(db, conv, aid, "本次回答统一使用表格形式")
+        again = _refresh(db, aid, conv)
+        assert again.slots_scanned_count == 3
+        assert again.slots_scanned_through_message_id == _messages(db, aid, conv)[-1].id
+        # 增量扫描后旧结论仍在，新约束也进来了
+        assert any("MySQL" in i.text for i in again.confirmed)
+        assert any("表格" in i.text for i in again.constraints)
+
+    def test_summary_failure_does_not_advance_cursor(self, db, users, monkeypatch):
+        """M-46：摘要失败时保留旧摘要、不推进游标，并把失败原因记下来。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        ok = _refresh(db, aid, conv)
+        assert ok.summary and ok.summarized_count == 6
+
+        def boom(existing, older_text):
+            raise RuntimeError("模型不可用")
+
+        _say(db, conv, aid, *[f"较新的问题{i:02d}" + "补" * 40 for i in range(14, 20)])
+        failed = _refresh(db, aid, conv, summarizer=boom)
+        assert failed is not None
+        assert failed.summary_status == "failed"
+        assert "模型不可用" in (failed.summary_error or "")
+        # 旧摘要保留、游标不推进
+        assert failed.summary == ok.summary
+        assert failed.summarized_count == ok.summarized_count
+        assert failed.summarized_message_id == ok.summarized_message_id
+
+    def test_completed_items_visible_and_editable_via_api(self, db, users, client):
+        """已完成事项经 API 可读可编辑（抽屉在第一阶段 B 显示，接口先就位）。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论登录功能", "我已经把登录接口写好了")
+        hdr = _headers(db, "alice")
+        r = client.post(f"/conversations/{conv}/context/refresh", headers=hdr)
+        assert r.status_code == 200, r.text
+        assert any("登录接口" in t for t in r.json()["completed_items"])
+
+        r = client.patch(
+            f"/conversations/{conv}/context",
+            headers=hdr,
+            json={"completed_items": ["手工登记的完成事项"]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["completed_items"] == ["手工登记的完成事项"]
+        r = client.get(f"/conversations/{conv}/context", headers=hdr)
+        assert r.json()["completed_items"] == ["手工登记的完成事项"]

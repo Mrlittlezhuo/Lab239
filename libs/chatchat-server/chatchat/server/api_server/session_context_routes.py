@@ -34,6 +34,8 @@ class ContextOut(BaseModel):
     confirmed: List[str] = Field(default_factory=list)
     constraints: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list)
+    #: 已完成事项：与"仍生效的已确认事项"分开，避免模型把做完的事当待办（§7.1）
+    completed_items: List[str] = Field(default_factory=list)
     summary: str = ""
     summarized_count: int = 0
     update_time: Optional[datetime] = None
@@ -51,6 +53,7 @@ class ContextEdit(BaseModel):
     confirmed: Optional[List[str]] = Field(None, max_length=20)
     constraints: Optional[List[str]] = Field(None, max_length=20)
     open_questions: Optional[List[str]] = Field(None, max_length=20)
+    completed_items: Optional[List[str]] = Field(None, max_length=20)
     summary: Optional[str] = Field(None, max_length=4000)
 
 
@@ -94,6 +97,7 @@ def _out(
         confirmed=confirmed,
         constraints=[i.text for i in context.constraints],
         open_questions=[i.text for i in context.open_questions],
+        completed_items=[i.text for i in context.completed_items],
         summary=context.summary or "",
         summarized_count=context.summarized_count,
         update_time=context.update_time,
@@ -135,6 +139,7 @@ def edit_context(
         confirmed=body.confirmed,
         constraints=body.constraints,
         open_questions=body.open_questions,
+        completed_items=body.completed_items,
         summary=body.summary,
     )
     if updated is None:
