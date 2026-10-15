@@ -76,6 +76,7 @@ from chatchat.server.db.models.user_model import UserModel  # noqa: F401 (注册
 from chatchat.server.knowledge_base.temp_files import temp_file_ownership  # noqa: E402
 from chatchat.server.auth import jwt as auth_jwt  # noqa: E402
 from chatchat.server.auth import service  # noqa: E402
+from chatchat.server.memory import context_package  # noqa: E402
 
 
 FAKE_LLM_TOKENS = ["你", "好", "！"]
@@ -141,6 +142,27 @@ class MemoryRecorder:
         # kwargs 里带 use_memory（"本次不使用个人偏好"），一并记录以便断言透传
         self.memory_messages_calls.append((owner_id, conversation_id, kwargs))
         return list(self.memory_messages)
+
+
+class ContextPackageRecorder:
+    """context_package 替身：记录统一上下文构建的调用参数。
+
+    第四期起知识库对话的最近历史、会话摘要与记忆注入段都由构建器一次给出
+    （设计方案 §18.2.2/§18.2.5），因此"记忆层以真实用户 ID 被调用"和
+    "use_memory 透传"这两条断言都落在构建调用上。
+    """
+
+    def __init__(self, memory_recorder: MemoryRecorder):
+        self.memory_recorder = memory_recorder
+        self.build_calls = []
+
+    def build_context_package(self, session, owner_id, conversation_id, query="", **kwargs):
+        self.build_calls.append((owner_id, conversation_id, kwargs))
+        return context_package.ContextPackage(
+            owner_id=owner_id or "",
+            conversation_id=conversation_id or "",
+            memory_segments=[m["content"] for m in self.memory_recorder.memory_messages],
+        )
 
 
 class _FakeKBService:
@@ -258,7 +280,10 @@ def kbchat_app(temp_user_db, monkeypatch):
     recorder = MemoryRecorder()
     recorder.memory_messages = [{"role": "system", "content": "用户偏好：回答要简短。"}]
     monkeypatch.setattr(kb_chat_mod, "memory_service", recorder)
+    packages = ContextPackageRecorder(recorder)
+    monkeypatch.setattr(kb_chat_mod, "context_package", packages)
     a.state.memory = recorder
+    a.state.context = packages
     return a
 
 
@@ -390,11 +415,11 @@ def test_streaming_kb_chat_persists_reply_after_session_close(client, kbchat_app
         s.close()
 
     # 记忆链路全部以真实用户 ID 被调用（修复前 user.id 读取即抛异常，
-    # auto_extract / summarize_conversation 被 try/except 静默吞掉）
+    # auto_extract / 统一上下文构建被 try/except 静默吞掉）。第四期起会话摘要
+    # 与记忆注入段由 context_package 一次给出，不再单独调 summarize。
     mem = kbchat_app.state.memory
     assert [c[0] for c in mem.auto_extract_calls] == [uid]
-    assert [c[0] for c in mem.summarize_calls] == [uid]
-    assert [c[0] for c in mem.memory_messages_calls] == [uid]
+    assert [c[0] for c in kbchat_app.state.context.build_calls] == [uid]
 
 
 def test_kb_chat_passes_use_memory_flag_to_memory_layer(
@@ -413,10 +438,11 @@ def test_kb_chat_passes_use_memory_flag_to_memory_layer(
         chunks = _iter_sse_chunks(resp)
 
     _assert_no_error_chunks(chunks)
-    mem = kbchat_app.state.memory
-    assert [c[0] for c in mem.memory_messages_calls] == [uid]
-    assert mem.memory_messages_calls[0][2].get("use_memory") is False
+    builds = kbchat_app.state.context.build_calls
+    assert [c[0] for c in builds] == [uid]
+    assert builds[0][2].get("use_memory") is False
     # 写入侧不受该开关影响
+    mem = kbchat_app.state.memory
     assert [c[0] for c in mem.auto_extract_calls] == [uid]
 
 

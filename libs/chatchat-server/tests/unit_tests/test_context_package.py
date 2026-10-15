@@ -268,11 +268,19 @@ class TestMemorySnapshot:
 
 
 class TestEdgeCases:
-    def test_temporary_conversation_gets_no_session_context(self, db, users):
-        """临时对话不建会话上下文，但个人偏好与召回照旧（既有行为不变）。"""
+    def test_memoryless_conversation_reads_history_but_builds_no_context(
+        self, db, users, monkeypatch
+    ):
+        """无记忆对话：原始消息照常持久化、最近原文照读，但不建会话上下文。
+
+        设计方案 §13.1：现界面名"临时对话"只表示不写记忆，会话与消息照常保存，
+        所以多轮连续性仍由数据库里的最近原文提供，不退回请求体里的 history；
+        同时不生成会话上下文/摘要，也不因"摘要没覆盖分界之前的消息"报降级。
+        """
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
         aid = users["alice"]["id"]
         conv = _conv(db, aid, temporary=True)
-        _say(db, conv, aid, *[_pad(i) for i in range(12)])
+        _say_pad(db, conv, aid, 0, 12)
         s = db["Session"]()
         try:
             pref = create_memory(
@@ -282,8 +290,12 @@ class TestEdgeCases:
             s.close()
         pkg = _build(db, aid, conv, "回答风格")
         assert pkg.temporary is True
-        assert pkg.recent_messages == []
+        # 预算 500、每轮 91 字符 → 只带最近 5 轮，且不带会话上下文段
+        assert len(pkg.recent_messages) == 5
+        assert [q for q, _ in pkg.history_pairs()][0] == _pad(7)
+        assert pkg.context is None
         assert pkg.context_segment == ""
+        assert pkg.history_gap_due_to_degradation is False
         assert pkg.preference_ids == [pref.id]
         s = db["Session"]()
         try:

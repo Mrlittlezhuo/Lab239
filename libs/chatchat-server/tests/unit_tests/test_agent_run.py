@@ -58,6 +58,7 @@ from chatchat.server.db.repository import agent_run_repository as agent_repo
 from chatchat.server.agent_run.planner import LLMPlanner
 from chatchat.server.agent_run.runner import AgentRunner
 from chatchat.server.agent_run import schema as S
+from chatchat.server.memory import context_package
 import chatchat.server.agent_run.service as agent_service
 import chatchat.server.api_server.chat_routes as chat_routes_mod
 from chatchat.server.api_server.agent_run_routes import agent_run_router
@@ -1377,23 +1378,37 @@ class TestToolsDescriptionBudget:
 class TestBuildHistoryNeutralization:
     """规划历史去污：失败/取消的 Agent 轮替换为中性占位。"""
 
-    def _patch_filter_message(self, monkeypatch, newest_first):
-        # filter_message 生产实现按 create_time 倒序返回（最新在前）
+    def _patch_recent_messages(self, monkeypatch, oldest_first):
+        """把统一上下文构建器换成"返回这几条消息"的替身。
+
+        第四期起 Agent 规划历史也来自 ContextPackage 的最近原文窗口（升序），
+        不再由 filter_message 倒序返回（设计方案 §18.2.2）。
+        """
+        rows = [
+            types.SimpleNamespace(
+                id=f"m{i}",
+                query=item["query"],
+                response=item["response"],
+                meta_data="{}",
+            )
+            for i, item in enumerate(oldest_first)
+        ]
         monkeypatch.setattr(
-            agent_service, "filter_message",
-            lambda **k: list(newest_first),
+            agent_service.context_package,
+            "build_context_package",
+            lambda *a, **k: context_package.ContextPackage(recent_messages=rows),
         )
 
     def test_failed_and_cancelled_turns_are_neutralized(self, monkeypatch):
         """历史中的失败/取消轮不再把错误文本带给规划器。"""
-        newest_first = [
-            {"query": "继续处理", "response": "（Agent 运行已取消）"},
+        oldest_first = [
+            {"query": "什么是 MTP", "response": "MTP 是多token预测技术。"},
             {"query": "帮我联网搜索 X",
              "response": "（Agent 运行失败：计划生成失败（模型输出无效）："
                          "计划为空：既没有步骤也没有 direct_answer）"},
-            {"query": "什么是 MTP", "response": "MTP 是多token预测技术。"},
+            {"query": "继续处理", "response": "（Agent 运行已取消）"},
         ]
-        self._patch_filter_message(monkeypatch, newest_first)
+        self._patch_recent_messages(monkeypatch, oldest_first)
         history = agent_service._build_history(
             object(), "conv-1", "owner-1", None
         )
@@ -1410,11 +1425,11 @@ class TestBuildHistoryNeutralization:
 
     def test_normal_history_unchanged(self, monkeypatch):
         """普通轮（非 Agent 结果文本）保持原样。"""
-        newest_first = [
-            {"query": "Q2", "response": "A2"},
+        oldest_first = [
             {"query": "Q1", "response": "A1"},
+            {"query": "Q2", "response": "A2"},
         ]
-        self._patch_filter_message(monkeypatch, newest_first)
+        self._patch_recent_messages(monkeypatch, oldest_first)
         history = agent_service._build_history(
             object(), "conv-1", "owner-1", None
         )

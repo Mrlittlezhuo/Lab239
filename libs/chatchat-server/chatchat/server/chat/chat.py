@@ -2,7 +2,7 @@ import asyncio
 import json
 import uuid
 import os
-from chatchat.server.db.repository.message_repository import filter_message
+from chatchat.server.memory import context_package
 from typing import Any, AsyncIterable, Dict, List, Union, Tuple
 from sqlalchemy.orm import Session
 from langchain_core.load import dumpd, dumps, load, loads
@@ -205,42 +205,32 @@ def create_models_chains(
     mcp_client=None, use_memory: bool = True
 ):
 
-    # 从数据库获取conversation_id对应的 intermediate_steps 、 mcp_connections
-    # （仅当会话属于 owner_id 时返回历史）
-    messages = filter_message(
-        session=session,
-        conversation_id=conversation_id,
-        owner_id=owner_id,
-        limit=history_len,
+    # 统一上下文构建器：最近原文窗口、会话上下文与记忆段都来自同一份数据，
+    # 分界只有一处（设计方案 §18.2.2/§18.2.9）。``history_len`` 从"只带最近
+    # N 条"降级为最小轮数，窗口大小由字符预算决定；被移出窗口的较早消息在同
+    # 一次构建里进入摘要，不会这一轮既不在摘要也不在原文（§6.2）。
+    # 失败不阻断正常回答：构建器内部已逐级降级。
+    package = context_package.build_context_package(
+        session,
+        owner_id,
+        conversation_id,
+        query,
+        use_memory=use_memory,
+        min_turns=history_len if history_len and history_len > 0 else None,
     )
-    # 返回的记录按时间倒序，转为正序
-    messages = list(reversed(messages))
+    messages = package.recent_messages
     history: List[Union[List, Tuple]] = []
-    # 会话摘要：历史超过阈值时增量压缩较早内容（默认基于规则，不依赖模型），
-    # 记录覆盖位置，避免每轮重复总结全部历史。失败不阻断正常回答。
-    try:
-        if session is not None and owner_id and conversation_id:
-            memory_service.summarize_conversation(session, owner_id, conversation_id)
-    except Exception:
-        pass
-    # 用户记忆注入：个人偏好段 + 长期记忆段 + 较早内容摘要段，作为独立系统
-    # 消息置于近期轮次之前（当前用户本轮明确表达优先于记忆）。失败/无会话时
-    # 返回空列表，不改变无记忆时的原有行为，也不阻断正常回答。
-    # use_memory=False 对应界面"本次不使用个人偏好"：只影响本轮。
-    memory_msgs = memory_service.memory_system_messages(
-        session, owner_id, query, conversation_id, use_memory=use_memory
-    )
-    for message in messages:
-        history.append({"role": "user", "content": message["query"]})
-        history.append({"role": "assistant", "content":  message["response"]})
-    for msg in reversed(memory_msgs):
+    for query_text, response_text in package.history_pairs():
+        history.append({"role": "user", "content": query_text})
+        history.append({"role": "assistant", "content": response_text})
+    for msg in reversed(package.system_messages()):
         # 置于历史最前，作为独立、清晰的记忆/摘要段
         history.insert(0, dict(msg))
 
     # 上一轮 metadata 缺少 intermediate_steps 时安全降级为空（见
     # _load_intermediate_steps 注释），不再因 loads(None) 崩溃。
     intermediate_steps = _load_intermediate_steps(
-        messages[-1].get("metadata") if messages else None
+        messages[-1].meta_data if messages else None
     )
     llm = models["action_model"]
     llm.callbacks = callbacks

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,8 +28,7 @@ from chatchat.server.agent_run.runtime import create_agent_runtime, runtime_name
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
 from chatchat.server.db.repository import agent_run_repository as agent_run_repo
 from chatchat.server.db.repository import update_message
-from chatchat.server.db.repository.message_repository import filter_message
-from chatchat.server.memory import memory_service
+from chatchat.server.memory import context_package, memory_service
 from chatchat.server.utils import get_ChatOpenAI, get_default_llm, get_tool
 from chatchat.settings import Settings
 from chatchat.utils import build_logger
@@ -153,34 +153,55 @@ def _neutralize_agent_result(text: Optional[str]) -> str:
     )
 
 
+def _history_from_messages(messages) -> List[Dict[str, str]]:
+    """把最近原文窗口内的消息转成规划历史（时间正序，失败/取消轮去污）。
+
+    与聊天链路同一份数据、同一个分界（设计方案 §18.2.2）；失败或取消的 Agent
+    轮不把错误细节带给规划器。
+    """
+    history: List[Dict[str, str]] = []
+    for message in messages or []:
+        if isinstance(message, Mapping):
+            query = message.get("query") or ""
+            response = message.get("response")
+        else:
+            query = getattr(message, "query", "") or ""
+            response = getattr(message, "response", None)
+        response = _neutralize_agent_result(response)
+        if not query and not response:
+            continue
+        history.append({"role": "user", "content": query})
+        history.append({"role": "assistant", "content": response or ""})
+    return history
+
+
 def _build_history(
     session: Session,
     conversation_id: str,
     owner_id: str,
     history_len: Optional[int],
 ) -> List[Dict[str, str]]:
-    """从当前用户会话读取历史（时间正序），仅取可渲染的轮次。"""
+    """从当前用户会话读取历史（时间正序），仅取可渲染的轮次。
+
+    ``history_len`` 只作为最小轮数：窗口大小由字符预算算出，与聊天链路一致
+    （设计方案 §18.2.9）。
+    """
     if session is None or not owner_id or not conversation_id:
         return []
     try:
-        messages = filter_message(
-            session=session,
-            conversation_id=conversation_id,
-            owner_id=owner_id,
-            limit=history_len or Settings.model_settings.HISTORY_LEN,
+        package = context_package.build_context_package(
+            session,
+            owner_id,
+            conversation_id,
+            "",
+            use_memory=False,
+            refresh=False,
+            min_turns=history_len or Settings.model_settings.HISTORY_LEN,
         )
     except Exception:
         logger.warning("读取会话历史失败（忽略）", exc_info=True)
         return []
-    history: List[Dict[str, str]] = []
-    for message in reversed(messages or []):
-        query = message.get("query") or ""
-        response = _neutralize_agent_result(message.get("response"))
-        if not query and not response:
-            continue
-        history.append({"role": "user", "content": query})
-        history.append({"role": "assistant", "content": response or ""})
-    return history
+    return _history_from_messages(package.recent_messages)
 
 
 def _build_memory_messages(
@@ -210,7 +231,19 @@ def _build_memory_messages(
         pass
     try:
         if conversation_id:
-            memory_service.summarize_conversation(session, owner_id, conversation_id)
+            # 分界与 _build_history 用的是同一条规则，摘要与最近原文窗口不会
+            # 出现空洞或重复（设计方案 §6.2）。
+            memory_service.summarize_conversation(
+                session,
+                owner_id,
+                conversation_id,
+                boundary_message_id=context_package.recent_boundary_message_id(
+                    session,
+                    owner_id,
+                    conversation_id,
+                    min_turns=Settings.model_settings.HISTORY_LEN,
+                ),
+            )
     except Exception:
         pass
     try:

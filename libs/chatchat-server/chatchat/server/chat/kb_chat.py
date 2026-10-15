@@ -22,7 +22,7 @@ from chatchat.server.db.repository import (
     update_message,
 )
 from chatchat.server.knowledge_base.temp_files import assert_temp_owner
-from chatchat.server.memory import memory_service
+from chatchat.server.memory import context_package, memory_service
 from sqlalchemy.orm import Session
 from chatchat.server.agent.tools_factory.search_internet import search_engine
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
@@ -172,13 +172,25 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             except Exception:
                 pass
 
-            # 会话摘要：历史超过阈值时增量压缩较早内容（默认基于规则，
-            # 不依赖模型），记录覆盖位置。失败不阻断正常回答。
-            try:
-                if conversation_id:
-                    memory_service.summarize_conversation(session, user_id, conversation_id)
-            except Exception:
-                pass
+            # 统一上下文构建器：知识库对话的最近历史改为从数据库读取，不再
+            # 采信请求体里的 history（客户端传来的历史既可能过期，也可能被
+            # 伪造成别人的轮次）；同一份数据同时给出会话摘要与记忆注入段，
+            # 分界只有一处（设计方案 §18.2.2 / §18.2.5 / §18.2.9）。
+            # 摘要与槽位在构建 Prompt 前按同一分界更新；失败不阻断正常回答。
+            package = context_package.build_context_package(
+                session,
+                user_id,
+                conversation_id,
+                query,
+                use_memory=use_memory,
+                min_turns=Settings.model_settings.HISTORY_LEN,
+            )
+            # 请求体里的 history 一律不采信：无记忆对话的原始消息同样持久化，
+            # 最近原文也从数据库读（设计方案 §13.1）。
+            history = []
+            for query_text, response_text in package.history_pairs():
+                history.append(History(role="user", content=query_text))
+                history.append(History(role="assistant", content=response_text))
 
             if mode == "local_kb":
                 if score_threshold > 1:
@@ -345,9 +357,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             # 都在此之前已经确定，个人偏好不参与（设计方案 §4.3）。
             _mem_msgs = [
                 History(role=m["role"], content=m["content"]).to_msg_template(False)
-                for m in memory_service.memory_system_messages(
-                    session, user_id, query, conversation_id, use_memory=use_memory
-                )
+                for m in package.system_messages()
             ]
             chat_prompt = ChatPromptTemplate.from_messages(
                 _mem_msgs + [i.to_msg_template() for i in history] + [input_msg])

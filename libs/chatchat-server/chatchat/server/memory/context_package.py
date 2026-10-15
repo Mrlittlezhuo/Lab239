@@ -45,6 +45,8 @@ class ContextPackage:
 
     owner_id: str = ""
     conversation_id: str = ""
+    #: 无记忆对话（现界面名"临时对话"）：会话与原始消息照常持久化、最近原文照读，
+    #: 但不生成会话上下文/摘要，也不写长期记忆（设计方案 §13.1）
     temporary: bool = False
     #: 最近原文窗口内的消息（MessageModel，升序）
     recent_messages: List = field(default_factory=list)
@@ -106,6 +108,9 @@ def build_context_package(
     被移出窗口的内容在同一次构建里进入摘要，不会这一轮两头都没有（§6.2 第 4
     条）。界面预览"本次会用到什么"时传 ``refresh=False``，只读不写。
 
+    无记忆对话（现界面名"临时对话"）只跳过会话上下文：会话与原始消息照常
+    持久化，最近原文窗口与记忆段照旧给出（设计方案 §13.1）。
+
     任何一步失败都退回"更少但正确"的结果，绝不阻断聊天主流程。
     """
     package = ContextPackage(owner_id=owner_id or "", conversation_id=conversation_id or "")
@@ -113,17 +118,16 @@ def build_context_package(
         return package
 
     # 没有会话（新会话首轮、界面按问题预览记忆）时仍然要给个人偏好与召回记忆；
-    # 临时对话不建会话上下文，但偏好与召回照旧（与既有聊天链路一致）。
-    conversation_usable = bool(conversation_id)
-    if conversation_usable:
-        try:
-            if conv_repo.conversation_is_temporary(session, conversation_id, owner_id):
-                package.temporary = True
-                conversation_usable = False
-        except Exception:
-            conversation_usable = False
-    if not conversation_usable:
+    # 无记忆对话（现界面名"临时对话"）不生成会话上下文，但会话与原始消息照常
+    # 持久化，最近原文窗口照读（设计方案 §13.1）。
+    if not conversation_id:
         return _finish(package, session, query, use_memory, project_id)
+    try:
+        package.temporary = bool(
+            conv_repo.conversation_is_temporary(session, conversation_id, owner_id)
+        )
+    except Exception:
+        package.temporary = False
 
     # 两份升序列表：全部消息（摘要与槽位的扫描面）与有回答的消息（进 Prompt 的
     # 最近原文窗口）。取消/失败的轮次没有助手回答，不该作为助手说法回放，但它
@@ -143,8 +147,9 @@ def build_context_package(
     boundary_id = history_rows[window.start_index].id if history_rows else None
     package.boundary_message_id = boundary_id
 
+    # 无记忆对话不生成会话上下文：不刷新、也不回读一条旧记录（它本来就没有）。
     context = None
-    if refresh:
+    if refresh and not package.temporary:
         try:
             context = session_context.refresh_session_context(
                 session,
@@ -156,7 +161,7 @@ def build_context_package(
             )
         except Exception:
             context = None
-    if context is None:
+    if context is None and not package.temporary:
         try:
             context = session_context.load_context(session, owner_id, conversation_id)
         except Exception:
@@ -164,11 +169,12 @@ def build_context_package(
     package.context = context
 
     # --- 无空洞不变量：分界之前的消息必须已被摘要覆盖（§6.2）---
+    # 无记忆对话本来就没有摘要，分界之前的消息缺失属设计如此，不算降级。
     positions = {m.id: i for i, m in enumerate(scan_rows)}
     boundary_pos = positions.get(boundary_id, -1) if boundary_id else -1
     covered_id = context.summarized_message_id if context is not None else None
     covered_pos = positions.get(covered_id, -1) if covered_id else -1
-    if window.start_index > 0 and covered_pos < boundary_pos - 1:
+    if not package.temporary and window.start_index > 0 and covered_pos < boundary_pos - 1:
         package.history_gap_due_to_degradation = True
         budget, _floor = session_context.recent_history_budget()
         # 摘要没跟上：宁可把窗口往前扩（多带几条原文），也不让历史在 Prompt 里
@@ -230,7 +236,33 @@ def _finish(
     return package
 
 
+def recent_boundary_message_id(
+    session: Optional[Session],
+    owner_id: Optional[str],
+    conversation_id: Optional[str],
+    *,
+    max_chars: Optional[int] = None,
+    min_turns: Optional[int] = None,
+) -> Optional[str]:
+    """只算最近原文窗口的分界消息 ID，不构造完整的包。
+
+    给"只要分界"的调用方（如 Agent 运行先取历史、再单独更新摘要）用，保证
+    它们与完整构建器用的是同一条规则（设计方案 §6.2）。
+    """
+    if session is None or not owner_id or not conversation_id:
+        return None
+    try:
+        rows = list_context_messages(session, conversation_id, owner_id)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    window = select_recent_window(rows, max_chars=max_chars, min_turns=min_turns)
+    return rows[window.start_index].id
+
+
 __all__ = [
     "ContextPackage",
     "build_context_package",
+    "recent_boundary_message_id",
 ]
