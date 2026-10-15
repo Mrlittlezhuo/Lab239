@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Sequence
@@ -664,9 +665,17 @@ def recent_history_budget() -> tuple:
 
 
 def message_cost(message) -> int:
-    """一条消息进 Prompt 的大致字符开销（用户问题 + 助手回答）。"""
-    query = getattr(message, "query", "") or ""
-    response = getattr(message, "response", "") or ""
+    """一条消息进 Prompt 的大致字符开销（用户问题 + 助手回答）。
+
+    既接受 ``MessageModel`` 记录，也接受遗留 ``filter_message`` 返回的字典，
+    便于三条聊天链路逐步切到同一份数据。
+    """
+    if isinstance(message, Mapping):
+        query = message.get("query") or ""
+        response = message.get("response") or ""
+    else:
+        query = getattr(message, "query", "") or ""
+        response = getattr(message, "response", "") or ""
     return len(query) + len(response) + 8
 
 
@@ -800,15 +809,16 @@ def refresh_session_context(
     force: bool = False,
     summarizer=None,
     *,
-    boundary_index: Optional[int] = None,
+    boundary_message_id: Optional[str] = None,
     messages: Optional[Sequence] = None,
 ) -> Optional[SessionContext]:
     """更新会话上下文（每轮构建 Prompt 前，或用户点"更新摘要"）。
 
     - 临时对话直接返回 None，不写入（设计方案 §4.4）；
-    - 分界由 ``boundary_index`` 给出（统一上下文构建器算出的最近原文窗口
-      起点）；没给就按字符预算自己算，绝不再用"最近 N 条保护窗口"定义边界
-      （设计方案 §6.2 / §18.2.9）；
+    - 分界由 ``boundary_message_id`` 给出：统一上下文构建器算出的最近原文
+      窗口第一条消息的 ID，该消息**及其之后**都留在窗口内，之前的必须进摘要。
+      用消息 ID 而不是下标，是因为摘要扫描看全部消息、窗口只看有回答的消息，
+      两者下标不同（设计方案 §6.2 / §18.2.9）。没给就按字符预算自己算；
     - 只摘要"游标之后、分界之前"的消息；摘要失败时**不推进游标**，也不覆盖
       旧摘要（设计方案 §7.5），窗口侧标记降级；
     - 槽位提取按 ``slots_scanned_count`` 增量扫描（设计方案 §4.9）；
@@ -832,7 +842,7 @@ def refresh_session_context(
             threshold=threshold,
             force=force,
             summarizer=summarizer,
-            boundary_index=boundary_index,
+            boundary_message_id=boundary_message_id,
             attempt=0,
         )
     except summary_repo.ContextVersionConflict:
@@ -847,7 +857,7 @@ def refresh_session_context(
                 threshold=threshold,
                 force=force,
                 summarizer=summarizer,
-                boundary_index=boundary_index,
+                boundary_message_id=boundary_message_id,
                 attempt=1,
             )
         except Exception:
@@ -865,7 +875,7 @@ def _refresh_once(
     threshold: int,
     force: bool,
     summarizer,
-    boundary_index: Optional[int],
+    boundary_message_id: Optional[str],
     attempt: int,
 ) -> Optional[SessionContext]:
     """``refresh_session_context`` 的一次尝试（乐观锁冲突时最多重试一次）。"""
@@ -879,10 +889,18 @@ def _refresh_once(
     # 同一个边界；没给就按字符预算自己算。threshold 只保留为兼容参数，不再
     # 定义保护窗口（设计方案 §6.2 / §18.2.9）。
     window = select_recent_window(rows)
-    if boundary_index is None:
-        boundary = window.start_index
+    if boundary_message_id:
+        boundary = None
+        for i, m in enumerate(rows):
+            if m.id == boundary_message_id:
+                boundary = i
+                break
+        if boundary is None:
+            # 分界消息不在本次读取的历史里（例如刚被删除）：退回自己算的边界，
+            # 宁可多摘要一条也不留空洞。
+            boundary = window.start_index
     else:
-        boundary = max(0, min(int(boundary_index), n))
+        boundary = window.start_index
 
     # --- 摘要起点：重置标记优先于全部历史（设计方案 §7.7 / M-09）---
     start_idx = 0

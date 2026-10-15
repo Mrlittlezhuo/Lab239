@@ -155,6 +155,29 @@ def list_messages(
     )
 
 
+def list_context_messages(
+    session: Session, conversation_id: str, owner_id: str
+) -> List[MessageModel]:
+    """自己会话里**有回答**的消息，按 create_time 正序，供统一上下文构建器。
+
+    与遗留的 ``filter_message`` 用同一个"有回答"判据（取消或失败的轮次没有
+    助手回答，不该作为助手说法回放），但返回 ORM 记录且是正序：最近原文窗口
+    要按字符预算从最新一轮往前取，摘要也要用同一份顺序（设计方案 §6.2）。
+    """
+    c = get_owned_conversation(session, conversation_id, owner_id)
+    if c is None:
+        return []
+    return (
+        session.query(MessageModel)
+        .filter(
+            MessageModel.conversation_id == conversation_id,
+            MessageModel.response != "",
+        )
+        .order_by(MessageModel.create_time.asc())
+        .all()
+    )
+
+
 __all__ = [
     "add_message",
     "update_message",
@@ -162,4 +185,5 @@ __all__ = [
     "feedback_message",
     "filter_message",
     "list_messages",
+    "list_context_messages",
 ]

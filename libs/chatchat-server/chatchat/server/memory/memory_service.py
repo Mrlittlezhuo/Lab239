@@ -611,16 +611,16 @@ def summarize_conversation(
     threshold: int = SUMMARY_THRESHOLD,
     summarizer: Optional[Callable[[str, str], str]] = None,
     force: bool = False,
-    boundary_index: Optional[int] = None,
+    boundary_message_id: Optional[str] = None,
 ) -> Optional[session_context.SessionContext]:
     """更新会话私有上下文（含较早历史的增量摘要）。
 
     第二期把"摘要"扩展为"会话上下文"：主题、目标、已确认事项、限制条件、
     待解决问题 + 摘要正文，实现见 :mod:`session_context`。
 
-    - 摘要与最近原文的分界由 ``boundary_index`` 给出；没给就按字符预算算
-      （设计方案 §6.2）。``threshold`` 只为兼容旧调用保留，**不再定义最近
-      轮次的保护窗口**；
+    - 摘要与最近原文的分界由 ``boundary_message_id`` 给出（最近原文窗口第一条
+      消息的 ID）；没给就按字符预算算（设计方案 §6.2）。``threshold`` 只为
+      兼容旧调用保留，**不再定义最近轮次的保护窗口**；
     - 只摘要"游标之后、分界之前"的较早消息；
     - 用户手工编辑过的结论不被更早的内容静默覆盖（设计方案 §4.2）；
     - 临时对话不写入（设计方案 §4.4）；
@@ -630,7 +630,7 @@ def summarize_conversation(
     """
     return session_context.refresh_session_context(
         session, owner_id, conversation_id, threshold=threshold, force=force,
-        summarizer=summarizer, boundary_index=boundary_index,
+        summarizer=summarizer, boundary_message_id=boundary_message_id,
     )
 
 
@@ -696,27 +696,21 @@ def memory_system_messages(
     返回 ``[{"role": "system", "content": ...}, ...]``；无内容时为空列表。
     所有失败都吞掉（返回已构造的部分），绝不阻断聊天主流程。
     """
-    msgs: List[dict] = []
-    try:
-        if use_memory and preferences_enabled(session, owner_id):
-            prefs = format_preferences(select_preferences(session, owner_id, query))
-            if prefs:
-                msgs.append({"role": "system", "content": prefs})
-        if use_memory:
-            segment, _used = cross_session_recall.build_recall_segment(
-                session, owner_id, query, conversation_id, project_id
-            )
-            if segment:
-                msgs.append({"role": "system", "content": segment})
-        short = build_short_term_context(
-            session, owner_id, conversation_id, query, threshold
-        )
-        if short:
-            msgs.append({"role": "system", "content": short})
-    except Exception:
-        # 记忆/摘要构造失败绝不阻断正常回答
-        pass
-    return msgs
+    # 统一上下文构建器：普通聊天、知识库对话与界面预览都从同一份数据取注入段，
+    # "界面显示的记忆"与"真正注入的记忆"不会再各说一套（设计方案 §18.2.2）。
+    # 本函数只读不写——摘要与槽位的更新由聊天链路在构建 Prompt 前显式触发。
+    from chatchat.server.memory import context_package
+
+    package = context_package.build_context_package(
+        session,
+        owner_id,
+        conversation_id,
+        query,
+        use_memory=use_memory,
+        project_id=project_id,
+        refresh=False,
+    )
+    return package.system_messages()
 
 
 __all__ = [
