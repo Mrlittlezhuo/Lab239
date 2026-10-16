@@ -26,6 +26,25 @@ export interface SessionContext {
   confirmed_saved: boolean[];
   /** 会话所在项目空间（第三期 §4.4）；项目范围记忆只在此会话内召回 */
   project_id: string | null;
+
+  // --- 上下文状态（第四期·第一阶段 B，设计方案 §18.3.7）---
+  // 全部可选：旧服务端不返回这些字段时界面照常工作。
+  /** 摘要来源：rule（规则摘要）/ llm（模型摘要）。两者必须区分显示。 */
+  summary_type?: "rule" | "llm";
+  /** 最近一次摘要更新结果；failed 时抽屉里要看得见 */
+  summary_status?: "idle" | "succeeded" | "failed";
+  summary_error?: string | null;
+  summary_updated_at?: string | null;
+  /** 摘要覆盖到哪条消息；与 `recent_boundary_message_id` 之间不留空洞（§6.2） */
+  summarized_message_id?: string | null;
+  /** 上下文乐观锁版本；历史回答的使用快照按它对上"当时是哪一版上下文" */
+  version?: number;
+  /** 旧摘要文本存在但覆盖位置不可确认，下次进入时安全重建 */
+  needs_rebuild?: boolean;
+  /** 最近原文窗口起点、轮数与是否被长度截断 */
+  recent_boundary_message_id?: string | null;
+  recent_window_size?: number;
+  recent_window_truncated?: boolean;
 }
 
 /** 只覆盖传入的槽位；列表按整组替换（与抽屉里的编辑框一致）。 */

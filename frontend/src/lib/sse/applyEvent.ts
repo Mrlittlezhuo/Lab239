@@ -150,6 +150,16 @@ export function applySseEvent(prev: UiMessage[], event: SseEvent): UiMessage[] {
       copy[idx] = { ...m, content, agent };
       break;
     }
+    case "memory":
+      // 本轮实际使用的上下文快照。流式期间会收到两帧（模型调用前的 prepared
+      // 与收尾时的最终状态），后一帧整体替换前一帧，状态文案因此总是跟随
+      // 最新状态，不会停在"上下文已准备"（第四期 §11.1 / §18.3.3）。
+      copy[idx] = {
+        ...m,
+        memoryUsage: event.manifest,
+        serverMessageId: event.messageId ?? m.serverMessageId,
+      };
+      break;
     case "reference":
       copy[idx] = {
         ...m,

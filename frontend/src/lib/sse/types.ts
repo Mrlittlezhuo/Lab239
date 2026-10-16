@@ -70,6 +70,57 @@ export interface ToolCallData {
   [key: string]: unknown;
 }
 
+/**
+ * 生成状态机（第四期设计方案 §11.1）。`queued` 只在请求确实排队后才出现，
+ * `partial / cancelled / failed` 表示这条回答没说完。
+ */
+export type GenerationStatus =
+  | "prepared"
+  | "queued"
+  | "started"
+  | "partial"
+  | "cancelled"
+  | "failed"
+  | "completed";
+
+/** 一条记忆的使用快照：内容也存下来，记忆后来被改删仍能还原当时注入了什么。 */
+export interface MemoryUsageEntry {
+  id?: string;
+  content?: string;
+  updated_at?: string;
+  /** 召回理由：界面要能解释"为什么这条被用上" */
+  reason?: string;
+  bucket?: string;
+  scope?: string;
+  score?: number;
+}
+
+/**
+ * 本轮实际使用的上下文快照（`memory_usage_manifest`，第四期 §11.1）。
+ * 与助手消息 metadata 里那份同源：流式期间来自 SSE 元数据帧，历史会话从
+ * 消息 metadata 恢复，两边显示的是同一份数据。
+ */
+export interface MemoryUsageManifest {
+  conversation_id?: string;
+  session_context_version?: number;
+  summary_through_message_id?: string | null;
+  summary_type?: string;
+  summary_status?: string;
+  history_boundary_message_id?: string | null;
+  recent_message_ids?: string[];
+  recent_chars?: number;
+  preferences?: MemoryUsageEntry[];
+  recalled_memories?: MemoryUsageEntry[];
+  memory_disabled_for_turn?: boolean;
+  degraded?: boolean;
+  budget_source?: string;
+  generation_status?: GenerationStatus;
+  model_started_at?: string | null;
+  model_finished_at?: string | null;
+  failure_stage?: string | null;
+  failure_reason?: string | null;
+}
+
 export type SseEvent =
   | {
       kind: "token";
@@ -109,6 +160,13 @@ export type SseEvent =
       references: ReferenceData[];
       docs?: string[];
       retrievalStatus?: string;
+      conversationId?: string;
+    }
+  | {
+      kind: "memory";
+      manifest: MemoryUsageManifest;
+      status?: GenerationStatus;
+      messageId?: string;
       conversationId?: string;
     }
   | { kind: "progress"; total: number; finished: number; doc?: string }

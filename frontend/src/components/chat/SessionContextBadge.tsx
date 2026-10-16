@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { useChatPrefs } from "@/stores/chatPrefs";
 
 /** 抽屉里的编辑表单；列表按"一行一条"编辑（与服务端按整组替换一致）。 */
@@ -394,6 +395,40 @@ export function SessionContextBadge({
                     <p className="mt-1 text-xs text-muted-foreground">
                       已覆盖 {data.summarized_count} 条较早消息；最近的关键消息
                       始终以完整原文参与回答。
+                    </p>
+                  )}
+                  {/* 上下文状态（第四期 §18.3.7）：摘要类型、覆盖位置与执行状态。
+                      模型摘要尚未启用时也必须如实标成"规则摘要"，不能显示成
+                      "AI 总结"；摘要失败要看得见，否则用户以为历史已被压缩。 */}
+                  {/* 整句拼成一个字符串再渲染：分段插值会把文案切成多个文本节点，
+                      用户复制时断行，测试也没法按整句核对。 */}
+                  <p
+                    className={cn(
+                      "mt-1 text-xs",
+                      data.summary_status === "failed"
+                        ? "text-destructive"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {`${data.summary_type === "llm" ? "模型摘要" : "规则摘要"} · 版本 v${
+                      data.version ?? 0
+                    } · ${
+                      data.summary_status === "failed"
+                        ? `最近一次摘要更新失败${
+                            data.summary_error ? `：${data.summary_error}` : ""
+                          }`
+                        : data.summary_updated_at
+                          ? `最近更新于 ${data.summary_updated_at}`
+                          : "尚未生成过摘要"
+                    }`}
+                  </p>
+                  {data.recent_boundary_message_id && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {`摘要覆盖到消息 ${data.summarized_message_id ?? "（未知）"}；最近 ${
+                        data.recent_window_size ?? 0
+                      } 轮以完整原文参与回答${
+                        data.recent_window_truncated ? "（已按长度截断）" : ""
+                      }。`}
                     </p>
                   )}
                 </div>

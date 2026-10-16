@@ -13,6 +13,7 @@ import { applySseEvent } from "@/lib/sse/applyEvent";
 import type {
   AgentPlanData,
   AgentStepData,
+  MemoryUsageManifest,
   ReferenceData,
   RouteResultData,
   SseEvent,
@@ -51,6 +52,11 @@ export interface UiMessage {
   toolCalls: UiToolCall[];
   agent?: UiAgentRun;
   references?: ReferenceData[];
+  /**
+   * 本轮实际使用的上下文快照（第四期 §11.1）。流式期间来自 SSE 元数据帧，
+   * 刷新后从消息 metadata 恢复——两边同源，历史回答也能看到"当时用了什么"。
+   */
+  memoryUsage?: MemoryUsageManifest;
   error?: string;
   serverMessageId?: string;
   feedbackScore?: number;
@@ -97,12 +103,20 @@ export function historyToUiMessages(records: MessageRecord[]): UiMessage[] {
       : Array.isArray(r.metadata?.references)
         ? (r.metadata.references as ReferenceData[])
         : undefined;
+    // 本轮使用快照：历史回答也要能显示"当时实际用了哪些记忆"。它存在消息
+    // metadata 里，与当时下发给前端的元数据帧同源（第四期 §11.2）。
+    const rawUsage = r.metadata?.memory_usage_manifest;
+    const usage =
+      rawUsage && typeof rawUsage === "object"
+        ? (rawUsage as MemoryUsageManifest)
+        : undefined;
     out.push({
       key: r.id,
       role: "assistant",
       content: r.response ?? "",
       toolCalls: [],
       references: refs,
+      memoryUsage: usage,
       serverMessageId: r.id,
       feedbackScore: r.feedback_score ?? -1,
     });

@@ -2,6 +2,8 @@ import type {
   AgentEventType,
   AgentPlanData,
   AgentStepData,
+  GenerationStatus,
+  MemoryUsageManifest,
   ReferenceData,
   RouteResultData,
   SseEvent,
@@ -10,8 +12,8 @@ import type {
 
 /**
  * chatchat SSE 块 JSON → 判别联合。判定顺序关键：
- * 裸 error 块 → AgentRunEvent/Result → RouteResult → 引用块 →
- * recreate 进度 → status -1 错误 → status 7/8 工具 → token。
+ * 裸 error 块 → AgentRunEvent/Result → RouteResult → MemoryUsageEvent →
+ * 引用块 → recreate 进度 → status -1 错误 → status 7/8 工具 → token。
  */
 export function classifyFrame(payload: string): SseEvent {
   let chunk: Record<string, unknown>;
@@ -72,6 +74,22 @@ export function classifyFrame(payload: string): SseEvent {
         typeof chunk.execution_mode_label === "string"
           ? chunk.execution_mode_label
           : undefined,
+      conversationId,
+    };
+  }
+
+  // 本轮记忆使用快照（MemoryUsageEvent）：正文为空，必须**在 token 兜底之前**
+  // 识别，否则元数据会被当成一个空 token 甚至污染回答（第四期 §11.4 / §18.3.11）。
+  if (className === "MemoryUsageEvent" || chunk.memory_usage_manifest !== undefined) {
+    return {
+      kind: "memory",
+      manifest: (chunk.memory_usage_manifest ?? {}) as MemoryUsageManifest,
+      status:
+        typeof chunk.generation_status === "string"
+          ? (chunk.generation_status as GenerationStatus)
+          : undefined,
+      messageId:
+        typeof chunk.message_id === "string" ? chunk.message_id : undefined,
       conversationId,
     };
   }

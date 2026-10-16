@@ -190,4 +190,42 @@ describe("classifyFrame", () => {
     );
     expect(e).toMatchObject({ kind: "agent", event: "run_completed", content: "最终答案", conversationId: "c1" });
   });
+
+  // 第四期 §11.4 / §18.3.11：本轮记忆使用快照是元数据事件，正文为空。
+  // 必须在 token 兜底之前识别，否则旧逻辑会把它当成一个空 token。
+  it("MemoryUsageEvent → memory（不当 token）", () => {
+    const e = classifyFrame(
+      chunk({
+        object: "chat.completion.chunk",
+        class_name: "MemoryUsageEvent",
+        message_id: "m1",
+        status: null,
+        choices: [{ delta: { content: "" } }],
+        generation_status: "prepared",
+        memory_usage_manifest: {
+          generation_status: "prepared",
+          recent_message_ids: ["a", "b"],
+          preferences: [{ id: "p1", content: "回答统一使用中文" }],
+        },
+        conversation_id: "c1",
+      }),
+    );
+    expect(e).toMatchObject({
+      kind: "memory",
+      status: "prepared",
+      messageId: "m1",
+      conversationId: "c1",
+      manifest: { recent_message_ids: ["a", "b"] },
+    });
+  });
+
+  it("只有 memory_usage_manifest 键（无 class_name）也识别为元数据", () => {
+    const e = classifyFrame(
+      chunk({ memory_usage_manifest: { generation_status: "completed" } }),
+    );
+    expect(e).toMatchObject({
+      kind: "memory",
+      manifest: { generation_status: "completed" },
+    });
+  });
 });

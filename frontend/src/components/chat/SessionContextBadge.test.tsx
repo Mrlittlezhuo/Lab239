@@ -51,6 +51,17 @@ const CONTEXT = {
   // 第三期：第一条已保存为跨会话记忆，第二条还没有
   confirmed_saved: [true, false],
   project_id: null,
+  // 第四期·第一阶段 B：上下文状态（§18.3.7）
+  summary_type: "rule",
+  summary_status: "succeeded",
+  summary_error: null,
+  summary_updated_at: "2026-10-16T10:00:00",
+  summarized_message_id: "msg-100",
+  version: 7,
+  needs_rebuild: false,
+  recent_boundary_message_id: "msg-101",
+  recent_window_size: 5,
+  recent_window_truncated: false,
 };
 
 function renderBadge(conversationId?: string, conversationKey = "c1") {
@@ -160,6 +171,33 @@ describe("SessionContextBadge", () => {
     );
   });
 
+  it("抽屉显示摘要类型、覆盖位置与执行状态（第四期 §18.3.7）", async () => {
+    renderBadge("c1");
+    await openDrawer();
+    // 状态行来自上下文接口，抽屉先显示"正在读取…"，因此必须等数据到位。
+    // 模型摘要尚未启用：必须显示"规则摘要"，不能显示成"AI 总结"。
+    expect(
+      await screen.findByText(/规则摘要 · 版本 v7 · 最近更新于/),
+    ).toBeTruthy();
+    // 摘要覆盖到哪、原文窗口从哪开始：两段之间不留空洞（§6.2）
+    expect(
+      screen.getByText(/摘要覆盖到消息 msg-100；最近 5 轮以完整原文参与回答/),
+    ).toBeTruthy();
+  });
+
+  it("摘要失败时状态与原因可见，不假装历史已被压缩", async () => {
+    api.getSessionContext.mockResolvedValue({
+      ...CONTEXT,
+      summary_status: "failed",
+      summary_error: "模型不可用",
+    });
+    renderBadge("c1");
+    await openDrawer();
+    expect(
+      await screen.findByText(/最近一次摘要更新失败：模型不可用/),
+    ).toBeTruthy();
+  });
+
   it("临时对话：徽章说明不保存上下文，抽屉里没有可编辑内容（P2-10）", async () => {
     api.getSessionContext.mockResolvedValue({
       ...CONTEXT,
@@ -171,6 +209,13 @@ describe("SessionContextBadge", () => {
       open_questions: [],
       summary: "",
       summarized_count: 0,
+      // 无记忆对话没有摘要，也没有分界可显示
+      summary_status: "idle",
+      summary_updated_at: null,
+      summarized_message_id: null,
+      version: 0,
+      recent_boundary_message_id: null,
+      recent_window_size: 0,
     });
     renderBadge("c1");
     await waitFor(() =>

@@ -41,6 +41,29 @@ describe("historyToUiMessages", () => {
     expect(msgs[1].references).toEqual([{ file_name: "a.pdf" }]);
   });
 
+  it("metadata.memory_usage_manifest 恢复为本轮使用快照（第四期 §11.2）", () => {
+    const msgs = historyToUiMessages([
+      record({
+        metadata: {
+          generation_status: "cancelled",
+          memory_usage_manifest: {
+            generation_status: "cancelled",
+            preferences: [{ id: "p1", content: "默认使用中文回答" }],
+          },
+        },
+      }),
+    ]);
+    expect(msgs[1].memoryUsage).toMatchObject({
+      generation_status: "cancelled",
+      preferences: [{ id: "p1", content: "默认使用中文回答" }],
+    });
+  });
+
+  it("没有快照的旧历史不会凭空造出一份使用记录", () => {
+    const msgs = historyToUiMessages([record({ metadata: {} })]);
+    expect(msgs[1].memoryUsage).toBeUndefined();
+  });
+
   it("空 response 也保留 assistant 占位（失败轮次）", () => {
     const msgs = historyToUiMessages([record({ response: "" })]);
     expect(msgs[1].content).toBe("");

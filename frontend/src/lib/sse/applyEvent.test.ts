@@ -288,3 +288,47 @@ describe("applySseEvent Agent 正文预览", () => {
     expect(msg.content).toBe("");
   });
 });
+
+describe("applySseEvent 本轮使用快照", () => {
+  const usageFrame = (status: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      object: "chat.completion.chunk",
+      class_name: "MemoryUsageEvent",
+      message_id: "m1",
+      status: null,
+      choices: [{ delta: { content: "" } }],
+      generation_status: status,
+      memory_usage_manifest: { generation_status: status, ...extra },
+    });
+
+  it("元数据帧不污染正文，快照挂到当前回答", () => {
+    const msg = run([
+      usageFrame("prepared", {
+        preferences: [{ id: "p1", content: "回答统一使用中文" }],
+        recalled_memories: [{ id: "m9", content: "项目采用 LangGraph", reason: "与当前问题相关" }],
+      }),
+      delta("你好", 2),
+    ]);
+    expect(msg.content).toBe("你好");
+    expect(msg.memoryUsage?.preferences?.[0]?.content).toBe("回答统一使用中文");
+    expect(msg.memoryUsage?.recalled_memories?.[0]?.reason).toBe("与当前问题相关");
+    expect(msg.memoryUsage?.generation_status).toBe("prepared");
+  });
+
+  it("收尾帧整体替换：文案跟随最终状态，不会停在“上下文已准备”", () => {
+    const msg = run([
+      usageFrame("prepared"),
+      delta("你好", 2),
+      usageFrame("cancelled", { failure_stage: "streaming" }),
+    ]);
+    expect(msg.memoryUsage?.generation_status).toBe("cancelled");
+    expect(msg.memoryUsage?.failure_stage).toBe("streaming");
+    expect(msg.content).toBe("你好");
+  });
+
+  it("快照带 message_id 时补上服务端消息 ID（历史恢复与反馈要用）", () => {
+    const msg = run([usageFrame("completed", { model_started_at: "2026-10-16T10:00:00" })]);
+    expect(msg.serverMessageId).toBe("m1");
+    expect(msg.memoryUsage?.model_started_at).toBe("2026-10-16T10:00:00");
+  });
+});
