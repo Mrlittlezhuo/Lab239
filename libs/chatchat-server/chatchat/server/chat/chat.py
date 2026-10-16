@@ -49,7 +49,7 @@ from langchain_chatchat.agent_toolkits.all_tools.tool import BaseToolOutput
 from langchain_chatchat.agent_toolkits.all_tools.web_browser_tool import (
     WebBrowserToolOutput,
 )
-from chatchat.server.memory import memory_service
+from chatchat.server.memory import memory_service, usage_manifest
 from chatchat.server.utils import (
     MsgType,
     get_ChatOpenAI,
@@ -250,7 +250,9 @@ def create_models_chains(
 
     full_chain = {"chat_input": lambda x: x["input"]} | agent_executor
 
-    return full_chain, agent_executor
+    # 第三个返回值是本轮的统一上下文：调用方要用它生成"本轮实际使用了什么"
+    # 的快照（memory_usage_manifest），必须在模型调用前拿到（设计方案 §11.1）。
+    return full_chain, agent_executor, package
 
 
 async def chat(
@@ -280,6 +282,8 @@ async def chat(
     async def chat_iterator_event() -> AsyncIterable[OpenAIChatOutput]:
         current_message_id = message_id
         mcp_client = None
+        #: 本轮使用记录与半截文本的统一收尾（见 usage_manifest.TurnRecorder）
+        recorder = None
         try:
             callbacks = []
 
@@ -334,7 +338,7 @@ async def chat(
                     # "Attempted to exit cancel scope in a different task"。
                     mcp_client = await PlatformToolsRunnable.create_mcp_client(
                         mcp_connections)
-            full_chain, agent_executor = create_models_chains(
+            full_chain, agent_executor, package = create_models_chains(
                 prompts=prompts,
                 models=models,
                 conversation_id=conversation_id,
@@ -349,6 +353,32 @@ async def chat(
                 mcp_client=mcp_client,
                 use_memory=use_memory,
             )
+            # 本轮使用记录（memory_usage_manifest）：必须在模型调用**之前**写进
+            # 助手消息 metadata，并作为独立 SSE 元数据事件发给前端。回答后再
+            # 查一遍是补不回来的——记忆可能已被改删、摘要版本也已推进
+            # （设计方案 §11.1 / §18.3.1-2）。事件正文保持空串，旧客户端不会
+            # 把它拼进回答（§11.4）。
+            recorder = usage_manifest.TurnRecorder(
+                message_id=current_message_id,
+                owner_id=owner_id,
+                manifest=usage_manifest.build_usage_manifest(
+                    package, use_memory=use_memory
+                ),
+                session=session,
+            )
+            prepared = recorder.prepare()
+            if prepared is not None:
+                yield OpenAIChatOutput(
+                    id=f"memory{uuid.uuid4()}",
+                    object="chat.completion.chunk",
+                    content="",
+                    role="assistant",
+                    model=models["llm_model"].model_name,
+                    **usage_manifest.manifest_payload(
+                        prepared, current_message_id
+                    ),
+                ).model_dump_json()
+            recorder.started()
             chat_iterator = full_chain.invoke({
                 "input": query
             })
@@ -435,6 +465,9 @@ async def chat(
                 elif isinstance(item, PlatformToolsLLMStatus):
 
                     data["text"] = item.text
+                    # 累加可见文本：用户中途停止或连接断掉时，这段半截回答
+                    # 必须能落库，否则刷新后回答变成空串（设计方案 §11.3）
+                    recorder.note(item.text)
 
                 ret = OpenAIChatOutput(
                     id=f"chat{uuid.uuid4()}",
@@ -450,24 +483,54 @@ async def chat(
                 )
                 yield ret.model_dump_json()
 
-            update_message(
-                session=session,
-                message_id=current_message_id,
-                owner_id=owner_id,
-                response=agent_executor.history[-1].get("content"),
-                metadata=_round_metadata(agent_executor, round_failed),
+            # 正常收尾：回答文本与本轮使用记录一起**合并**写入 metadata，
+            # 失败轮不写 intermediate_steps 的既有规则保留（见 _round_metadata）。
+            final_text = (
+                agent_executor.history[-1].get("content")
+                if agent_executor.history
+                else None
             )
-             
+            recorder.finish(
+                "completed",
+                response=final_text,
+                extra_metadata=_round_metadata(agent_executor, round_failed),
+            )
+            # 最终状态再发一帧：前端的"本轮实际使用了…"文案要跟随最终状态，
+            # 非流式消费者也从最后一帧取 manifest 与最终生成状态（§18.3.4/12）
+            if recorder.manifest is not None:
+                yield OpenAIChatOutput(
+                    id=f"memory{uuid.uuid4()}",
+                    object="chat.completion.chunk",
+                    content="",
+                    role="assistant",
+                    model=models["llm_model"].model_name,
+                    **usage_manifest.manifest_payload(
+                        recorder.manifest, current_message_id
+                    ),
+                ).model_dump_json()
+
         except asyncio.exceptions.CancelledError:
             logger.warning("streaming progress has been interrupted by user.")
+            # 用户停止：已经生成的半截回答照常保存并标记 cancelled（§11.3）
+            if recorder is not None:
+                recorder.finish("cancelled", failure_stage="streaming")
             return
         except Exception as e:
             logger.error(f"error in chat: {e}")
+            if recorder is not None:
+                recorder.finish(
+                    "failed", failure_stage="generation", failure_reason=str(e)
+                )
             # 与正常 chunk 保持一致，统一输出 JSON 字符串（之前输出 dict，
             # SSE 与非流式 json.loads 两种消费方式都无法正确处理）。
             yield json.dumps({"error": str(e)}, ensure_ascii=False)
             return
         finally:
+            # 客户端断流走的是 GeneratorExit，不经过上面两个 except：这里兜底，
+            # 保证半截回答与生成状态一定落库（§18.3.8 要求取消、异常和 finally
+            # 路径复用同一套聚合逻辑）。
+            if recorder is not None and not recorder.finalized:
+                recorder.finish("cancelled", failure_stage="streaming")
             # 每条消息一套 MCP 连接：不关就是每轮常驻一个 server 子进程
             # （浏览器类 server 还会带起一整串 Chrome）。放在 finally 才能覆盖
             # 正常收尾、异常、客户端断流（GeneratorExit/CancelledError）三种出口。
@@ -507,4 +570,14 @@ async def chat(
             ret.model = frames[-1].get("model", ret.model)
             ret.created = frames[-1].get("created", ret.created)
 
-        return ret.model_dump()
+        # 非流式最终响应块必须携带与助手消息同源的 manifest 与最终生成状态，
+        # 不能回答后重新查询推算（设计方案 §11.4 / §18.3.12）。取最后一帧，
+        # 也就是收尾时补发的那一帧，状态才是最终的。
+        result = ret.model_dump()
+        for frame in frames:
+            if frame.get("class_name") == "MemoryUsageEvent":
+                result[usage_manifest.MANIFEST_KEY] = frame.get(
+                    usage_manifest.MANIFEST_KEY
+                )
+                result[usage_manifest.STATUS_KEY] = frame.get(usage_manifest.STATUS_KEY)
+        return result

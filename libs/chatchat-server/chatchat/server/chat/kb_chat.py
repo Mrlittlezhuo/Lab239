@@ -22,7 +22,11 @@ from chatchat.server.db.repository import (
     update_message,
 )
 from chatchat.server.knowledge_base.temp_files import assert_temp_owner
-from chatchat.server.memory import context_package, memory_service
+from chatchat.server.memory import (
+    context_package,
+    memory_service,
+    usage_manifest,
+)
 from sqlalchemy.orm import Session
 from chatchat.server.agent.tools_factory.search_internet import search_engine
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
@@ -154,6 +158,11 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             "references": [],
             "docs": [],
         }
+        #: 本轮使用记录与半截回答的统一收尾（见 usage_manifest.TurnRecorder）
+        recorder = None
+        answer = ""
+        #: 失败发生在哪一段：构造上下文 / 检索 / 模型生成
+        failure_stage = "context"
         try:
             nonlocal history, prompt_name, max_tokens
 
@@ -192,6 +201,32 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 history.append(History(role="user", content=query_text))
                 history.append(History(role="assistant", content=response_text))
 
+            # 本轮使用记录：与模型输入同一份数据，在检索和模型调用之前落库，
+            # 并作为独立 SSE 元数据事件发给前端（正文空串，旧客户端不会拼进
+            # 回答；设计方案 §11.1 / §11.4 / §18.3.1-2）。
+            recorder = usage_manifest.TurnRecorder(
+                message_id=message_id,
+                owner_id=user_id,
+                manifest=usage_manifest.build_usage_manifest(
+                    package, use_memory=use_memory
+                ),
+                session=session,
+            )
+            prepared = recorder.prepare()
+            if prepared is not None:
+                # manifest_payload 里已带 message_id，不再重复传
+                yield OpenAIChatOutput(
+                    id=f"memory{uuid.uuid4()}",
+                    object="chat.completion.chunk",
+                    content="",
+                    role="assistant",
+                    model=model,
+                    **usage_manifest.manifest_payload(prepared, message_id),
+                ).model_dump_json()
+
+            # 失败发生在哪个阶段要分开记：检索失败与模型生成失败对用户的
+            # 解释完全不同（设计方案 §11.1 要求分别记录 failure_stage）
+            failure_stage = "retrieval"
             if mode == "local_kb":
                 if score_threshold > 1:
                     raise ValueError("永久知识库的相关度阈值必须在 0 到 1 之间")
@@ -269,12 +304,10 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             # ))
             # rich.print(docs)
             if return_direct:
-                update_message(
-                    session=session,
-                    message_id=message_id,
-                    owner_id=user_id,
-                    response="",
-                    metadata=reference_metadata,
+                # 没有走模型：manifest 仍然保留，但 model_started_at 为空，
+                # 界面据此显示"上下文已准备，但模型未开始生成"（§11.1）
+                recorder.finish(
+                    "completed", extra_metadata=reference_metadata
                 )
                 yield OpenAIChatOutput(
                     id=f"chat{uuid.uuid4()}",
@@ -365,6 +398,8 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
             chain = chat_prompt | llm
 
             # Begin a task that runs in the background.
+            failure_stage = "generation"
+            recorder.started()
             task = asyncio.create_task(wrap_done(
                 chain.ainvoke({"context": context, "question": query}),
                 callback.done),
@@ -377,7 +412,6 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 reference_metadata["docs"] = source_documents
 
             if stream:
-                answer = ""
                 # yield documents first
                 ret = OpenAIChatOutput(
                     id=f"chat{uuid.uuid4()}",
@@ -395,6 +429,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
 
                 async for token in callback.aiter():
                     answer += token
+                    recorder.note(token)
                     ret = OpenAIChatOutput(
                         id=f"chat{uuid.uuid4()}",
                         object="chat.completion.chunk",
@@ -405,49 +440,80 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                         conversation_id=conversation_id,
                     )
                     yield ret.model_dump_json()
+                await task
+                recorder.finish(
+                    "completed", response=answer, extra_metadata=reference_metadata
+                )
+                # 收尾状态再发一帧：前端"本轮实际使用了…"的文案要跟随最终状态
+                if recorder.manifest is not None:
+                    yield OpenAIChatOutput(
+                        id=f"memory{uuid.uuid4()}",
+                        object="chat.completion.chunk",
+                        content="",
+                        role="assistant",
+                        model=model,
+                        **usage_manifest.manifest_payload(
+                            recorder.manifest, message_id
+                        ),
+                    ).model_dump_json()
             else:
-                answer = ""
                 async for token in callback.aiter():
                     answer += token
+                    recorder.note(token)
+                await task
+                recorder.finish(
+                    "completed", response=answer, extra_metadata=reference_metadata
+                )
+                # 非流式的最终响应块必须带与助手消息同源的 manifest 与最终生成
+                # 状态，不能回答后重新查询推算（设计方案 §11.4 / §18.3.12）
+                extras = (
+                    usage_manifest.manifest_payload(recorder.manifest, message_id)
+                    if recorder.manifest is not None
+                    else {}
+                )
                 ret = OpenAIChatOutput(
                     id=f"chat{uuid.uuid4()}",
                     object="chat.completion",
                     content=answer,
                     role="assistant",
                     model=model,
-                    message_id=message_id,
                     conversation_id=conversation_id,
                     docs=source_documents,
                     references=references,
                     retrieval_status=reference_metadata["retrieval_status"],
+                    **extras,  # 含 message_id，不能再单独传，否则关键字重复
                 )
                 yield ret.model_dump_json()
-            await task
-            update_message(
-                session=session,
-                message_id=message_id,
-                owner_id=user_id,
-                response=answer,
-                metadata=reference_metadata,
-            )
         except asyncio.exceptions.CancelledError:
             logger.warning("streaming progress has been interrupted by user.")
+            # 用户停止：已经生成的半截回答照常保存并标记 cancelled（§11.3）
+            if recorder is not None:
+                recorder.finish("cancelled", failure_stage=failure_stage)
             return
         except Exception as e:
             logger.error(f"error in knowledge chat: {e}")
             reference_metadata.update(
                 {"retrieval_status": "error", "error": str(e)}
             )
-            try:
-                update_message(
-                    session=session,
-                    message_id=message_id,
-                    owner_id=user_id,
-                    response="",
-                    metadata=reference_metadata,
+            if recorder is not None:
+                recorder.finish(
+                    "failed",
+                    response=answer or None,
+                    failure_stage=failure_stage,
+                    failure_reason=str(e),
+                    extra_metadata=reference_metadata,
                 )
-            except Exception:
-                pass
+            else:
+                try:
+                    update_message(
+                        session=session,
+                        message_id=message_id,
+                        owner_id=user_id,
+                        response="",
+                        metadata=reference_metadata,
+                    )
+                except Exception:
+                    pass
             yield OpenAIChatOutput(
                 id=f"chat{uuid.uuid4()}",
                 object="chat.completion.chunk",
@@ -461,6 +527,11 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 conversation_id=conversation_id,
             ).model_dump_json()
             return
+        finally:
+            # 客户端断流走 GeneratorExit，不经过上面两个 except：兜底保存半截
+            # 回答与状态（§18.3.8 要求取消、异常、finally 复用同一套聚合逻辑）
+            if recorder is not None and not recorder.finalized:
+                recorder.finish("cancelled", failure_stage=failure_stage)
 
     if stream:
         return EventSourceResponse(knowledge_base_chat_iterator())

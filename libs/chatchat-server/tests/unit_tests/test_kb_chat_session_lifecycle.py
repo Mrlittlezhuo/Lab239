@@ -380,6 +380,20 @@ def _assert_no_error_chunks(chunks):
         assert not chunk.get("error"), f"SSE 负载含错误：{chunk.get('error')}"
 
 
+def _content_chunks(chunks):
+    """滤掉本轮使用记录元数据帧，只留内容帧。
+
+    元数据帧的 ``content`` 恒为空串，旧客户端不会把它拼进回答
+    （设计方案 §11.4）；这里显式区分，是为了让"首包是检索结果包"这类断言
+    仍然按内容帧成立，同时另处单独钉住元数据帧本身。
+    """
+    return [c for c in chunks if c.get("class_name") != "MemoryUsageEvent"]
+
+
+def _manifest_chunks(chunks):
+    return [c for c in chunks if c.get("class_name") == "MemoryUsageEvent"]
+
+
 # ---------------------------------------------------------------------------
 # 流式路径：会话拆除后生成器仍正常工作（核心回归）
 # ---------------------------------------------------------------------------
@@ -395,11 +409,23 @@ def test_streaming_kb_chat_persists_reply_after_session_close(client, kbchat_app
     assert chunks, "未收到任何 SSE 数据负载"
     _assert_no_error_chunks(chunks)
 
+    # 本轮使用记录元数据帧排在最前：manifest 必须在模型调用之前发出并落库
+    # （设计方案 §18.3.1-2），正文恒为空串，旧客户端不会拼进回答（§11.4）。
+    manifests = _manifest_chunks(chunks)
+    assert manifests, "未收到本轮使用记录（memory_usage_manifest）元数据帧"
+    delta = (manifests[0].get("choices") or [{}])[0].get("delta") or {}
+    assert delta.get("content") == "", "元数据帧正文必须为空，旧客户端才不会拼进回答"
+    assert manifests[0]["generation_status"] in ("prepared", "started")
+    assert manifests[0]["memory_usage_manifest"]["conversation_id"]
+
     # 首包为检索结果包（delta.content 为空），其后为逐 token 流式 chunk
-    first = chunks[0]
+    first = _content_chunks(chunks)[0]
     assert first.get("retrieval_status") == "matched"
-    answer = "".join(_chunk_content(c) for c in chunks)
+    answer = "".join(_chunk_content(c) for c in _content_chunks(chunks))
     assert answer == FAKE_LLM_ANSWER
+
+    # 收尾状态也发了一帧，前端"本轮实际使用了…"的文案据此跟随最终状态
+    assert manifests[-1]["generation_status"] == "completed"
 
     # 助手回复完整持久化，归属当前用户会话
     s = temp_user_db["Session"]()
@@ -408,6 +434,13 @@ def test_streaming_kb_chat_persists_reply_after_session_close(client, kbchat_app
         assert len(msgs) == 1
         m = msgs[0]
         assert m.response == FAKE_LLM_ANSWER
+        # metadata 按字段合并：使用记录与检索引用共存，谁都不能覆盖谁（§11.2）
+        meta = m.meta_data or {}
+        assert meta.get("generation_status") == "completed"
+        assert (
+            meta.get("memory_usage_manifest") or {}
+        ).get("generation_status") == "completed"
+        assert meta.get("retrieval_status") == "matched"
         conv = s.get(ConversationModel, m.conversation_id)
         assert conv is not None
         assert conv.owner_id == uid
@@ -498,6 +531,12 @@ def test_non_stream_kb_chat_returns_and_persists_full_reply(client, kbchat_app, 
     assert not payload.get("error"), f"响应含错误：{payload.get('error')}"
     assert _chunk_content(payload) == FAKE_LLM_ANSWER
     assert payload.get("retrieval_status") == "matched"
+    # 非流式最终响应块必须携带与助手消息同源的 manifest 与最终生成状态，
+    # 不能回答后重新查询推算（设计方案 §11.4 / §18.3.12）
+    assert payload.get("generation_status") == "completed"
+    assert (
+        payload.get("memory_usage_manifest") or {}
+    ).get("generation_status") == "completed"
 
     s = temp_user_db["Session"]()
     try:
@@ -527,9 +566,10 @@ def test_return_direct_persists_metadata_without_detached_error(client, kbchat_a
         assert resp.status_code == 200
         chunks = _iter_sse_chunks(resp)
 
-    assert len(chunks) == 1
-    chunk = chunks[0]
-    _assert_no_error_chunks([chunk])
+    contents = _content_chunks(chunks)
+    assert len(contents) == 1
+    chunk = contents[0]
+    _assert_no_error_chunks(chunks)
     assert chunk.get("retrieval_status") == "matched"
     assert chunk.get("object") == "chat.completion"
 
@@ -543,6 +583,11 @@ def test_return_direct_persists_metadata_without_detached_error(client, kbchat_a
         assert meta.get("retrieval_status") == "matched"
         assert meta.get("mode") == "local_kb"
         assert meta.get("knowledge_base") == TEST_KB_NAME
+        # return_direct 没走模型：manifest 仍然保留，但 model_started_at 必须
+        # 为空，界面据此显示"上下文已准备，但模型未开始生成"（设计方案 §11.1）
+        manifest = meta.get("memory_usage_manifest") or {}
+        assert manifest.get("model_started_at") is None
+        assert manifest.get("generation_status") == "completed"
         conv = s.get(ConversationModel, m.conversation_id)
         assert conv is not None
         assert conv.owner_id == uid

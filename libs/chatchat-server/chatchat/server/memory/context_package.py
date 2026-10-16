@@ -62,6 +62,10 @@ class ContextPackage:
     #: 本次使用的个人偏好 / 召回记忆 ID 快照（生成使用清单直接复用）
     preference_ids: List[str] = field(default_factory=list)
     recalled_memory_ids: List[str] = field(default_factory=list)
+    #: 上面那些 ID 对应的对象本身：manifest 还要记内容与召回理由（§11.1），
+    #: 只存 ID 的话，记忆被改或被删之后历史回答"当时用了什么"就补不回来了
+    preferences: List = field(default_factory=list)
+    recalled: List = field(default_factory=list)
     #: 记忆注入段（个人偏好段 + 跨会话召回段），已按开关裁剪
     memory_segments: List[str] = field(default_factory=list)
     #: 会话上下文段
@@ -211,6 +215,7 @@ def _finish(
     try:
         if use_memory and memory_service.preferences_enabled(session, owner_id):
             prefs = memory_service.select_preferences(session, owner_id, query)
+            package.preferences = list(prefs)
             package.preference_ids = [p.id for p in prefs if getattr(p, "id", None)]
             segment = memory_service.format_preferences(prefs)
             if segment:
@@ -219,6 +224,7 @@ def _finish(
             recall_segment, used = cross_session_recall.build_recall_segment(
                 session, owner_id, query, conversation_id, project_id
             )
+            package.recalled = list(used)
             package.recalled_memory_ids = [
                 r.memory.id for r in used if getattr(r.memory, "id", None)
             ]

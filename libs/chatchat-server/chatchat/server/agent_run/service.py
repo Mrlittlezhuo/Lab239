@@ -27,8 +27,8 @@ from chatchat.server.agent_run.planner import LLMPlanner
 from chatchat.server.agent_run.runtime import create_agent_runtime, runtime_name
 from chatchat.server.api_server.api_schemas import OpenAIChatOutput
 from chatchat.server.db.repository import agent_run_repository as agent_run_repo
-from chatchat.server.db.repository import update_message
-from chatchat.server.memory import context_package, memory_service
+from chatchat.server.db.repository import merge_message_metadata
+from chatchat.server.memory import context_package, memory_service, usage_manifest
 from chatchat.server.utils import get_ChatOpenAI, get_default_llm, get_tool
 from chatchat.settings import Settings
 from chatchat.utils import build_logger
@@ -204,21 +204,20 @@ def _build_history(
     return _history_from_messages(package.recent_messages)
 
 
-def _build_memory_messages(
+def _auto_extract(
     session: Session,
     owner_id: str,
     query: str,
     conversation_id: str,
     message_id: Optional[str],
-    use_memory: bool = True,
-) -> List[Dict[str, str]]:
-    """沿用现有记忆机制：自动提取 + 会话摘要 + 记忆注入；失败不阻断运行。
+) -> None:
+    """用户明确表达（"请记住…"）在运行开始前写入长期记忆；失败不阻断运行。
 
-    ``use_memory=False``（界面"本次不使用个人偏好"）只跳过注入，自动提取与
-    会话摘要照常进行。
+    写入侧不受"本轮不使用个人记忆"开关影响（设计方案 §12.1）：那个开关只管
+    这一轮读不读，不管这一轮留不留得下。
     """
     if session is None or not owner_id:
-        return []
+        return
     try:
         memory_service.auto_extract(
             session,
@@ -229,36 +228,40 @@ def _build_memory_messages(
         )
     except Exception:
         pass
+
+
+def _build_package(
+    session: Session,
+    owner_id: str,
+    conversation_id: str,
+    query: str,
+    *,
+    use_memory: bool = True,
+    history_len: Optional[int] = None,
+) -> context_package.ContextPackage:
+    """本轮的统一上下文：最近原文窗口、记忆注入段，也是 manifest 的数据源。
+
+    与聊天链路同一个构建器、同一条分界：摘要与槽位在构造 Prompt 之前按分界
+    更新，历史不会既没进摘要也没进原文（设计方案 §6.2 / §18.2.2）。
+    测试中 monkeypatch 本函数以避开数据库读取。
+    """
+    empty = context_package.ContextPackage(
+        owner_id=owner_id or "", conversation_id=conversation_id or ""
+    )
+    if session is None or not owner_id or not conversation_id:
+        return empty
     try:
-        if conversation_id:
-            # 分界与 _build_history 用的是同一条规则，摘要与最近原文窗口不会
-            # 出现空洞或重复（设计方案 §6.2）。
-            memory_service.summarize_conversation(
-                session,
-                owner_id,
-                conversation_id,
-                boundary_message_id=context_package.recent_boundary_message_id(
-                    session,
-                    owner_id,
-                    conversation_id,
-                    min_turns=Settings.model_settings.HISTORY_LEN,
-                ),
-            )
+        return context_package.build_context_package(
+            session,
+            owner_id,
+            conversation_id,
+            query,
+            use_memory=use_memory,
+            min_turns=history_len or Settings.model_settings.HISTORY_LEN,
+        )
     except Exception:
-        pass
-    try:
-        return [
-            {"role": m.get("role", "system"), "content": m.get("content", "")}
-            for m in (
-                memory_service.memory_system_messages(
-                    session, owner_id, query, conversation_id, use_memory=use_memory
-                )
-                or []
-            )
-        ]
-    except Exception:
-        logger.warning("读取长期记忆失败（忽略）", exc_info=True)
-        return []
+        logger.warning("读取会话上下文失败（忽略）", exc_info=True)
+        return empty
 
 
 def _event_to_sse(ev: dict, message_id: Optional[str], model_name: str) -> str:
@@ -295,6 +298,26 @@ def _event_to_sse(ev: dict, message_id: Optional[str], model_name: str) -> str:
     return out.model_dump_json()
 
 
+def _manifest_frame(
+    manifest: Dict[str, Any], message_id: Optional[str], model_name: Optional[str]
+) -> str:
+    """本轮使用记录的 SSE 元数据帧。
+
+    正文保持空串、事件类型明确，旧客户端不会把它拼进回答（设计方案 §11.4）；
+    ``class_name`` 沿用 AgentRunEvent 的既有约定，前端在通用 token 兜底分支
+    之前按它识别。
+    """
+    out = OpenAIChatOutput(
+        id=f"memory{uuid.uuid4()}",
+        object="chat.completion.chunk",
+        content="",
+        role="assistant",
+        model=model_name or None,
+        **usage_manifest.manifest_payload(manifest, message_id),
+    )
+    return out.model_dump_json()
+
+
 def _final_message_text(runner: Any) -> str:
     if runner.status == "completed":
         return runner.final_result or ""
@@ -308,17 +331,21 @@ def _persist_final_message(
     owner_id: str,
     runner: Any,
 ) -> None:
-    """运行收敛后把最终可见文本写入来源消息；失败只记日志。"""
+    """运行收敛后把最终可见文本写入来源消息；失败只记日志。
+
+    **按字段合并** metadata：这条消息上还有本轮使用记录（manifest）、引用等
+    键，整体覆盖会把它们抹掉（设计方案 §11.2 / §18.3.6）。
+    """
     if not message_id or not owner_id:
         return
     fresh = _session_factory()
     try:
-        update_message(
+        merge_message_metadata(
             session=fresh,
             message_id=message_id,
             owner_id=owner_id,
+            updates={"agent_run_id": runner.run_id, "agent_status": runner.status},
             response=_final_message_text(runner),
-            metadata={"agent_run_id": runner.run_id, "agent_status": runner.status},
         )
     except Exception:
         logger.warning("写入 Agent 运行结果到消息失败（忽略）", exc_info=True)
@@ -327,6 +354,42 @@ def _persist_final_message(
             fresh.close()
         except Exception:
             pass
+
+
+def _runner_generation_status(status: Optional[str]) -> str:
+    """运行器状态 → 生成状态（§11.1 状态机里没有 running 这种中间态）。"""
+    if status == "completed":
+        return "completed"
+    if status == "cancelled":
+        return "cancelled"
+    return "failed"
+
+
+def _finalize_turn(
+    recorder: Optional[usage_manifest.TurnRecorder],
+    message_id: Optional[str],
+    owner_id: str,
+    runner: Any,
+) -> None:
+    """运行收敛后的统一收尾：最终文本 + 生成状态 + Agent 键一次合并写入。
+
+    完成、失败、取消、恢复四条路径都走这里（设计方案 §18.3.6/8），半截文本
+    不会因为提前 return 而丢掉。
+    """
+    status = _runner_generation_status(getattr(runner, "status", None))
+    if recorder is None:
+        _persist_final_message(message_id, owner_id, runner)
+        return
+    recorder.finish(
+        status,
+        response=_final_message_text(runner),
+        failure_stage=None if status == "completed" else "agent_run",
+        failure_reason=None if status == "completed" else (getattr(runner, "error", None) or ""),
+        extra_metadata={
+            "agent_run_id": runner.run_id,
+            "agent_status": runner.status,
+        },
+    )
 
 
 def _aggregate_result(
@@ -401,11 +464,29 @@ async def agent_run_chat(
         raise ValueError("owner_id 不能为空（必须来自服务端认证上下文）")
 
     base_tools = _build_tools(tool_config)
-    history = _build_history(session, conversation_id, owner_id, history_len)
-    memory_messages = _build_memory_messages(
-        session, owner_id, query, conversation_id, message_id, use_memory=use_memory
+    _auto_extract(session, owner_id, query, conversation_id, message_id)
+    package = _build_package(
+        session,
+        owner_id,
+        conversation_id,
+        query,
+        use_memory=use_memory,
+        history_len=history_len,
     )
+    history = _history_from_messages(package.recent_messages)
+    memory_messages = package.system_messages()
     planner = _build_planner(model_name)
+
+    # 本轮使用记录：Agent 分支也在模型调用之前把 manifest 落库（§18.3.1-2）。
+    # 流式生成器跑在响应体任务里，那时请求会话可能已经关闭，所以让它自开短
+    # 会话（与 _persist_final_message 同一套做法）。
+    recorder = usage_manifest.TurnRecorder(
+        message_id=message_id,
+        owner_id=owner_id,
+        manifest=usage_manifest.build_usage_manifest(package, use_memory=use_memory),
+        session_factory=_session_factory,
+    )
+    prepared = recorder.prepare()
 
     def _runner(mcp_tools: Dict[str, Any]):
         # 任务 014：运行时由统一工厂创建（默认 LangGraph，legacy 仅回退）；
@@ -427,14 +508,23 @@ async def agent_run_chat(
     if not stream:
         # 连接建在、也关在这个任务里（见 _mcp_session 注释）
         async with _mcp_session(use_mcp) as (mcp_tools, _client):
+            recorder.started()
             runner = _runner(mcp_tools)
             events: List[dict] = []
             async for ev in runner.run():
                 if ev["type"] in ("plan_delta", "answer_delta"):
                     continue  # 正文预览只对流式响应有意义
                 events.append(ev)
-            _persist_final_message(message_id, owner_id, runner)
-            return _aggregate_result(events, runner, conversation_id)
+            _finalize_turn(recorder, message_id, owner_id, runner)
+            result = _aggregate_result(events, runner, conversation_id)
+            # 非流式最终响应块携带与助手消息同源的 manifest 与最终生成状态，
+            # 不另造一次查询推算（设计方案 §11.4 / §18.3.12）
+            if recorder.manifest is not None:
+                result[usage_manifest.MANIFEST_KEY] = recorder.manifest
+                result[usage_manifest.STATUS_KEY] = recorder.manifest.get(
+                    "generation_status"
+                )
+            return result
 
     from sse_starlette import EventSourceResponse
 
@@ -443,11 +533,22 @@ async def agent_run_chat(
         # 在响应体开始迭代时才建，不能提前到路由协程里。
         async with _mcp_session(use_mcp) as (mcp_tools, _client):
             runner = _runner(mcp_tools)
+            finished = False
             try:
+                if prepared is not None:
+                    yield _manifest_frame(prepared, message_id, model_name)
+                recorder.started()
                 async for ev in runner.run():
                     yield _event_to_sse(ev, message_id, model_name or "")
+                _finalize_turn(recorder, message_id, owner_id, runner)
+                finished = True
+                if recorder.manifest is not None:
+                    # 收尾状态再发一帧：完成/失败/取消的文案要跟随最终状态
+                    yield _manifest_frame(recorder.manifest, message_id, model_name)
             finally:
-                _persist_final_message(message_id, owner_id, runner)
+                # 取消与异常出口同样收敛：半截文本与状态必须落库（§18.3.6/8）
+                if not finished:
+                    _finalize_turn(recorder, message_id, owner_id, runner)
 
     return EventSourceResponse(_stream())
 
@@ -550,6 +651,18 @@ async def agent_run_resume(
             forced="langgraph",
         )
 
+    # 恢复路径**保留消息里原有的那份 manifest**（设计方案 §18.3.6）：恢复一次
+    # 中断的运行不改变"当时注入了什么"，重新生成快照会把历史回答的使用记录
+    # 改写成"恢复时用了什么"。这里只接手它并更新生成状态。
+    recorder = usage_manifest.TurnRecorder(
+        message_id=source_message_id,
+        owner_id=owner_id,
+        manifest=None,
+        session_factory=_session_factory,
+    )
+    recorder.adopt_existing()
+    recorder.started()
+
     if not stream:
         # 连接建在、也关在这个任务里（见 _mcp_session 注释）
         async with _mcp_session(use_mcp) as (mcp_tools, _client):
@@ -559,8 +672,14 @@ async def agent_run_resume(
                 if ev["type"] in ("plan_delta", "answer_delta"):
                     continue  # 正文预览只对流式响应有意义
                 events.append(ev)
-            _persist_final_message(source_message_id, owner_id, runner)
-            return _aggregate_result(events, runner, conversation_id)
+            _finalize_turn(recorder, source_message_id, owner_id, runner)
+            result = _aggregate_result(events, runner, conversation_id)
+            if recorder.manifest is not None:
+                result[usage_manifest.MANIFEST_KEY] = recorder.manifest
+                result[usage_manifest.STATUS_KEY] = recorder.manifest.get(
+                    "generation_status"
+                )
+            return result
 
     from sse_starlette import EventSourceResponse
 
@@ -569,11 +688,19 @@ async def agent_run_resume(
         # 的那个任务里，否则收尾会在 anyio cancel scope 处炸
         async with _mcp_session(use_mcp) as (mcp_tools, _client):
             runner = _runner(mcp_tools)
+            finished = False
             try:
+                if recorder.manifest is not None:
+                    yield _manifest_frame(recorder.manifest, source_message_id, model_name)
                 async for ev in runner.run():
                     yield _event_to_sse(ev, source_message_id, model_name or "")
+                _finalize_turn(recorder, source_message_id, owner_id, runner)
+                finished = True
+                if recorder.manifest is not None:
+                    yield _manifest_frame(recorder.manifest, source_message_id, model_name)
             finally:
-                _persist_final_message(source_message_id, owner_id, runner)
+                if not finished:
+                    _finalize_turn(recorder, source_message_id, owner_id, runner)
 
     return EventSourceResponse(_stream())
 

@@ -72,6 +72,7 @@ from chatchat.server.api_server.agent_run_routes import agent_run_router
 from chatchat.server.auth import jwt as auth_jwt
 from chatchat.server.auth import service
 from chatchat.server.auth.routes_auth import auth_router
+from chatchat.server.memory import context_package
 from chatchat.settings import Settings
 
 # 运行时层直接建运行使用的测试属主（运行时只要求非空，不做用户表校验）
@@ -274,7 +275,13 @@ def _patch_service(monkeypatch, temp_db, planner):
     )
     monkeypatch.setattr(agent_service, "_session_factory", lambda: temp_db["Session"]())
     monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
-    monkeypatch.setattr(agent_service, "_build_memory_messages", lambda *a, **k: [])
+    # 第四期起 Agent 分支的历史、记忆注入与 manifest 都来自统一上下文构建器
+    monkeypatch.setattr(
+        agent_service,
+        "_build_package",
+        lambda *a, **k: context_package.ContextPackage(),
+    )
+    monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
     monkeypatch.setattr(
         agent_service.memory_service, "memory_system_messages", lambda *a, **k: []
     )
@@ -1278,7 +1285,15 @@ class TestLGPersistenceAndSSE:
             assert t in agent_events
         assert agent_events[-1] == "run_completed"
 
-        last = payloads[-1]
+        # 本轮使用记录元数据帧：首帧在模型调用之前发出，末帧带最终生成状态；
+        # 正文恒为空串，旧客户端不会把它拼进回答（设计方案 §11.4 / §18.3.1-2/4）
+        manifests = [p for p in payloads if p.get("class_name") == "MemoryUsageEvent"]
+        assert len(manifests) == 2, f"应有首尾两帧使用记录：{[p.get('class_name') for p in payloads]}"
+        assert manifests[0]["generation_status"] in ("prepared", "started")
+        assert manifests[-1]["generation_status"] == "completed"
+        assert manifests[-1]["choices"][0]["delta"]["content"] == ""
+
+        last = [p for p in payloads if p.get("class_name") == "AgentRunEvent"][-1]
         # OpenAI 兼容分块格式：content 位于 choices[0].delta（与 legacy 一致）
         assert last["choices"][0]["delta"]["content"] == "流式最终回答"
         assert last["run_id"]

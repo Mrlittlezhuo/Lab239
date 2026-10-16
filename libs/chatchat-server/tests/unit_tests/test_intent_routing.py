@@ -58,6 +58,7 @@ from chatchat.server.api_server.chat_routes import chat_router
 from chatchat.server.auth import jwt as auth_jwt
 from chatchat.server.auth import service
 from chatchat.server.auth.routes_auth import auth_router
+from chatchat.server.memory import context_package
 from chatchat.server.intent_router import (
     INTENT_COMPLEX,
     INTENT_GENERAL,
@@ -782,9 +783,13 @@ class TestChatCompletionsAutoAgent:
             lambda: temp_db["Session"](),
         )
         monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
+        # 第四期起 Agent 分支的历史与记忆注入都来自统一上下文构建器
         monkeypatch.setattr(
-            agent_service, "_build_memory_messages", lambda *a, **k: []
+            agent_service,
+            "_build_package",
+            lambda *a, **k: context_package.ContextPackage(),
         )
+        monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
 
         calls = []
 
@@ -1342,9 +1347,20 @@ class TestChatCompletionsAutoAgent:
         assert first["conversation_id"] == conv
         rest = chunks[1:]
         assert rest, "缺少 Agent 运行事件"
-        assert all(c.get("class_name") == "AgentRunEvent" for c in rest)
-        events = [c.get("agent_event") for c in rest]
+        # Agent 运行事件之外还允许本轮使用记录元数据帧：它正文为空、类型明确，
+        # 旧客户端不会把它拼进回答（设计方案 §11.4 / §18.3.1-2）
+        manifests = [c for c in rest if c.get("class_name") == "MemoryUsageEvent"]
+        assert manifests, "Agent 分支缺少本轮使用记录（memory_usage_manifest）帧"
+        assert all(
+            c.get("class_name") in ("AgentRunEvent", "MemoryUsageEvent") for c in rest
+        )
+        events = [
+            c.get("agent_event")
+            for c in rest
+            if c.get("class_name") == "AgentRunEvent"
+        ]
         assert "run_completed" in events
+        assert manifests[-1]["generation_status"] == "completed"
 
 
 if __name__ == "__main__":

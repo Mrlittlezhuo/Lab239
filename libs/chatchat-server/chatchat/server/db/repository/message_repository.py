@@ -76,20 +76,66 @@ def update_message(
     owner_id: str,
     response: str = None,
     metadata: Dict = None,
+    merge_metadata: bool = False,
 ) -> str:
-    """在自己的会话中更新回答，并刷新会话活动时间。"""
+    """在自己的会话中更新回答，并刷新会话活动时间。
+
+    ``merge_metadata=True`` 时按字段合并而不是整体覆盖：一条消息的 metadata
+    里同时有本轮使用记录（manifest）、引用、Agent 状态、intermediate_steps，
+    各写各的键，整体覆盖会把别人写好的快照抹掉（设计方案 §11.2）。
+    """
     m = _owned_message(session, message_id, owner_id)
     if m is None:
         raise ConversationNotOwned(message_id)
     if response is not None:
         m.response = response
     if isinstance(metadata, dict):
-        m.meta_data = metadata
+        if merge_metadata:
+            m.meta_data = _merged(m.meta_data, metadata)
+        else:
+            m.meta_data = metadata
     c = session.get(ConversationModel, m.conversation_id)
     if c is not None:
         c.update_time = datetime.now()
     session.commit()
     return m.id
+
+
+def _merged(current, updates: Dict) -> Dict:
+    """读出旧 metadata 并按字段合并；值为 ``None`` 的键表示删除该键。
+
+    JSON 列必须整体重新赋值才会被 SQLAlchemy 识别成变更，所以这里总是返回
+    一个新 dict。
+    """
+    merged: Dict = dict(current) if isinstance(current, dict) else {}
+    for key, value in updates.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_message_metadata(
+    session: Session,
+    message_id: str,
+    owner_id: str,
+    updates: Dict,
+    response: str = None,
+) -> str:
+    """只合并 metadata（和可选的 response），绝不覆盖其他键（§11.2）。
+
+    消息不存在或不属于该用户时抛 ``ConversationNotOwned``：使用记录必须落在
+    当前用户自己的消息上，不能凭一个 message_id 写别人的会话。
+    """
+    return update_message(
+        session=session,
+        message_id=message_id,
+        owner_id=owner_id,
+        response=response,
+        metadata=updates,
+        merge_metadata=True,
+    )
 
 
 def get_message_by_id(
@@ -181,6 +227,7 @@ def list_context_messages(
 __all__ = [
     "add_message",
     "update_message",
+    "merge_message_metadata",
     "get_message_by_id",
     "feedback_message",
     "filter_message",

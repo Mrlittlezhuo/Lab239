@@ -1132,9 +1132,13 @@ class TestChatCompletionsAgentRun:
             lambda: temp_db["Session"](),
         )
         monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
+        # 第四期起 Agent 分支的历史、记忆注入与 manifest 都来自统一上下文构建器
         monkeypatch.setattr(
-            agent_service, "_build_memory_messages", lambda *a, **k: []
+            agent_service,
+            "_build_package",
+            lambda *a, **k: context_package.ContextPackage(),
         )
+        monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
         return kb
 
     def test_agent_run_flag_runs_closed_loop(self, monkeypatch, app, client,

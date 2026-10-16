@@ -51,6 +51,7 @@ from chatchat.server.db.models.agent_run_model import AgentRunModel  # noqa: F40
 from chatchat.server.db.models.agent_step_model import AgentStepModel  # noqa: F401
 from chatchat.server.db.session import get_db as db_get_db
 from chatchat.server.db.repository import create_conversation
+from chatchat.server.memory import context_package
 from chatchat.server.agent_run import schema as S
 import chatchat.server.agent_run.service as agent_service
 import chatchat.server.api_server.chat_routes as chat_routes_mod
@@ -343,8 +344,11 @@ class TestSmartConversationDispatch:
         )
         monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
         monkeypatch.setattr(
-            agent_service, "_build_memory_messages", lambda *a, **k: []
+            agent_service,
+            "_build_package",
+            lambda *a, **k: context_package.ContextPackage(),
         )
+        monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
 
         calls = []
 
@@ -999,7 +1003,13 @@ class TestSmartConversationDispatch:
             agent_service, "_session_factory", lambda: temp_db["Session"]()
         )
         monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
-        monkeypatch.setattr(agent_service, "_build_memory_messages", lambda *a, **k: [])
+        # 第四期起 Agent 分支的历史、记忆注入与 manifest 都来自统一上下文构建器
+        monkeypatch.setattr(
+            agent_service,
+            "_build_package",
+            lambda *a, **k: context_package.ContextPackage(),
+        )
+        monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
 
         route = RouteResult(
             path=PATH_AGENT_RUN,
@@ -1156,7 +1166,13 @@ class TestSmartConversationCompat:
             agent_service, "_session_factory", lambda: temp_db["Session"]()
         )
         monkeypatch.setattr(agent_service, "_build_history", lambda *a, **k: [])
-        monkeypatch.setattr(agent_service, "_build_memory_messages", lambda *a, **k: [])
+        # 第四期起 Agent 分支的历史、记忆注入与 manifest 都来自统一上下文构建器
+        monkeypatch.setattr(
+            agent_service,
+            "_build_package",
+            lambda *a, **k: context_package.ContextPackage(),
+        )
+        monkeypatch.setattr(agent_service, "_auto_extract", lambda *a, **k: None)
 
         route_calls = []
 
