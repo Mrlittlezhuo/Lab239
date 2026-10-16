@@ -32,11 +32,24 @@ from chatchat.server.db.repository.message_repository import (
     list_context_messages,
     list_messages,
 )
-from chatchat.server.memory import session_context
+from chatchat.server.memory import session_context, usage_manifest
 from chatchat.server.memory.session_context import RecentWindow, select_recent_window
 
 #: 摘要掉队时窗口最多扩到预算的多少倍（再多就宁可标记降级也不撑爆上下文）
 GAP_WINDOW_FACTOR = 2
+
+
+def marked_response(message) -> str:
+    """窗口内这条消息的助手回答；未完成回答带上角色标记（设计方案 §11.3 / §18.3.9）。
+
+    用户点停止或流式中断留下的半截回答**可以**进最近原文——用户下一轮能说
+    "继续"，看不到它反而对不上。但它必须带着 ``[未完成回答]`` 注入，让模型知道
+    这段没写完，不能把它当成已完成的结论接着往下推。
+    """
+    text = getattr(message, "response", "") or ""
+    if text and usage_manifest.is_incomplete_metadata(getattr(message, "meta_data", None)):
+        return usage_manifest.mark_incomplete(text)
+    return text
 
 
 @dataclass
@@ -72,10 +85,14 @@ class ContextPackage:
     context_segment: str = ""
 
     def history_pairs(self) -> List[tuple]:
-        """窗口内消息转成 ``(query, response)`` 升序列表。"""
+        """窗口内消息转成 ``(query, response)`` 升序列表。
+
+        未完成回答在这里就带上标记：三条链路的最近原文注入都经过这里或
+        :func:`marked_response`，不各自判断（§18.3.9）。
+        """
         pairs = []
         for m in self.recent_messages:
-            pairs.append((getattr(m, "query", "") or "", getattr(m, "response", "") or ""))
+            pairs.append((getattr(m, "query", "") or "", marked_response(m)))
         return pairs
 
     def history_message_ids(self) -> List[str]:

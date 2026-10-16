@@ -747,7 +747,13 @@ def digest_lines(messages: Sequence) -> List[str]:
 
     用户原话与助手回答分别成行：助手的说法进摘要但不会被当成"用户已确认
     事项"（设计方案 §7.3）。
+
+    未完成回答（停止 / 失败 / 中断）的助手文本**不进摘要**（设计方案 §18.3.10）：
+    半截说法一旦被摘成结论，后面几轮都会把它当成已经说完的话。用户原话照常
+    扫描，否则下一轮"继续刚才的"就找不到上下文了。
     """
+    from chatchat.server.memory import usage_manifest
+
     lines: List[str] = []
     for message in messages:
         query = _clean(getattr(message, "query", "") or "", SUMMARY_USER_LINE_CHARS)
@@ -756,7 +762,9 @@ def digest_lines(messages: Sequence) -> List[str]:
         )
         if query:
             lines.append(f"用户：{query}")
-        if response:
+        if response and not usage_manifest.is_incomplete_metadata(
+            getattr(message, "meta_data", None)
+        ):
             lines.append(f"助手：{response}")
     return lines
 

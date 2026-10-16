@@ -58,7 +58,7 @@ from chatchat.server.db.repository import agent_run_repository as agent_repo
 from chatchat.server.agent_run.planner import LLMPlanner
 from chatchat.server.agent_run.runner import AgentRunner
 from chatchat.server.agent_run import schema as S
-from chatchat.server.memory import context_package
+from chatchat.server.memory import context_package, usage_manifest
 import chatchat.server.agent_run.service as agent_service
 import chatchat.server.api_server.chat_routes as chat_routes_mod
 from chatchat.server.api_server.agent_run_routes import agent_run_router
@@ -1380,7 +1380,7 @@ class TestToolsDescriptionBudget:
 
 
 class TestBuildHistoryNeutralization:
-    """规划历史去污：失败/取消的 Agent 轮替换为中性占位。"""
+    """规划历史去污：失败/取消的 Agent 轮替换为中性占位；半截回答如实标记。"""
 
     def _patch_recent_messages(self, monkeypatch, oldest_first):
         """把统一上下文构建器换成"返回这几条消息"的替身。
@@ -1393,7 +1393,7 @@ class TestBuildHistoryNeutralization:
                 id=f"m{i}",
                 query=item["query"],
                 response=item["response"],
-                meta_data="{}",
+                meta_data=item.get("meta") or {},
             )
             for i, item in enumerate(oldest_first)
         ]
@@ -1443,6 +1443,46 @@ class TestBuildHistoryNeutralization:
             {"role": "user", "content": "Q2"},
             {"role": "assistant", "content": "A2"},
         ]
+
+    def test_partial_answer_is_marked_as_unfinished(self, monkeypatch):
+        """停止/中断留下的半截回答进规划历史，但要说清它没写完（§11.3 / §18.3.9）。
+
+        不带标记时，规划器会把半截说法当成已经说完的结论，接着往下推或直接
+        复述。用户下一轮说"继续"仍然要求这段可见，所以是标记而不是删除。
+        """
+        oldest_first = [
+            {
+                "query": "写一段长文",
+                "response": "只写了一半的回答",
+                "meta": {"generation_status": "cancelled"},
+            },
+            {
+                "query": "接着写",
+                "response": "这次写完了",
+                "meta": {"generation_status": "completed"},
+            },
+        ]
+        self._patch_recent_messages(monkeypatch, oldest_first)
+        history = agent_service._build_history(object(), "conv-1", "owner-1", None)
+        assert history[1]["content"] == (
+            f"{usage_manifest.INCOMPLETE_MARKER} 只写了一半的回答"
+        )
+        assert history[3]["content"] == "这次写完了"
+
+    def test_neutralized_agent_failure_is_not_marked_twice(self, monkeypatch):
+        """已经换成中性失败说明的轮次不再叠加 ``[未完成回答]`` 标记。"""
+        oldest_first = [
+            {
+                "query": "帮我联网搜索 X",
+                "response": "（Agent 运行已取消）",
+                "meta": {"generation_status": "cancelled"},
+            },
+        ]
+        self._patch_recent_messages(monkeypatch, oldest_first)
+        history = agent_service._build_history(object(), "conv-1", "owner-1", None)
+        content = history[1]["content"]
+        assert usage_manifest.INCOMPLETE_MARKER not in content
+        assert "不可用" in content
 
 
 if __name__ == "__main__":

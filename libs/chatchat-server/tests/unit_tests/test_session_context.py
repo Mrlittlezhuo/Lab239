@@ -1235,3 +1235,74 @@ class TestContextCorrectness:
         assert r.json()["completed_items"] == ["手工登记的完成事项"]
         r = client.get(f"/conversations/{conv}/context", headers=hdr)
         assert r.json()["completed_items"] == ["手工登记的完成事项"]
+
+
+# ============================================================================
+# 7. 未完成回答：半截说法不进摘要，用户原话照常扫描（§18.3.10）
+# ============================================================================
+
+
+def _stop(db, conversation_id, owner_id, query, response, status="cancelled"):
+    """写入一条停止/失败留下的半截回答，并落下生成状态。"""
+    from chatchat.server.db.repository.message_repository import merge_message_metadata
+    from chatchat.server.memory.usage_manifest import STATUS_KEY
+
+    s = db["Session"]()
+    try:
+        mid = add_message(
+            s, conversation_id, owner_id, "agent_chat", query, response=response
+        )
+        merge_message_metadata(s, mid, owner_id, {STATUS_KEY: status})
+        return mid
+    finally:
+        s.close()
+
+
+class TestIncompleteTurns:
+    def test_digest_lines_skip_incomplete_assistant_text(self):
+        """摘要是结论来源：半截回答一旦成行，后面几轮都会把它当成说完过的话。"""
+        rows = [
+            types.SimpleNamespace(
+                query="继续写那段长文",
+                response="写到一半的结论",
+                meta_data={"generation_status": "cancelled"},
+            ),
+            types.SimpleNamespace(
+                query="下一个问题",
+                response="完整的结论",
+                meta_data={"generation_status": "completed"},
+            ),
+            # 状态机之前的旧数据没有 generation_status，按已完成处理
+            types.SimpleNamespace(query="老规矩", response="旧回答", meta_data=None),
+        ]
+        assert session_context.digest_lines(rows) == [
+            "用户：继续写那段长文",
+            "用户：下一个问题",
+            "助手：完整的结论",
+            "用户：老规矩",
+            "助手：旧回答",
+        ]
+
+    def test_partial_answer_leaves_the_digest_but_not_the_conversation(
+        self, db, users, monkeypatch
+    ):
+        """§18.3.10：半截回答不被摘成结论，用户原话仍在摘要里。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _stop(db, conv, aid, "写一段长文", "这是写到一半的结论内容")
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        context = _refresh(db, aid, conv)
+        assert context is not None
+        assert "这是写到一半的结论内容" not in context.summary
+        # 用户原话仍进摘要：下一轮"继续刚才那段"才对得上上下文
+        assert "写一段长文" in context.summary
+
+    def test_partial_answer_still_feeds_slots_from_its_query(self, db, users):
+        """槽位只从用户消息提取，半截回答不影响"继续"这类轮次被扫到。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _stop(db, conv, aid, "本项目采用 PostgreSQL 存储会话记录", "写到一半就停了")
+        context = _refresh(db, aid, conv)
+        assert any("PostgreSQL" in i.text for i in context.confirmed)
+        assert not any("写到一半" in i.text for i in context.confirmed)

@@ -157,17 +157,27 @@ def _history_from_messages(messages) -> List[Dict[str, str]]:
     """把最近原文窗口内的消息转成规划历史（时间正序，失败/取消轮去污）。
 
     与聊天链路同一份数据、同一个分界（设计方案 §18.2.2）；失败或取消的 Agent
-    轮不把错误细节带给规划器。
+    轮不把错误细节带给规划器，停止/中断留下的半截回答带 ``[未完成回答]`` 标记
+    进历史（§11.3）。
     """
     history: List[Dict[str, str]] = []
     for message in messages or []:
         if isinstance(message, Mapping):
             query = message.get("query") or ""
             response = message.get("response")
+            incomplete = False
         else:
             query = getattr(message, "query", "") or ""
             response = getattr(message, "response", None)
-        response = _neutralize_agent_result(response)
+            incomplete = usage_manifest.is_incomplete_metadata(
+                getattr(message, "meta_data", None)
+            )
+        body = (response or "").strip()
+        if body.startswith(_AGENT_FAILED_MARKERS):
+            response = _neutralize_agent_result(response)
+        elif incomplete and body:
+            # 半截回答可以进规划历史，但必须让模型知道它没写完（§11.3 / §18.3.9）
+            response = usage_manifest.mark_incomplete(response)
         if not query and not response:
             continue
         history.append({"role": "user", "content": query})

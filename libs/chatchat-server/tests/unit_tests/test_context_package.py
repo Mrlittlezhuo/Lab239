@@ -1,13 +1,15 @@
 """统一上下文构建器（智能聊天记忆第四期·第一阶段 A，设计方案 §6.2 / §18.2.2-3）。
 
-钉住四件事：
+钉住六件事：
 
 1. **无空洞**：摘要覆盖范围 + 最近原文窗口 = 当前有效会话历史，分界只有一处
    （M-01/M-02/M-06/M-07）；
 2. 摘要掉队时宁可扩大窗口，也不让历史在 Prompt 里凭空消失，并如实标记降级；
 3. 取消/失败的轮次不作为助手说法回放，但用户原话仍参与摘要与槽位；
 4. 记忆段与界面同源：开关只允许收紧，快照 ID 与真实注入一致（§12.3）；
-5. 当前消息与会话约束冲突时，本轮注入的上下文段就已采用新说法（§18.2.12）。
+5. 当前消息与会话约束冲突时，本轮注入的上下文段就已采用新说法（§18.2.12）；
+6. 停止/失败留下的半截回答照常进最近原文，但带 ``[未完成回答]`` 标记，模型
+   不会把它当成已完成的结论（§18.3.9）。
 """
 from __future__ import annotations
 
@@ -31,7 +33,8 @@ from chatchat.server.db.repository import (
     create_memory,
     session_summary_repository,
 )
-from chatchat.server.memory import context_package, session_context
+from chatchat.server.db.repository.message_repository import merge_message_metadata
+from chatchat.server.memory import context_package, session_context, usage_manifest
 
 SECRET = "unit-test-secret-key-0000000000000000"
 
@@ -376,3 +379,68 @@ class TestEdgeCases:
         pkg = _build(db, aid, conv)
         assert [q for q, _ in pkg.history_pairs()] == ["第一问", "第二问", "第三问"]
         assert pkg.history_message_ids() == [m.id for m in pkg.recent_messages]
+
+
+# ============================================================================
+# 未完成回答：注入时如实标记（§18.3.9）
+# ============================================================================
+
+
+def _stop(db, conv, owner_id, query, response, status):
+    """写入一条停止/失败留下的半截回答，并落下生成状态。"""
+    s = db["Session"]()
+    try:
+        mid = add_message(s, conv, owner_id, "agent_chat", query, response=response)
+        merge_message_metadata(s, mid, owner_id, {usage_manifest.STATUS_KEY: status})
+        return mid
+    finally:
+        s.close()
+
+
+class TestIncompleteAnswers:
+    """半截回答可以进最近原文，但必须让模型看得出它没写完（设计方案 §11.3）。"""
+
+    def test_partial_answer_is_injected_with_the_marker(self, db, users):
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "已完成的一问")
+        _stop(db, conv, aid, "写一段长文", "只写了一半的回答", "cancelled")
+        pairs = _build(db, aid, conv).history_pairs()
+        assert pairs[0] == ("已完成的一问", "回答0")
+        assert pairs[-1] == (
+            "写一段长文",
+            f"{usage_manifest.INCOMPLETE_MARKER} 只写了一半的回答",
+        )
+
+    def test_every_incomplete_status_is_marked(self, db, users):
+        """partial / cancelled / failed 三种状态都算未完成回答。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        for status in ("partial", "cancelled", "failed"):
+            _stop(db, conv, aid, f"问题-{status}", f"半截-{status}", status)
+        responses = [r for _q, r in _build(db, aid, conv).history_pairs()]
+        assert len(responses) == 3
+        assert all(r.startswith(usage_manifest.INCOMPLETE_MARKER) for r in responses)
+
+    def test_old_rows_without_status_are_not_marked(self, db, users):
+        """状态机之前的历史回答没有 generation_status，一律按已完成处理。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "升级前的一问", response="升级前的完整回答")
+        pairs = _build(db, aid, conv).history_pairs()
+        assert pairs[-1] == ("升级前的一问", "升级前的完整回答0")
+
+    def test_marker_is_not_added_twice(self, db, users):
+        """文本里已经带标记时不重复加（重复注入不该越滚越长）。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _stop(
+            db,
+            conv,
+            aid,
+            "继续",
+            f"{usage_manifest.INCOMPLETE_MARKER} 上次写了一半",
+            "cancelled",
+        )
+        responses = [r for _q, r in _build(db, aid, conv).history_pairs()]
+        assert responses == [f"{usage_manifest.INCOMPLETE_MARKER} 上次写了一半"]
