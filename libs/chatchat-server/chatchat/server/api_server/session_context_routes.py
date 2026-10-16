@@ -7,6 +7,11 @@
 - ``POST   /conversations/{id}/context/refresh``  手动"更新摘要"；
 - ``DELETE /conversations/{id}/context``  重置本会话上下文（个人偏好不受影响）；
 - 临时对话没有会话上下文：读取返回空槽位并带 ``temporary=true``，写入返回 400。
+
+第四期·第一阶段 B 起，读取响应同时给出**上下文状态**（设计方案 §18.3.7）：摘要
+类型（规则 / 模型）、执行状态与失败原因、摘要覆盖到哪条消息、上下文版本，以及
+最近原文窗口的分界与规模。抽屉据此解释"摘要 + 最近原文 = 全部历史"这条分界，
+历史回答的 manifest 也按 ``version`` 对上"当时用的是哪一版上下文"。
 """
 from __future__ import annotations
 
@@ -44,6 +49,28 @@ class ContextOut(BaseModel):
     #: 会话所在项目空间（第三期 §4.4）；项目范围记忆只在此会话内召回
     project_id: Optional[str] = None
 
+    # --- 上下文状态（第四期·第一阶段 B，设计方案 §18.3.7 / §7.2 / §7.5）---
+    #: 摘要来源：rule（规则摘要）/ llm（模型摘要）。界面必须区分两者，
+    #: 模型摘要尚未启用时不能把它显示成"AI 总结"
+    summary_type: str = "rule"
+    #: 最近一次摘要更新结果：idle / succeeded / failed
+    summary_status: str = "idle"
+    #: 失败原因（面向管理员，已脱敏）；只在 summary_status=failed 时有值
+    summary_error: Optional[str] = None
+    summary_updated_at: Optional[datetime] = None
+    #: 摘要覆盖到哪条消息；与 ``recent_boundary_message_id`` 一起构成无空洞分界
+    summarized_message_id: Optional[str] = None
+    #: 上下文乐观锁版本：历史回答的 manifest 里记的就是它（§11.1），
+    #: 据此能回答"当时用的是哪一版上下文"
+    version: int = 0
+    #: 旧摘要文本存在但覆盖位置不可确认（v16 判据），下次进入时安全重建
+    needs_rebuild: bool = False
+    #: 最近原文窗口起点：它之前的消息必须已进摘要（§6.2）
+    recent_boundary_message_id: Optional[str] = None
+    #: 窗口内轮数与是否被字符预算截断（§6.2 第 5 条：截断要如实显示）
+    recent_window_size: int = 0
+    recent_window_truncated: bool = False
+
 
 class ContextEdit(BaseModel):
     """只覆盖传入的槽位；列表按整组替换（与抽屉里的编辑框一致）。"""
@@ -75,9 +102,10 @@ def _out(
     confirmed = [i.text for i in context.confirmed]
     saved: List[bool] = []
     project_id = None
+    boundary_id, window_size, window_truncated = None, 0, False
     if session is not None:
         from chatchat.server.db.repository import conversation_repository as conv_repo
-        from chatchat.server.memory import cross_session_recall
+        from chatchat.server.memory import context_package, cross_session_recall
 
         for text in confirmed:
             saved.append(
@@ -89,6 +117,20 @@ def _out(
         project_id = conv_repo.conversation_project_id(
             session, context.conversation_id, context.owner_id
         )
+        # 最近原文窗口按注入层同一条规则现算，界面才能把"摘要覆盖到哪、原文从
+        # 哪开始"这条分界讲清楚（§18.3.7）。无记忆对话本来就没有摘要，分界之前
+        # 缺内容属设计如此，不显示分界。
+        if not context.temporary:
+            from chatchat.settings import Settings
+
+            boundary_id, window_size, window_truncated = (
+                context_package.recent_window_status(
+                    session,
+                    context.owner_id,
+                    context.conversation_id,
+                    min_turns=Settings.model_settings.HISTORY_LEN,
+                )
+            )
     return ContextOut(
         conversation_id=context.conversation_id,
         temporary=bool(context.temporary),
@@ -103,6 +145,16 @@ def _out(
         update_time=context.update_time,
         confirmed_saved=saved,
         project_id=project_id,
+        summary_type=context.summary_type or "rule",
+        summary_status=context.summary_status or "idle",
+        summary_error=context.summary_error,
+        summary_updated_at=context.summary_updated_at,
+        summarized_message_id=context.summarized_message_id,
+        version=int(context.version or 0),
+        needs_rebuild=bool(context.needs_rebuild),
+        recent_boundary_message_id=boundary_id,
+        recent_window_size=window_size,
+        recent_window_truncated=window_truncated,
     )
 
 

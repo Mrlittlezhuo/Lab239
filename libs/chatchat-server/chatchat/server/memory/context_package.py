@@ -259,6 +259,31 @@ def _finish(
     return package
 
 
+def recent_window_status(
+    session: Optional[Session],
+    owner_id: Optional[str],
+    conversation_id: Optional[str],
+    *,
+    max_chars: Optional[int] = None,
+    min_turns: Optional[int] = None,
+) -> tuple:
+    """最近原文窗口的 ``(分界消息 ID, 轮数, 是否被预算截断)``。
+
+    界面要解释"摘要覆盖到哪 + 最近原文从哪开始"这条无空洞分界（§6.2），
+    因此状态接口必须用与注入层同一条规则算，不能自己估一个数（§18.3.7）。
+    """
+    if session is None or not owner_id or not conversation_id:
+        return None, 0, False
+    try:
+        rows = list_context_messages(session, conversation_id, owner_id)
+    except Exception:
+        return None, 0, False
+    if not rows:
+        return None, 0, False
+    window = select_recent_window(rows, max_chars=max_chars, min_turns=min_turns)
+    return rows[window.start_index].id, len(rows) - window.start_index, bool(window.truncated)
+
+
 def recent_boundary_message_id(
     session: Optional[Session],
     owner_id: Optional[str],
@@ -272,20 +297,15 @@ def recent_boundary_message_id(
     给"只要分界"的调用方（如 Agent 运行先取历史、再单独更新摘要）用，保证
     它们与完整构建器用的是同一条规则（设计方案 §6.2）。
     """
-    if session is None or not owner_id or not conversation_id:
-        return None
-    try:
-        rows = list_context_messages(session, conversation_id, owner_id)
-    except Exception:
-        return None
-    if not rows:
-        return None
-    window = select_recent_window(rows, max_chars=max_chars, min_turns=min_turns)
-    return rows[window.start_index].id
+    return recent_window_status(
+        session, owner_id, conversation_id, max_chars=max_chars, min_turns=min_turns
+    )[0]
 
 
 __all__ = [
     "ContextPackage",
     "build_context_package",
+    "marked_response",
     "recent_boundary_message_id",
+    "recent_window_status",
 ]

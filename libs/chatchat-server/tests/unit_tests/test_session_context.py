@@ -1238,7 +1238,7 @@ class TestContextCorrectness:
 
 
 # ============================================================================
-# 7. 未完成回答：半截说法不进摘要，用户原话照常扫描（§18.3.10）
+# 9. 未完成回答：半截说法不进摘要，用户原话照常扫描（§18.3.10）
 # ============================================================================
 
 
@@ -1306,3 +1306,86 @@ class TestIncompleteTurns:
         context = _refresh(db, aid, conv)
         assert any("PostgreSQL" in i.text for i in context.confirmed)
         assert not any("写到一半" in i.text for i in context.confirmed)
+
+
+# ============================================================================
+# 10. 上下文状态接口：摘要类型、覆盖位置与执行状态（§18.3.7）
+# ============================================================================
+
+
+class TestContextStatusApi:
+    def test_refresh_reports_type_coverage_and_window(self, db, users, client, monkeypatch):
+        """抽屉要能说清"摘要摘到哪、最近原文从哪开始"，且两边不留空洞。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        r = client.post(f"/conversations/{conv}/context/refresh", headers=_headers(db, "alice"))
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # 模型摘要尚未启用：必须如实标成规则摘要，不能显示成"AI 总结"
+        assert body["summary_type"] == "rule"
+        assert body["summary_status"] == "succeeded"
+        assert body["summary_error"] is None
+        assert body["summary_updated_at"]
+        assert body["version"] >= 1
+        assert body["needs_rebuild"] is False
+        assert body["summarized_message_id"]
+        assert body["recent_boundary_message_id"]
+        assert body["recent_window_size"] > 0
+        # 无空洞分界：摘要覆盖到的那条正好在窗口起点之前
+        ids = [m.id for m in _messages(db, aid, conv)]
+        assert ids.index(body["summarized_message_id"]) + 1 == ids.index(
+            body["recent_boundary_message_id"]
+        )
+
+    def test_summary_failure_is_reported_by_the_status_api(
+        self, db, users, client, monkeypatch
+    ):
+        """摘要失败要看得见：状态、原因，以及"现存摘要仍是旧的那一版"。"""
+        monkeypatch.setenv("CHATCHAT_RECENT_HISTORY_MAX_CHARS", "500")
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, *[f"较早的问题{i:02d}" + "补" * 40 for i in range(14)])
+        ok = _refresh(db, aid, conv)
+        _say(db, conv, aid, *[f"较新的问题{i:02d}" + "补" * 40 for i in range(14, 20)])
+
+        def boom(existing, older_text):
+            raise RuntimeError("模型不可用")
+
+        _refresh(db, aid, conv, summarizer=boom)
+        body = client.get(
+            f"/conversations/{conv}/context", headers=_headers(db, "alice")
+        ).json()
+        assert body["summary_status"] == "failed"
+        assert "模型不可用" in (body["summary_error"] or "")
+        # 现存摘要仍是上一次成功的规则摘要，覆盖位置没有推进
+        assert body["summary_type"] == "rule"
+        assert body["summarized_message_id"] == ok.summarized_message_id
+        assert body["summary"] == ok.summary
+
+    def test_memoryless_conversation_reports_no_boundary(self, db, users, client):
+        """无记忆对话本来就没有摘要与分界，接口不能凭空报一个（§13.1）。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid, "无记忆对话", temporary=True)
+        _say(db, conv, aid, "问题一", "问题二")
+        body = client.get(
+            f"/conversations/{conv}/context", headers=_headers(db, "alice")
+        ).json()
+        assert body["temporary"] is True
+        assert body["recent_boundary_message_id"] is None
+        assert body["recent_window_size"] == 0
+        assert body["summary_status"] == "idle"
+        assert body["version"] == 0
+
+    def test_other_user_cannot_refresh_or_read_status(self, db, users, client):
+        """§18.3.13：状态接口与手动刷新同样只认会话属主。"""
+        aid = users["alice"]["id"]
+        conv = _conv(db, aid)
+        _say(db, conv, aid, "讨论记忆设计")
+        hdr_b = _headers(db, "bob")
+        assert (
+            client.post(f"/conversations/{conv}/context/refresh", headers=hdr_b).status_code
+            == 404
+        )
+        assert client.get(f"/conversations/{conv}/context", headers=hdr_b).status_code == 404

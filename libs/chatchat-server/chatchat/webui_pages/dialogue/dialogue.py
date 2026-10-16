@@ -706,6 +706,17 @@ def dialogue_page(
                         chat_box.update_msg("", streaming=False)
                         started = True
 
+                    # 第四期·第一阶段 B：本轮记忆使用快照（MemoryUsageEvent）。
+                    # 元数据事件的正文为空，这里显式忽略并记调试日志，绝不落到
+                    # 下面的内容分支把元数据当回答文本追加；Streamlit 不展示
+                    # "本轮实际使用了哪些记忆"，展示由 React 前端负责（§11.4）。
+                    if getattr(d, "class_name", None) == "MemoryUsageEvent":
+                        logger.debug(
+                            "收到记忆使用快照事件（Streamlit 忽略）：status=%s",
+                            getattr(d, "generation_status", None),
+                        )
+                        continue
+
                     # 任务 015：智能对话首条事件为路由 / 执行分支（RouteResult）。
                     # 只展示执行分支与简短意图名称（如「知识库任务 · 知识库检索」），
                     # 不展示模型隐藏推理过程。
