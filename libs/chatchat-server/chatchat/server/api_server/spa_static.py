@@ -51,6 +51,7 @@ API_PREFIXES = frozenset(
         "api",
         "memories",
         "research",
+        "supervision",
         "agent-runs",
         "admin",
         "other",

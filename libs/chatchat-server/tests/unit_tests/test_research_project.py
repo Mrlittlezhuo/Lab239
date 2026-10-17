@@ -70,7 +70,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 16
+        assert current_version(conn) == 17
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
@@ -202,7 +202,7 @@ class TestV8Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v8_empty.db'}")
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert result.final_version == 16
+            assert result.final_version == 17
             assert 8 in [m.version for m in result.applied]
             tables = set(conn.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -225,7 +225,7 @@ class TestV8Migration:
             apply_migrations(build_registry(), conn)
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 16
+            assert second.final_version == 17
         engine.dispose()
 
     def test_v8_partial_unique_index_on_doi(self, temp_db):
@@ -280,8 +280,8 @@ class TestV8Migration:
             conn.commit()
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [8, 9, 10, 11, 12, 13, 14, 15, 16]
-            assert result.final_version == 16
+            assert [m.version for m in result.applied] == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            assert result.final_version == 17
             assert conn.execute(text("SELECT COUNT(*) FROM user_account")).scalar() == 1
             assert conn.execute(text("SELECT COUNT(*) FROM conversation")).scalar() == 1
             assert conn.execute(text("SELECT COUNT(*) FROM agent_run")).scalar() == 1

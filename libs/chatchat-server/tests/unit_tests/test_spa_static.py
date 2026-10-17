@@ -162,6 +162,7 @@ def test_api_json_accept_header_not_shadowed(web_dist):
         "/auth/no_such_endpoint",
         "/server/no_such_endpoint",
         "/research/no_such_endpoint",
+        "/supervision/no_such_endpoint",
         "/admin/no_such_endpoint",
     ],
 )

@@ -40,6 +40,15 @@ class ConversationModel(Base):
         nullable=True,
         comment="会话所在项目空间（research_project.id）；项目范围记忆只在此会话内召回",
     )
+    # 师生协作项目外键（师生协作方案 §4.2/§9.0）。它与 project_id 是两套
+    # 归属语义：project_id 继续只指向个人论文研究项目，协作项目一律走这个
+    # 字段。一条会话可以同时属于两者，但必须分别鉴权；把协作项目ID写进
+    # project_id 会同时污染项目范围记忆召回和已有的隔离测试。
+    supervision_project_id = Column(
+        String(32),
+        nullable=True,
+        comment="会话所属师生协作项目（supervision_project.id）；与 project_id 独立鉴权",
+    )
     create_time = Column(DateTime, default=func.now(), comment="创建时间")
     update_time = Column(DateTime, comment="最后活动时间")
 

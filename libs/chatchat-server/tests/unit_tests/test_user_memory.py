@@ -80,7 +80,7 @@ def temp_user_db(secret, tmp_path):
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
     Base.metadata.create_all(engine)
-    assert current_version(engine.connect()) == 16
+    assert current_version(engine.connect()) == 17
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
     engine.dispose()
@@ -205,7 +205,7 @@ class TestMigration:
             assert {
                 "memory_key", "source_conversation_id", "source_message_id"
             }.issubset(memory_columns)
-        assert current_version(engine.connect()) == 16
+        assert current_version(engine.connect()) == 17
         # 迁移仅覆盖 user_account/openai_file/memory/session_summary，
         # conversation/message/knowledge_* 由模型元数据建表
         Base.metadata.create_all(engine)
@@ -254,7 +254,7 @@ class TestMigration:
         with engine.connect() as conn:
             result = apply_migrations(registry, conn)
         assert result.applied == []
-        assert current_version(engine.connect()) == 16
+        assert current_version(engine.connect()) == 17
 
         s = Session()
         try:

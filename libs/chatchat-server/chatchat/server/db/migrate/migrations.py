@@ -64,6 +64,16 @@
   / ``slots_scanned_count``（结构化槽位增量游标）。只加列，不改列不删表，
   既有摘要文本、覆盖位置与用户锁定条目一律保留；按确定判据把
   "有摘要文本但没有覆盖位置"的旧行标记为待重建，不猜测覆盖位置。
+- v17（师生协作里程碑0A）：新增师生协作四张表
+  ``supervision_project``（协作项目，含归档申请与软删除时点）、
+  ``supervision_project_member``（成员关系，首期每项目一名在册学生 +
+  一名在册主导师，用部分唯一索引在库层钉住）、
+  ``supervision_audit_event``（审计事件，``event_code`` 为 EV-NNN 全局
+  唯一）、``supervision_notification``（站内通知，
+  ``(event_code, recipient_id)`` 唯一以实现同一事件对同一接收者只发一
+  条）。``conversation`` 增加 ``supervision_project_id``（协作项目外键，
+  与 ``project_id`` 并存且分别鉴权）。只建新表加新列，不改列不删表，
+  既有会话、记忆、知识库与论文研究数据一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1145,6 +1155,125 @@ def _v16_context_correctness(conn: Connection) -> None:
     )
 
 
+# --- v17（师生协作里程碑0A）：协作项目、成员、审计与站内通知 ---
+
+_SUPERVISION_PROJECT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_project (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    description VARCHAR(2000) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'draft',
+    archive_requested_at TIMESTAMP,
+    archive_request_reason VARCHAR(1000) NOT NULL DEFAULT '',
+    archived_at TIMESTAMP,
+    archive_reject_reason VARCHAR(1000) NOT NULL DEFAULT '',
+    deleted_at TIMESTAMP,
+    delete_reason VARCHAR(1000) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    CHECK (status IN ('draft', 'active', 'archived'))
+)
+"""
+
+_SUPERVISION_MEMBER_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_project_member (
+    id VARCHAR(32) PRIMARY KEY,
+    project_id VARCHAR(32) NOT NULL,
+    user_id VARCHAR(32) NOT NULL,
+    role VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    joined_at TIMESTAMP,
+    removed_at TIMESTAMP,
+    UNIQUE (project_id, user_id),
+    CHECK (role IN ('student', 'mentor')),
+    CHECK (status IN ('active', 'removed'))
+)
+"""
+
+_SUPERVISION_AUDIT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_audit_event (
+    id VARCHAR(32) PRIMARY KEY,
+    event_code VARCHAR(16) NOT NULL UNIQUE,
+    project_id VARCHAR(32) NOT NULL,
+    object_type VARCHAR(32) NOT NULL,
+    object_code VARCHAR(32) NOT NULL DEFAULT '',
+    actor_id VARCHAR(32) NOT NULL,
+    actor_role VARCHAR(16) NOT NULL DEFAULT '',
+    action VARCHAR(64) NOT NULL,
+    detail VARCHAR(2000) NOT NULL DEFAULT '',
+    created_at TIMESTAMP
+)
+"""
+
+_SUPERVISION_NOTIFICATION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_notification (
+    id VARCHAR(32) PRIMARY KEY,
+    event_code VARCHAR(16) NOT NULL,
+    recipient_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    object_type VARCHAR(32) NOT NULL DEFAULT '',
+    object_code VARCHAR(32) NOT NULL DEFAULT '',
+    event_type VARCHAR(64) NOT NULL DEFAULT '',
+    title VARCHAR(200) NOT NULL,
+    body VARCHAR(2000) NOT NULL DEFAULT '',
+    level VARCHAR(16) NOT NULL DEFAULT 'info',
+    created_at TIMESTAMP,
+    read_at TIMESTAMP,
+    UNIQUE (event_code, recipient_id)
+)
+"""
+
+# 部分唯一索引：首期一个项目只允许一名在册学生和一名在册主导师。
+# 放在库层是因为服务层漏判会直接变成越权读取或双人项目。
+_SUPERVISION_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_project_status_update "
+    "ON supervision_project (status, update_time)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_member_user "
+    "ON supervision_project_member (user_id, status)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_supervision_member_active_student "
+    "ON supervision_project_member (project_id) "
+    "WHERE role = 'student' AND status = 'active'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_supervision_member_active_mentor "
+    "ON supervision_project_member (project_id) "
+    "WHERE role = 'mentor' AND status = 'active'",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_audit_project_time "
+    "ON supervision_audit_event (project_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_audit_object "
+    "ON supervision_audit_event (object_type, object_code)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_notification_recipient "
+    "ON supervision_notification (recipient_id, read_at)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_notification_project "
+    "ON supervision_notification (project_id)",
+]
+
+_CONVERSATION_ADD_COLUMNS_V17 = [
+    # 师生协作项目外键。与既有 project_id 并存：project_id 继续只指向
+    # 个人论文研究项目，把协作项目ID写进它会同时污染项目范围记忆召回。
+    "supervision_project_id VARCHAR(32)",
+]
+
+
+def _v17_supervision_collaboration(conn: Connection) -> None:
+    """v17：新增师生协作基础表并为会话补协作项目外键。
+
+    - 四张新表全部 ``IF NOT EXISTS``，重复执行结果相同；
+    - **只建新表、只加新列**：不改任何既有列、不删表、不重建表，
+      既有 conversation/message/memory/session_summary/知识库/论文研究
+      数据一字不动；
+    - ``conversation.supervision_project_id`` 可空，旧会话保持 NULL，
+      行为与升级前一致；
+    - 失败即回滚且版本不记录（由迁移框架保证）。
+    """
+    conn.execute(text(_SUPERVISION_PROJECT_TABLE))
+    conn.execute(text(_SUPERVISION_MEMBER_TABLE))
+    conn.execute(text(_SUPERVISION_AUDIT_TABLE))
+    conn.execute(text(_SUPERVISION_NOTIFICATION_TABLE))
+    for stmt in _SUPERVISION_INDEXES:
+        conn.execute(text(stmt))
+    _add_missing_columns(conn, "conversation", _CONVERSATION_ADD_COLUMNS_V17)
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1162,6 +1291,7 @@ _MIGRATIONS = [
     (14, "session_context", _v14_session_context),
     (15, "cross_session_recall", _v15_cross_session_recall),
     (16, "context_correctness", _v16_context_correctness),
+    (17, "supervision_collaboration", _v17_supervision_collaboration),
 ]
 
 
