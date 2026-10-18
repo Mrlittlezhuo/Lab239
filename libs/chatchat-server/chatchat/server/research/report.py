@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from chatchat.server.agent_run.schema import _extract_json_object
+from chatchat.server.model_capacity import CONSUMER_RESEARCH_REPORT
 
 #: 正文引用标记：内嵌证据卡片 id（稳定，不依赖显示顺序）
 CITATION_RE = re.compile(r"\[\[e:([0-9a-zA-Z]{6,64})\]\]")
@@ -355,6 +356,7 @@ def build_default_generator(model_name: Optional[str] = None) -> ReportGenerator
 
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_RESEARCH_REPORT,
         model_name=name,
         streaming=False,
         local_wrap=False,

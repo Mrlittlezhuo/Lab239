@@ -8,6 +8,7 @@ from langchain_core.prompts import PromptTemplate
 from sse_starlette.sse import EventSourceResponse
 
 from chatchat.server.utils import get_OpenAI, get_prompt_template, wrap_done, build_logger
+from chatchat.server.model_capacity import CONSUMER_LEGACY_COMPLETION
 
 
 logger = build_logger()
@@ -41,6 +42,7 @@ async def completion(
                 max_tokens = None
 
             model = get_OpenAI(
+                consumer=CONSUMER_LEGACY_COMPLETION,
                 model_name=model_name,
                 temperature=temperature,
                 max_tokens=max_tokens,

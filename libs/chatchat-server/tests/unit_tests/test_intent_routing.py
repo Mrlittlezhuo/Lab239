@@ -741,9 +741,6 @@ class TestChatCompletionsAutoAgent:
     def _patch_auto(self, monkeypatch, temp_db, planner, route, extra_tools=()):
         """把服务层接到临时库与假规划器/假工具，并用脚本化 route_auto_agent
         替身模拟路由结果（不触真实 LLM / 网络）。"""
-        monkeypatch.setattr(
-            chat_routes_mod, "get_OpenAIClient", lambda **k: None
-        )
         # 测试模型名不在本机 model_settings.yaml 里：不打桩的话，路由的模型
         # 校验会先返回 400，测试结果就取决于 CHATCHAT_ROOT 指向哪里。
         monkeypatch.setattr(

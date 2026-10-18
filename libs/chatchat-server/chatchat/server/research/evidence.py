@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from chatchat.server.agent_run.schema import _extract_json_object
 from chatchat.server.db.repository.research_repository import EVIDENCE_TYPES
 from chatchat.server.research.fulltext import PaperUnit, normalize_space
+from chatchat.server.model_capacity import CONSUMER_PAPER_EXTRACT
 
 MAX_EVIDENCE_PER_CALL = 8
 MIN_QUOTE_CHARS = 12
@@ -270,6 +271,7 @@ def build_default_extractor(model_name: Optional[str] = None) -> EvidenceExtract
 
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_PAPER_EXTRACT,
         model_name=name,
         streaming=False,
         local_wrap=False,

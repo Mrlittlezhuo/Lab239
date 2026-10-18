@@ -24,11 +24,17 @@ import openai
 from fastapi import FastAPI
 from langchain_core.tools import BaseTool
 from langchain_core.embeddings import Embeddings
-from langchain_openai.chat_models import ChatOpenAI
-from langchain_openai.llms import OpenAI
 from memoization import cached, CachingAlgorithmFlag
 
 from chatchat.settings import Settings, XF_MODELS_TYPES
+# 生成模型的唯一构造类型：所有实际调用都要经过统一容量闸门（里程碑0B）。
+# 直接构造未包装的 ChatModel 会被 model_capacity/audit.py 的扫描与测试
+# 判为绕开闸门。
+from chatchat.server.model_capacity import (
+    GatedChatOpenAI,
+    GatedOpenAI,
+    pop_model_call_kwargs,
+)
 from chatchat.server.pydantic_v2 import BaseModel, ConfigDict, Field
 from chatchat.utils import build_logger
 import requests
@@ -245,9 +251,24 @@ def get_ChatOpenAI(
         verbose: bool = True,
         local_wrap: bool = False,  # use local wrapped api
         **kwargs: Any,
-) -> ChatOpenAI:
+) -> GatedChatOpenAI:
+    """构造经过统一容量闸门的生成模型对象（里程碑0B · 设计方案 §8.2）。
+
+    返回 ``GatedChatOpenAI``：它的 ``invoke / stream / ainvoke / astream`` 在
+    每次实际调用内部取放一次容量租约，模型对象本身构造、缓存、复用期间不持有
+    任何容量。业务层不需要自己加锁。
+
+    除了常规参数，还接受容量声明（不会传给 openai SDK）：
+    ``consumer``（``model_capacity/consumers.py`` 里登记的消费者类型）、
+    ``channel``（缺省由登记表推导）、``business_object``、``user_id``、
+    ``request_id``。只写 ``consumer`` 就能排到正确的业务通道；
+    ``request_id`` 同时用于重复请求抑制。调用期也可以用
+    ``model_capacity.model_call_context`` 声明，且优先于这里的声明。
+    """
     model_name = resolve_llm_model_name(model_name)
     model_info = get_model_info(model_name)
+    # 容量声明必须先从 kwargs 摘走：剩下的 kwargs 会原样进 ChatModel 构造参数
+    capacity_kwargs = pop_model_call_kwargs(kwargs)
     params = dict(
         streaming=streaming,
         verbose=verbose,
@@ -274,9 +295,9 @@ def get_ChatOpenAI(
                 openai_api_key=model_info.get("api_key"),
                 openai_proxy=model_info.get("api_proxy"),
             )
-        model = ChatOpenAI(**params)
+        model = GatedChatOpenAI(**params, **capacity_kwargs)
     except Exception as e:
-        logger.exception(f"failed to create ChatOpenAI for model: {model_name}.")
+        logger.exception(f"failed to create GatedChatOpenAI for model: {model_name}.")
         model = None
     return model
 
@@ -331,9 +352,15 @@ def get_OpenAI(
         verbose: bool = True,
         local_wrap: bool = False,  # use local wrapped api
         **kwargs: Any,
-) -> OpenAI:
+) -> GatedOpenAI:
+    """构造经过统一容量闸门的补全式生成模型（设计方案 §8.2）。
+
+    与 ``get_ChatOpenAI`` 同一套规则：一次实际调用一次容量租约，构造与复用
+    期间不持有容量；``consumer`` 等容量声明不会传给 openai SDK。
+    """
     # TODO: 从API获取模型信息
     model_info = get_model_info(model_name)
+    capacity_kwargs = pop_model_call_kwargs(kwargs)
     params = dict(
         streaming=streaming,
         verbose=verbose,
@@ -356,9 +383,9 @@ def get_OpenAI(
                 openai_api_key=model_info.get("api_key"),
                 openai_proxy=model_info.get("api_proxy"),
             )
-        model = OpenAI(**params)
+        model = GatedOpenAI(**params, **capacity_kwargs)
     except Exception as e:
-        logger.exception(f"failed to create OpenAI for model: {model_name}.")
+        logger.exception(f"failed to create GatedOpenAI for model: {model_name}.")
         model = None
     return model
 

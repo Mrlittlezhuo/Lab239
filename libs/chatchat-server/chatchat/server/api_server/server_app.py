@@ -15,12 +15,18 @@ from chatchat.server.agent_run.runtime.checkpoint import (
     initialize_agent_checkpoint_store,
     shutdown_agent_checkpoint_store,
 )
+from chatchat.server.model_capacity import (
+    audit_generation_consumers,
+    initialize_model_capacity,
+    shutdown_model_capacity,
+)
 from chatchat.server.observability import (
     init_observability,
     shutdown_observability,
 )
 from chatchat.server.api_server.agent_run_routes import agent_run_router
 from chatchat.server.api_server.chat_routes import chat_router
+from chatchat.server.api_server.model_capacity_routes import model_capacity_router
 from chatchat.server.api_server.conversation_routes import conversation_router
 from chatchat.server.api_server.kb_routes import kb_router
 from chatchat.server.api_server.memory_routes import memory_router
@@ -32,6 +38,7 @@ from chatchat.server.api_server.openai_routes import openai_router
 from chatchat.server.api_server.research_routes import research_router
 from chatchat.server.api_server.server_routes import server_router
 from chatchat.server.api_server.spa_static import install_spa, resolve_web_dist
+from chatchat.server.startup_sweep import sweep_interrupted_runs
 from chatchat.server.api_server.supervision_research_routes import (
     supervision_research_router,
 )
@@ -59,14 +66,28 @@ def create_app(run_mode: str = None):
         # 任务 016：可观测性初始化（默认关闭为 no-op；失败只告警不阻塞启动）。
         # 同一进程只注册一次，重复创建应用不会反复埋点。
         init_observability()
+        # 里程碑0B：容量闸门随进程启动，先清理本进程残留租约，再做一次生成
+        # 模型消费者检查——出现绕过闸门的构造点只告警，不阻塞启动（§15.0B
+        # 第 4/6 条、§16.1B 第 5 条）。持久化任务（预审、论文子任务、Agent
+        # Run）重启后的状态收敛在下面的 startup_sweep 里处理。
+        try:
+            initialize_model_capacity()
+            audit_generation_consumers()
+        except Exception:
+            logger.exception("初始化模型容量闸门失败（忽略，首次调用时惰性建立）")
         try:
             await initialize_agent_checkpoint_store()
         except Exception:
             logger.exception("初始化 Agent checkpoint 存储失败（忽略，运行时将惰性重试）")
         try:
+            sweep_interrupted_runs()
+        except Exception:
+            logger.exception("启动收敛中断运行记录失败（忽略，不影响服务启动）")
+        try:
             yield
         finally:
             await shutdown_agent_checkpoint_store()
+            shutdown_model_capacity()
             shutdown_observability()
 
     app = FastAPI(
@@ -103,6 +124,7 @@ def create_app(run_mode: str = None):
     app.include_router(tool_router)
     app.include_router(openai_router)
     app.include_router(server_router)
+    app.include_router(model_capacity_router)
     app.include_router(mcp_router)
     app.include_router(auth_router)
     app.include_router(admin_router)

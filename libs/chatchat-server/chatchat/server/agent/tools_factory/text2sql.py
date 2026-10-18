@@ -14,6 +14,7 @@ from .tools_registry import regist_tool
 from langchain_chatchat.agent_toolkits.all_tools.tool import (
     BaseToolOutput,
 )
+from chatchat.server.model_capacity import CONSUMER_AGENT_TOOL
 
 READ_ONLY_PROMPT_TEMPLATE = """You are a MySQL expert. The database is currently in read-only mode. 
 Given an input question, determine if the related SQL can be executed in read-only mode.
@@ -133,6 +134,7 @@ def query_database(query: str, config: dict):
     from chatchat.server.utils import get_ChatOpenAI
 
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_AGENT_TOOL,
         model_name=model_name,
         temperature=0.1,
         streaming=True,

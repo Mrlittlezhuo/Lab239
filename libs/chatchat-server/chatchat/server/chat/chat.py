@@ -28,7 +28,7 @@ from chatchat.server.db.repository import add_message, update_message
 
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_classic.agents.output_parsers.tools import ToolAgentAction
-from langchain_chatchat import ChatPlatformAI, PlatformToolsRunnable
+from langchain_chatchat import PlatformToolsRunnable
 from langchain_chatchat.agents.output_parsers.platform_knowledge_output_parsers import (
     MCPToolAction,
 )
@@ -59,6 +59,10 @@ from chatchat.server.utils import (
     get_default_llm,
     build_logger,
     get_ChatPlatformAIParams
+)
+from chatchat.server.model_capacity import (
+    CONSUMER_SMART_CHAT,
+    GatedChatPlatformAI,
 )
 
 logger = build_logger()
@@ -182,9 +186,14 @@ def create_models_from_config(configs, callbacks, stream, max_tokens):
                 temperature=params.get("temperature", 0.5),
                 max_tokens=max_tokens_value,
             )
-            model_instance = ChatPlatformAI(**llm_params)
+            # 平台模型（action_model）是主聊天路径实际使用的生成模型，必须
+            # 与 ChatOpenAI 走同一个容量闸门，否则"最多一个并发"只是局部约束。
+            model_instance = GatedChatPlatformAI(
+                **llm_params, capacity_consumer=CONSUMER_SMART_CHAT
+            )
         else:
             model_instance = get_ChatOpenAI(
+                consumer=CONSUMER_SMART_CHAT,
                 model_name=model_name,
                 temperature=params.get("temperature", 0.5),
                 max_tokens=max_tokens_value,

@@ -198,9 +198,19 @@ def build_router(
     if provider is None:
         from chatchat.server.utils import get_ChatOpenAI
 
+        # 里程碑0B：路由用的那次模型调用必须登记为消费者，否则它排不进前台
+        # 通道、观测里也看不出是谁占着容量。租约由 GatedChatOpenAI 在这次
+        # invoke 内部取放：路由一结束就释放，随后的回答生成重新排队
+        # （设计方案 §8.2「意图路由完成后必须先释放，再由后续回答重新排队」）。
+        # 这里在构造期声明，是因为 provider.route 在线程池里执行，调用期的
+        # contextvar 声明传不进工作线程。
+        from chatchat.server.model_capacity import CONSUMER_INTENT_ROUTE
+
         llm_provider = None
         try:
-            llm_provider = LlmIntentProvider(get_ChatOpenAI())
+            llm_provider = LlmIntentProvider(
+                get_ChatOpenAI(consumer=CONSUMER_INTENT_ROUTE)
+            )
         except Exception as exc:
             logger.warning("构建 LLM 路由 provider 失败，将统一回退直接回答：{}", exc)
 

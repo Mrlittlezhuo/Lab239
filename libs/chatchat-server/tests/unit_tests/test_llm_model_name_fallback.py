@@ -4,7 +4,7 @@
 接口签名写的是 `model: str = Body(get_default_llm())`，但客户端显式传空串时
 FastAPI 不会用默认值，于是：
 
-  ERROR get_ChatOpenAI:265 - failed to create ChatOpenAI for model: .
+  ERROR get_ChatOpenAI:265 - failed to create GatedChatOpenAI for model: .
   ERROR kb_chat:387 - error in knowledge chat: Expected a Runnable, callable
         or dict.Instead got an unsupported type: <class 'NoneType'>
 
@@ -40,7 +40,7 @@ def test_get_chat_openai_never_sees_an_empty_model_name(monkeypatch):
 
     monkeypatch.setattr(utils, "get_default_llm", lambda: "test-default-llm")
     monkeypatch.setattr(utils, "get_model_info", lambda *a, **kw: {})
-    monkeypatch.setattr(utils, "ChatOpenAI", _FakeChatOpenAI)
+    monkeypatch.setattr(utils, "GatedChatOpenAI", _FakeChatOpenAI)
 
     llm = utils.get_ChatOpenAI(model_name="")
 
@@ -57,7 +57,7 @@ def test_get_chat_openai_keeps_an_explicit_model_name(monkeypatch):
 
     monkeypatch.setattr(utils, "get_default_llm", lambda: "test-default-llm")
     monkeypatch.setattr(utils, "get_model_info", lambda *a, **kw: {})
-    monkeypatch.setattr(utils, "ChatOpenAI", _FakeChatOpenAI)
+    monkeypatch.setattr(utils, "GatedChatOpenAI", _FakeChatOpenAI)
 
     utils.get_ChatOpenAI(model_name="qwen:7b")
 

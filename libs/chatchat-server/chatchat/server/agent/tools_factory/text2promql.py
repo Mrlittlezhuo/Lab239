@@ -21,6 +21,7 @@ from .tools_registry import regist_tool
 from langchain_chatchat.agent_toolkits.all_tools.tool import (
     BaseToolOutput,
 )
+from chatchat.server.model_capacity import CONSUMER_AGENT_TOOL
 logger = logging.getLogger()
 
 TIMEOUT = 30
@@ -71,6 +72,7 @@ def query_prometheus(query: str, config: dict) -> str:
         )
 
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_AGENT_TOOL,
         # model_name=global_model_name,
         # temperature=0.1,
         # streaming=True,

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from chatchat.server.agent_run.schema import _extract_json_object
+from chatchat.server.model_capacity import CONSUMER_RESEARCH_PLAN
 
 MAX_SUB_QUESTIONS = 6
 MAX_QUERIES_PER_QUESTION = 4
@@ -185,6 +186,7 @@ def build_default_planner(model_name: Optional[str] = None) -> ResearchPlanner:
 
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_RESEARCH_PLAN,
         model_name=name,
         streaming=False,
         local_wrap=False,

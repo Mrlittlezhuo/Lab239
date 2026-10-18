@@ -32,6 +32,7 @@ from chatchat.server.memory import context_package, memory_service, usage_manife
 from chatchat.server.utils import get_ChatOpenAI, get_default_llm, get_tool
 from chatchat.settings import Settings
 from chatchat.utils import build_logger
+from chatchat.server.model_capacity import CONSUMER_AGENT_PLAN
 
 logger = build_logger()
 
@@ -62,6 +63,7 @@ def _build_planner(model_name: Optional[str] = None) -> LLMPlanner:
     """
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_AGENT_PLAN,
         model_name=name,
         streaming=True,
         local_wrap=False,

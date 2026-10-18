@@ -13,6 +13,7 @@ from chatchat.server.knowledge_base.model.kb_document_model import DocumentWithV
 from chatchat.server.knowledge_base.utils import list_files_from_folder
 from chatchat.server.utils import BaseResponse, get_ChatOpenAI, wrap_done, get_default_embedding
 from chatchat.utils import build_logger
+from chatchat.server.model_capacity import CONSUMER_KB_SUMMARY
 
 
 logger = build_logger()
@@ -60,12 +61,14 @@ def recreate_summary_vector_store(
                     kb_summary.create_kb_summary()
 
                     llm = get_ChatOpenAI(
+                        consumer=CONSUMER_KB_SUMMARY,
                         model_name=model_name,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         local_wrap=True,
                     )
                     reduce_llm = get_ChatOpenAI(
+                        consumer=CONSUMER_KB_SUMMARY,
                         model_name=model_name,
                         temperature=temperature,
                         max_tokens=max_tokens,
@@ -154,12 +157,14 @@ def summary_file_to_vector_store(
                 kb_summary.create_kb_summary()
 
                 llm = get_ChatOpenAI(
+                    consumer=CONSUMER_KB_SUMMARY,
                     model_name=model_name,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     local_wrap=True,
                 )
                 reduce_llm = get_ChatOpenAI(
+                    consumer=CONSUMER_KB_SUMMARY,
                     model_name=model_name,
                     temperature=temperature,
                     max_tokens=max_tokens,
@@ -231,12 +236,14 @@ def summary_doc_ids_to_vector_store(
         )
     else:
         llm = get_ChatOpenAI(
+            consumer=CONSUMER_KB_SUMMARY,
             model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
             local_wrap=True,
         )
         reduce_llm = get_ChatOpenAI(
+            consumer=CONSUMER_KB_SUMMARY,
             model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens,

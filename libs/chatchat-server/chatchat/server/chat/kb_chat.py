@@ -45,6 +45,7 @@ from chatchat.server.utils import (wrap_done, get_ChatOpenAI, get_default_llm,
                                    BaseResponse, get_prompt_template, build_logger,
                                    check_embed_model, api_address
                                 )
+from chatchat.server.model_capacity import CONSUMER_KB_CHAT
 
 
 logger = build_logger()
@@ -342,6 +343,7 @@ async def kb_chat(query: str = Body(..., description="用户输入", examples=["
                 max_tokens = Settings.model_settings.MAX_TOKENS
 
             llm = get_ChatOpenAI(
+                consumer=CONSUMER_KB_CHAT,
                 model_name=model,
                 temperature=temperature,
                 max_tokens=max_tokens,

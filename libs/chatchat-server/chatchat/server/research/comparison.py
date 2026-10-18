@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence, Tuple
 
 from chatchat.server.agent_run.schema import _extract_json_object
+from chatchat.server.model_capacity import CONSUMER_PAPER_COMPARE
 
 MAX_COMPARISON_ITEMS = 40
 MAX_CONFLICT_ITEMS = 10
@@ -277,6 +278,7 @@ def build_default_generator(model_name: str | None = None) -> ComparisonGenerato
 
     name = model_name or get_default_llm()
     llm = get_ChatOpenAI(
+        consumer=CONSUMER_PAPER_COMPARE,
         model_name=name,
         streaming=False,
         local_wrap=False,

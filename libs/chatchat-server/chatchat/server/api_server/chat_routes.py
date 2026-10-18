@@ -21,7 +21,6 @@ from chatchat.server.db.repository import (
     get_owned_conversation,
 )
 from chatchat.server.utils import (
-    get_OpenAIClient,
     get_config_models,
     get_default_llm,
     get_model_info,
@@ -213,8 +212,10 @@ async def chat_completions(
             project_id=project_id,
         )
 
-    client = get_OpenAIClient(model_name=body.model, is_async=True)
-
+    # 这里原来还构造过一个 `get_OpenAIClient(is_async=True)`，但整个函数没有
+    # 使用过它：所有分支都走 chat / smart_conversation / agent_run，模型调用
+    # 在最终 ChatModel 层经过统一容量闸门（里程碑0B）。留着一个裸客户端只会
+    # 让人以为存在绕过闸门的调用路径。
     message_id = add_message(
         session=session,
         conversation_id=conversation_id,

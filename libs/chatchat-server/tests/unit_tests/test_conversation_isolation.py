@@ -119,7 +119,6 @@ def _model_lookup_is_stable(monkeypatch):
     import chatchat.server.api_server.chat_routes as cr
 
     monkeypatch.setattr(cr, "get_model_info", lambda **kwargs: {"platform_name": "test"})
-    monkeypatch.setattr(cr, "get_OpenAIClient", lambda **kwargs: None)
 
 
 class _ApiBridge(TestClient):
@@ -521,12 +520,14 @@ def test_chat_blank_model_falls_back_to_server_default(
     async def fake_chat(*args, **kwargs):
         return {"choices": [{"message": "ok"}]}
 
-    def fake_client(**kwargs):
+    def fake_model_info(**kwargs):
+        # 回落后的模型名会在配置校验这一步被查一次，从这里观察回落结果，
+        # 比观察一个已经不存在的客户端构造调用更贴近真实契约。
         seen["model_name"] = kwargs.get("model_name")
-        return None
+        return {"platform_name": "test"}
 
     monkeypatch.setattr(cr, "chat", fake_chat)
-    monkeypatch.setattr(cr, "get_OpenAIClient", fake_client)
+    monkeypatch.setattr(cr, "get_model_info", fake_model_info)
     monkeypatch.setattr(cr, "get_default_llm", lambda: "default-llm")
 
     hdr, _ = _headers_of(temp_user_db, "blank-model-alice")

@@ -32,6 +32,7 @@ from chatchat.server.utils import (
 )
 
 from chatchat.utils import build_logger
+from chatchat.server.model_capacity import CONSUMER_KB_CHAT
 
 
 logger = build_logger()
@@ -187,6 +188,7 @@ async def file_chat(
                 callbacks.append(langfuse_handler)
 
             model = get_ChatOpenAI(
+                consumer=CONSUMER_KB_CHAT,
                 model_name=model_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
