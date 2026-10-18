@@ -43,7 +43,7 @@ def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'papers_test.db'}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 17
+        assert current_version(conn) == 18
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}

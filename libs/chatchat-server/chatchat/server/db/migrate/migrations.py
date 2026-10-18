@@ -74,6 +74,15 @@
   条）。``conversation`` 增加 ``supervision_project_id``（协作项目外键，
   与 ``project_id`` 并存且分别鉴权）。只建新表加新列，不改列不删表，
   既有会话、记忆、知识库与论文研究数据一律不动。
+- v18（师生协作里程碑1）：新增协作业务十张表
+  ``supervision_milestone``（阶段目标）、``supervision_task`` 与
+  ``supervision_task_ac``（任务与结构化验收标准，标准按版本保留）、
+  ``supervision_progress_update`` 与 ``supervision_progress_note``（进展与
+  只追加的补充说明）、``supervision_submission``（不可变正式提交版本，
+  含验收标准快照与学生自评）、``supervision_review`` /
+  ``supervision_review_ac`` / ``supervision_review_note``（导师审核、逐条
+  结论与发布后的追加意见）、``supervision_attachment``（项目附件，含版本、
+  sha256 与存储路径）。只建新表建索引，不改列不删表，既有数据一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1274,6 +1283,280 @@ def _v17_supervision_collaboration(conn: Connection) -> None:
     _add_missing_columns(conn, "conversation", _CONVERSATION_ADD_COLUMNS_V17)
 
 
+# --- v18（师生协作里程碑1）：阶段目标、任务、进展、正式提交与导师审核 ---
+
+_SUPERVISION_MILESTONE_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_milestone (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    success_criteria TEXT NOT NULL DEFAULT '',
+    planned_start TIMESTAMP,
+    planned_end TIMESTAMP,
+    status VARCHAR(16) NOT NULL DEFAULT 'planning',
+    owner_user_id VARCHAR(32) NOT NULL,
+    mentor_confirmation VARCHAR(32) NOT NULL DEFAULT '',
+    mentor_confirmation_note TEXT NOT NULL DEFAULT '',
+    mentor_confirmed_by VARCHAR(32) NOT NULL DEFAULT '',
+    mentor_confirmed_at TIMESTAMP,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, code),
+    CHECK (status IN ('planning', 'active', 'completed', 'cancelled')),
+    CHECK (mentor_confirmation IN ('', 'confirmed', 'partially_confirmed',
+                                   'not_confirmed'))
+)
+"""
+
+_SUPERVISION_TASK_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_task (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    milestone_id VARCHAR(32),
+    title VARCHAR(200) NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    required_materials TEXT NOT NULL DEFAULT '[]',
+    due_at TIMESTAMP,
+    priority VARCHAR(16) NOT NULL DEFAULT 'normal',
+    requires_code_review BOOLEAN NOT NULL DEFAULT 0,
+    requires_runtime BOOLEAN NOT NULL DEFAULT 0,
+    status VARCHAR(16) NOT NULL DEFAULT 'draft',
+    version INTEGER NOT NULL DEFAULT 1,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL DEFAULT '',
+    published_at TIMESTAMP,
+    cancelled_at TIMESTAMP,
+    cancel_reason TEXT NOT NULL DEFAULT '',
+    completed_at TIMESTAMP,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, code),
+    CHECK (status IN ('draft', 'active', 'completed', 'cancelled', 'archived')),
+    CHECK (priority IN ('low', 'normal', 'high'))
+)
+"""
+
+_SUPERVISION_TASK_AC_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_task_ac (
+    id VARCHAR(32) PRIMARY KEY,
+    task_id VARCHAR(32) NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    ac_code VARCHAR(16) NOT NULL,
+    statement TEXT NOT NULL,
+    evidence_requirement TEXT NOT NULL DEFAULT '',
+    required BOOLEAN NOT NULL DEFAULT 1,
+    check_type VARCHAR(16) NOT NULL DEFAULT 'document',
+    order_index INTEGER NOT NULL DEFAULT 0,
+    create_time TIMESTAMP,
+    UNIQUE (task_id, version, ac_code),
+    CHECK (check_type IN ('code', 'experiment', 'document', 'analysis', 'runtime'))
+)
+"""
+
+_SUPERVISION_PROGRESS_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_progress_update (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32),
+    milestone_id VARCHAR(32),
+    done TEXT NOT NULL DEFAULT '',
+    results TEXT NOT NULL DEFAULT '',
+    materials TEXT NOT NULL DEFAULT '',
+    problems TEXT NOT NULL DEFAULT '',
+    next_steps TEXT NOT NULL DEFAULT '',
+    links TEXT NOT NULL DEFAULT '[]',
+    author_id VARCHAR(32) NOT NULL,
+    author_role VARCHAR(16) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    UNIQUE (project_id, code)
+)
+"""
+
+_SUPERVISION_PROGRESS_NOTE_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_progress_note (
+    id VARCHAR(32) PRIMARY KEY,
+    progress_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    note TEXT NOT NULL,
+    author_id VARCHAR(32) NOT NULL,
+    author_role VARCHAR(16) NOT NULL DEFAULT '',
+    create_time TIMESTAMP
+)
+"""
+
+_SUPERVISION_SUBMISSION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_submission (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'submitted',
+    summary TEXT NOT NULL DEFAULT '',
+    git_repo VARCHAR(500) NOT NULL DEFAULT '',
+    git_branch VARCHAR(200) NOT NULL DEFAULT '',
+    git_commit VARCHAR(200) NOT NULL DEFAULT '',
+    experiment_notes TEXT NOT NULL DEFAULT '',
+    known_issues TEXT NOT NULL DEFAULT '',
+    unfinished_items TEXT NOT NULL DEFAULT '',
+    self_assessment TEXT NOT NULL DEFAULT '[]',
+    ac_snapshot TEXT NOT NULL DEFAULT '[]',
+    materials TEXT NOT NULL DEFAULT '[]',
+    completeness_check TEXT NOT NULL DEFAULT '[]',
+    author_id VARCHAR(32) NOT NULL,
+    author_role VARCHAR(16) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    withdrawn_at TIMESTAMP,
+    withdraw_reason TEXT NOT NULL DEFAULT '',
+    superseded_at TIMESTAMP,
+    superseded_by VARCHAR(32) NOT NULL DEFAULT '',
+    UNIQUE (code, version),
+    CHECK (status IN ('submitted', 'withdrawn', 'superseded'))
+)
+"""
+
+_SUPERVISION_REVIEW_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_review (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32) NOT NULL,
+    submission_id VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'drafting',
+    overall_decision VARCHAR(32) NOT NULL DEFAULT '',
+    decision_reason TEXT NOT NULL DEFAULT '',
+    feedback TEXT NOT NULL DEFAULT '',
+    must_fix TEXT NOT NULL DEFAULT '[]',
+    suggestions TEXT NOT NULL DEFAULT '[]',
+    next_steps TEXT NOT NULL DEFAULT '',
+    reviewer_id VARCHAR(32) NOT NULL,
+    reviewer_role VARCHAR(16) NOT NULL DEFAULT '',
+    first_touched_at TIMESTAMP,
+    published_at TIMESTAMP,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    UNIQUE (project_id, code),
+    UNIQUE (submission_id),
+    CHECK (status IN ('not_started', 'drafting', 'published')),
+    CHECK (overall_decision IN ('', 'approved', 'revision_required', 'rejected',
+                                'paused'))
+)
+"""
+
+_SUPERVISION_REVIEW_AC_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_review_ac (
+    id VARCHAR(32) PRIMARY KEY,
+    review_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    ac_code VARCHAR(16) NOT NULL,
+    conclusion VARCHAR(32) NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    ai_relation VARCHAR(16) NOT NULL DEFAULT 'none',
+    updated_at TIMESTAMP,
+    UNIQUE (review_id, ac_code),
+    CHECK (conclusion IN ('met', 'partially_met', 'not_met',
+                          'more_evidence_required', 'not_applicable'))
+)
+"""
+
+_SUPERVISION_REVIEW_NOTE_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_review_note (
+    id VARCHAR(32) PRIMARY KEY,
+    review_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    kind VARCHAR(16) NOT NULL DEFAULT 'amendment',
+    note TEXT NOT NULL,
+    author_id VARCHAR(32) NOT NULL,
+    author_role VARCHAR(16) NOT NULL DEFAULT '',
+    create_time TIMESTAMP
+)
+"""
+
+_SUPERVISION_ATTACHMENT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_attachment (
+    id VARCHAR(32) PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32),
+    submission_id VARCHAR(32),
+    progress_id VARCHAR(32),
+    name VARCHAR(300) NOT NULL,
+    ext VARCHAR(24) NOT NULL DEFAULT '',
+    mime_type VARCHAR(120) NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    sha256 VARCHAR(64) NOT NULL,
+    stored_path VARCHAR(500) NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    kind VARCHAR(32) NOT NULL DEFAULT 'other',
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    uploaded_by VARCHAR(32) NOT NULL,
+    uploaded_role VARCHAR(16) NOT NULL DEFAULT '',
+    create_time TIMESTAMP,
+    removed_at TIMESTAMP,
+    remove_reason TEXT NOT NULL DEFAULT '',
+    UNIQUE (project_id, code),
+    CHECK (status IN ('active', 'replaced', 'removed'))
+)
+"""
+
+_SUPERVISION_WORK_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_milestone_project "
+    "ON supervision_milestone (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_task_project_status "
+    "ON supervision_task (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_task_due "
+    "ON supervision_task (status, due_at)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ac_task "
+    "ON supervision_task_ac (task_id, version)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_progress_project_time "
+    "ON supervision_progress_update (project_id, create_time)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_progress_task "
+    "ON supervision_progress_update (task_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_progress_note_progress "
+    "ON supervision_progress_note (progress_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_submission_task "
+    "ON supervision_submission (task_id, version)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_submission_project_status "
+    "ON supervision_submission (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_review_project_status "
+    "ON supervision_review (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_review_note_review "
+    "ON supervision_review_note (review_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_attachment_project "
+    "ON supervision_attachment (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_attachment_task "
+    "ON supervision_attachment (task_id)",
+]
+
+
+def _v18_supervision_work_loop(conn: Connection) -> None:
+    """v18：里程碑1 的协作业务表。
+
+    与 v17 一样只建新表、建索引，不改任何既有列或表；旧数据一字不动。
+    全部 DDL 用 ``IF NOT EXISTS``，重复执行结果相同。
+    """
+    for ddl in (
+        _SUPERVISION_MILESTONE_TABLE,
+        _SUPERVISION_TASK_TABLE,
+        _SUPERVISION_TASK_AC_TABLE,
+        _SUPERVISION_PROGRESS_TABLE,
+        _SUPERVISION_PROGRESS_NOTE_TABLE,
+        _SUPERVISION_SUBMISSION_TABLE,
+        _SUPERVISION_REVIEW_TABLE,
+        _SUPERVISION_REVIEW_AC_TABLE,
+        _SUPERVISION_REVIEW_NOTE_TABLE,
+        _SUPERVISION_ATTACHMENT_TABLE,
+    ):
+        conn.execute(text(ddl))
+    for stmt in _SUPERVISION_WORK_INDEXES:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1292,6 +1575,7 @@ _MIGRATIONS = [
     (15, "cross_session_recall", _v15_cross_session_recall),
     (16, "context_correctness", _v16_context_correctness),
     (17, "supervision_collaboration", _v17_supervision_collaboration),
+    (18, "supervision_work_loop", _v18_supervision_work_loop),
 ]
 
 

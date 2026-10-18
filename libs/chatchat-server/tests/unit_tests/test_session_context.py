@@ -278,8 +278,8 @@ class TestV14Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [14, 15, 16, 17]
-            assert result.final_version == 17
+            assert [m.version for m in result.applied] == [14, 15, 16, 17, 18]
+            assert result.final_version == 18
 
         cols = {c["name"] for c in inspect(engine).get_columns("session_summary")}
         assert {
@@ -314,7 +314,7 @@ class TestV14Migration:
             apply_migrations(build_registry(), conn)
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 17
+            assert second.final_version == 18
         engine.dispose()
 
 
@@ -346,8 +346,8 @@ class TestV16Migration:
         engine = self._legacy_v15(tmp_path)
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [16, 17]
-            assert result.final_version == 17
+            assert [m.version for m in result.applied] == [16, 17, 18]
+            assert result.final_version == 18
 
         cols = {c["name"] for c in inspect(engine).get_columns("session_summary")}
         assert {
@@ -390,7 +390,7 @@ class TestV16Migration:
             apply_migrations(build_registry(), conn)
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 17
+            assert second.final_version == 18
         engine.dispose()
 
 
