@@ -728,6 +728,33 @@ class TestProjectDiscussionTurn:
         assert len(body["response"]) == research.MAX_RESPONSE_CHARS
         assert body["metadata"]["truncated_response"] is True
 
+    def test_message_window_is_the_latest_not_the_oldest(
+        self, client, temp_db, monkeypatch
+    ):
+        """长讨论里界面和模型都看最近一段，不是停在开头（§4.2）。"""
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        _add_turns(
+            temp_db, dialogue["conversation_id"],
+            [(f"旧问{i}", f"旧答{i}") for i in range(30)],
+        )
+        messages = self._messages(client, temp_db, pid, dialogue["conversation_id"])
+        assert len(messages) == 30  # 默认 limit=200 时全量可见
+        assert messages[-1]["query"] == "旧问29"
+
+        with _session(temp_db) as s:
+            window = research.get_dialogue_messages(
+                s, pid, users_id["alice"], dialogue["conversation_id"], limit=3,
+            )
+        assert [row.query for row in window] == ["旧问27", "旧问28", "旧问29"]
+
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        assert self._post(client, temp_db, pid, dialogue["conversation_id"]).status_code == 200
+        prompt_text = json.dumps(fake.prompts[0], ensure_ascii=False)
+        assert "旧问29" in prompt_text
+        assert "旧问0" not in prompt_text  # 最老的轮次已被挤出上下文
+
     def test_discussion_and_extraction_declare_registered_consumers(self, monkeypatch):
         """两个入口各自声明消费者，通道由登记表推导（§8.2、§16.1B 第5条）。"""
         import chatchat.server.utils as server_utils

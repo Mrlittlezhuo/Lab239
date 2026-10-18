@@ -214,18 +214,32 @@ def _dialogue_messages(
     *,
     message_ids: Optional[Iterable[str]] = None,
     limit: int = 200,
+    latest: bool = True,
 ) -> list[MessageModel]:
-    stmt = (
-        select(MessageModel)
-        .where(MessageModel.conversation_id == conversation.id)
-        .order_by(MessageModel.create_time.asc(), MessageModel.id.asc())
-    )
+    """取会话消息，默认取**最近** ``limit`` 条并按时间正序返回。
+
+    默认取最近而不是最早是刻意的：讨论是长对话，界面和模型上下文都要看
+    最新的一段；按最早截断会让"这条会话讨论到什么程度"永远停在开头
+    （§4.2）。指定 ``message_ids`` 时不受 ``limit`` 影响（提取来源要精确
+    到那几条）。
+    """
     wanted = [str(x) for x in (message_ids or []) if str(x).strip()]
+    stmt = select(MessageModel).where(MessageModel.conversation_id == conversation.id)
     if wanted:
-        stmt = stmt.where(MessageModel.id.in_(wanted))
+        stmt = stmt.where(MessageModel.id.in_(wanted)).order_by(
+            MessageModel.create_time.asc(), MessageModel.id.asc()
+        )
+    elif latest:
+        stmt = stmt.order_by(
+            MessageModel.create_time.desc(), MessageModel.id.desc()
+        ).limit(max(1, limit))
     else:
-        stmt = stmt.limit(max(1, limit))
+        stmt = stmt.order_by(
+            MessageModel.create_time.asc(), MessageModel.id.asc()
+        ).limit(max(1, limit))
     rows = list(session.execute(stmt).scalars().all())
+    if latest and not wanted:
+        rows.reverse()
     if wanted:
         found = {row.id for row in rows}
         missing = [x for x in wanted if x not in found]
@@ -402,7 +416,10 @@ def generate_dialogue_reply(
     if (message.response or "").strip():
         raise WorkError("这条消息已经有回复，不需要重新生成")
 
-    rows = _dialogue_messages(session, conversation, limit=10_000)
+    # 只取最近 history_limit+1 条（多出来的一条就是本次待回复的发言本身）。
+    rows = _dialogue_messages(
+        session, conversation, limit=max(1, history_limit) + 1, latest=True
+    )
     history = [row for row in rows if row.id != message_id][-max(1, history_limit):]
     context = build_project_context(session, project.id, user_id)
     prompt = build_discussion_prompt(
