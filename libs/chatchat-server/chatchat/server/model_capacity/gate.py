@@ -655,6 +655,19 @@ class ModelCapacityGate:
         with self._cond:
             return [item.to_dict() for item in self._active.values()]
 
+    def active_held_leases(self) -> List[CapacityLease]:
+        """当前上下文持有、且仍在运行的租约对象。
+
+        ``capacity_mode="external"`` 的模型在发请求前用它确认"业务层确实替我
+        取到了容量"。上下文里残留但已释放的租约编号不算（流式生成器被丢弃时
+        生成器体的 ``finally`` 可能晚于下一次调用才跑）。
+        """
+        held = held_lease_ids()
+        if not held:
+            return []
+        with self._cond:
+            return [self._active[lease_id] for lease_id in held if lease_id in self._active]
+
     def reset_stale_leases(self, *, reason: str = "service_restart") -> Dict[str, Any]:
         """清理本进程内残留的租约（启动钩子调用）。
 

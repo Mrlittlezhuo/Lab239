@@ -89,6 +89,15 @@
   版本比较与"另一角色继续读到旧依据"的判定）。项目内研究讨论不建新表，
   只写 v17 已加好的 ``conversation.supervision_project_id``。只建新表建
   索引，不改列不删表，既有会话与消息一律不动。
+- v20（AI 静态预审里程碑4）：新增 ``supervision_ai_review_run``（一次预审
+  运行：触发来源、输入快照与指纹、材料清单与读取状态、批次计划、每次模型
+  调用的取放容量记录、状态与失败/取消原因，``code`` 为 AR-rN 全局唯一，
+  ``(submission_id, trigger_source, revision)`` 唯一以实现同一提交版本同一
+  来源只有一条有效结果）、``supervision_ai_review_finding``（逐条验收标准
+  的结论、证据深度、支撑关系与降级原因，``(run_id, ac_code)`` 唯一）与
+  ``supervision_ai_review_setting``（自动预审开关，``task_id`` 为空串表示
+  项目级默认，``(project_id, task_id)`` 唯一）。只建新表建索引，不改列不
+  删表，既有提交、审核与附件数据一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1685,6 +1694,158 @@ def _v19_supervision_research_brief(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+_SUPERVISION_AI_REVIEW_RUN_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_ai_review_run (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    revision INTEGER NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32) NOT NULL,
+    task_code VARCHAR(16) NOT NULL,
+    submission_id VARCHAR(32),
+    submission_code VARCHAR(16) NOT NULL,
+    submission_version INTEGER NOT NULL,
+    trigger_source VARCHAR(32) NOT NULL,
+    triggered_by VARCHAR(32) NOT NULL,
+    triggered_role VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    check_snapshot TEXT NOT NULL DEFAULT '{}',
+    draft_fingerprint VARCHAR(64) NOT NULL,
+    ac_version INTEGER NOT NULL,
+    input_budget TEXT NOT NULL DEFAULT '{}',
+    material_manifest TEXT NOT NULL DEFAULT '[]',
+    unread_materials TEXT NOT NULL DEFAULT '[]',
+    partially_read_materials TEXT NOT NULL DEFAULT '[]',
+    call_plan TEXT NOT NULL DEFAULT '[]',
+    total_batches INTEGER NOT NULL,
+    completed_batches INTEGER NOT NULL,
+    unchecked_acs TEXT NOT NULL DEFAULT '[]',
+    partial_results BOOLEAN NOT NULL DEFAULT 0,
+    model_calls TEXT NOT NULL DEFAULT '[]',
+    summary_state VARCHAR(32) NOT NULL,
+    summary_note TEXT NOT NULL,
+    finding_counts TEXT NOT NULL DEFAULT '{}',
+    model_name VARCHAR(120) NOT NULL,
+    rules_version VARCHAR(32) NOT NULL,
+    parser_version VARCHAR(32) NOT NULL,
+    whitelist_version VARCHAR(32) NOT NULL,
+    budget_config_version VARCHAR(32) NOT NULL,
+    security_flags TEXT NOT NULL DEFAULT '[]',
+    queued_at TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    failure_reason TEXT NOT NULL,
+    cancel_reason TEXT NOT NULL,
+    cancelled_by VARCHAR(32) NOT NULL,
+    cancelled_at TIMESTAMP,
+    visible_to_mentor BOOLEAN NOT NULL DEFAULT 1,
+    attached_to_submission BOOLEAN NOT NULL DEFAULT 0,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    deleted_at TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_ai_review_code UNIQUE (code),
+    CONSTRAINT uq_supervision_ai_review_lineage
+        UNIQUE (submission_id, trigger_source, revision),
+    CONSTRAINT ck_supervision_ai_review_status CHECK (status IN (
+        'queued', 'running', 'completed', 'failed', 'cancelled')),
+    CONSTRAINT ck_supervision_ai_review_trigger CHECK (trigger_source IN (
+        'student_manual', 'mentor_manual', 'auto_on_submission')),
+    CONSTRAINT ck_supervision_ai_review_summary CHECK (summary_state IN (
+        '', '证据较完整', '存在缺失项', '存在明确不满足项', '预审失败'))
+)
+"""
+
+_SUPERVISION_AI_REVIEW_FINDING_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_ai_review_finding (
+    id VARCHAR(32) NOT NULL,
+    run_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    ac_code VARCHAR(16) NOT NULL,
+    ac_statement TEXT NOT NULL,
+    ac_version INTEGER NOT NULL,
+    required BOOLEAN NOT NULL DEFAULT 1,
+    check_type VARCHAR(16) NOT NULL,
+    verdict VARCHAR(16) NOT NULL,
+    evidence_depth VARCHAR(8) NOT NULL,
+    support_relation VARCHAR(24) NOT NULL,
+    reason TEXT NOT NULL,
+    satisfied_parts TEXT NOT NULL,
+    missing_parts TEXT NOT NULL,
+    evidence_refs TEXT NOT NULL DEFAULT '[]',
+    missing_materials TEXT NOT NULL DEFAULT '[]',
+    risks TEXT NOT NULL DEFAULT '[]',
+    mentor_focus TEXT NOT NULL,
+    injection_suspected BOOLEAN NOT NULL DEFAULT 0,
+    injection_note TEXT NOT NULL,
+    runtime_claim_flag BOOLEAN NOT NULL DEFAULT 0,
+    downgrade_reason TEXT NOT NULL,
+    validated BOOLEAN NOT NULL DEFAULT 0,
+    batch_index INTEGER NOT NULL,
+    create_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_ai_review_finding UNIQUE (run_id, ac_code),
+    CONSTRAINT ck_supervision_ai_review_finding_verdict CHECK (verdict IN (
+        'satisfied', 'partial', 'not_satisfied', 'unverifiable')),
+    CONSTRAINT ck_supervision_ai_review_finding_depth CHECK (evidence_depth IN (
+        '', 'E0', 'E1', 'E2', 'E3', 'E4')),
+    CONSTRAINT ck_supervision_ai_review_finding_support CHECK (
+        support_relation IN ('', 'no_evidence', 'supports', 'partially_supports',
+            'contradicts', 'conflicting', 'self_report_only'))
+)
+"""
+
+_SUPERVISION_AI_REVIEW_SETTING_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_ai_review_setting (
+    id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    task_id VARCHAR(32) NOT NULL,
+    mode VARCHAR(16) NOT NULL DEFAULT 'off',
+    updated_by VARCHAR(32) NOT NULL,
+    updated_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_ai_review_setting UNIQUE (project_id, task_id),
+    CONSTRAINT ck_supervision_ai_review_setting_mode
+        CHECK (mode IN ('off', 'on', 'inherit'))
+)
+"""
+
+_SUPERVISION_AI_REVIEW_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_project_status "
+    "ON supervision_ai_review_run (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_task "
+    "ON supervision_ai_review_run (task_id, revision)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_submission "
+    "ON supervision_ai_review_run (submission_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_queue "
+    "ON supervision_ai_review_run (status, create_time)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_finding_project "
+    "ON supervision_ai_review_finding (project_id, ac_code)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_ai_review_setting_project "
+    "ON supervision_ai_review_setting (project_id)",
+]
+
+
+def _v20_supervision_ai_review(conn: Connection) -> None:
+    """v20：AI 静态预审的运行、逐条结论与自动开关三张表。
+
+    DDL 由 ``supervision_ai_review_model`` 的表定义生成后按本文件既有约定
+    归一（DATETIME→TIMESTAMP、JSON→TEXT 并给默认值），保证迁移出来的结构与
+    ORM 一致。全部 ``IF NOT EXISTS``，不改列不删表：已经提交的提交版本、
+    导师审核结论与附件一律不动（§14、§22.1）。
+    """
+    for ddl in (
+        _SUPERVISION_AI_REVIEW_RUN_TABLE,
+        _SUPERVISION_AI_REVIEW_FINDING_TABLE,
+        _SUPERVISION_AI_REVIEW_SETTING_TABLE,
+    ):
+        conn.execute(text(ddl))
+    for stmt in _SUPERVISION_AI_REVIEW_INDEXES:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1705,6 +1866,7 @@ _MIGRATIONS = [
     (17, "supervision_collaboration", _v17_supervision_collaboration),
     (18, "supervision_work_loop", _v18_supervision_work_loop),
     (19, "supervision_research_brief", _v19_supervision_research_brief),
+    (20, "supervision_ai_review", _v20_supervision_ai_review),
 ]
 
 

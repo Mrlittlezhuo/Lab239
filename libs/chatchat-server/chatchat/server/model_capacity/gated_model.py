@@ -34,7 +34,8 @@ from langchain_openai.llms import OpenAI as OpenAIBase
 from chatchat.utils import build_logger
 
 from .consumers import normalize_channel
-from .context import EMPTY_SPEC, ModelCallSpec, resolve_call_spec
+from .context import EMPTY_SPEC, ModelCallSpec, held_lease_ids, resolve_call_spec
+from .errors import ModelCapacityLeaseNotHeldError
 from .gate import CapacityLease, get_gate
 
 logger = build_logger(__name__)
@@ -46,7 +47,18 @@ CAPACITY_KWARGS = (
     "capacity_business_object",
     "capacity_user_id",
     "capacity_request_id",
+    "capacity_mode",
 )
+
+#: ``capacity_mode`` 的两种取值。
+#: ``acquire``（默认，空串等同）：模型自己在四个汇聚点取放租约。
+#: ``external``：租约由调用方（``lease_adapter.CapacityLeaseAdapter``）在业务
+#: 代码里取放，模型只确认"当前上下文确实持着租约"再发请求。用于一次业务
+#: 调用要按批次多次取放容量的场景（AI 静态预审按 AC 批次排队，§12.2.1）：
+#: 租约身份只有业务层知道（消费者类型、业务对象、发起人），而闸门上限为 1
+#: 且租约不可重入，模型再取一次必然自锁，所以这里改成"必须已持有"检查。
+CAPACITY_MODE_ACQUIRE = "acquire"
+CAPACITY_MODE_EXTERNAL = "external"
 
 #: get_ChatOpenAI 也接受的短别名，业务层写起来更顺手
 CAPACITY_KWARG_ALIASES = {
@@ -115,6 +127,35 @@ class ModelCapacityCallMixin:
         gate.check_reentrancy(spec, call_kind)
         return await gate.acquire_async(spec, call_kind=call_kind)
 
+    # —— external 模式：租约由业务层持有，模型只确认确实持有 ——
+
+    def _capacity_is_external(self) -> bool:
+        return (
+            str(getattr(self, "capacity_mode", "") or "").strip().lower()
+            == CAPACITY_MODE_EXTERNAL
+        )
+
+    def _capacity_require_external_lease(self, call_kind: str) -> None:
+        """``capacity_mode="external"`` 的前置检查：没有租约就不许发请求。
+
+        没有这一步，"由业务层取容量"会退化成"谁都没取容量"：预审之类的调用
+        绕过闸门直接打模型，§16.1B 的"最多一个并发生成"当场失效。
+        """
+        held = held_lease_ids()
+        if not held:
+            raise ModelCapacityLeaseNotHeldError(
+                f"模型声明了 capacity_mode={CAPACITY_MODE_EXTERNAL}，"
+                f"但当前上下文没有持有容量租约，拒绝发起 {call_kind} 调用。"
+                f"请先用 model_capacity.CapacityLeaseAdapter.acquire(...) 取得租约，"
+                f"并在 finally 里 release（AI 预审按 AC 批次取放，§12.2.1）。"
+            )
+        if not get_gate().active_held_leases():
+            raise ModelCapacityLeaseNotHeldError(
+                f"模型声明了 capacity_mode={CAPACITY_MODE_EXTERNAL}，"
+                f"但上下文记录的租约 {'、'.join(held)} 都已释放，"
+                f"拒绝发起 {call_kind} 调用。"
+            )
+
     def _capacity_release(self, lease: CapacityLease, reason: str) -> None:
         try:
             released = get_gate().release(lease, reason)
@@ -133,6 +174,9 @@ class ModelCapacityCallMixin:
 
     def _generate(self, *args: Any, **kwargs: Any):
         """同步普通调用：真正发出请求前取得容量，返回/异常后释放。"""
+        if self._capacity_is_external():
+            self._capacity_require_external_lease("generate")
+            return self._generate_without_capacity(*args, **kwargs)
         lease = self._capacity_acquire("generate")
         reason = "completed"
         try:
@@ -149,6 +193,10 @@ class ModelCapacityCallMixin:
 
     def _stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
         """同步流式调用：请求发出时持有，断线/取消/异常都在 finally 释放。"""
+        if self._capacity_is_external():
+            self._capacity_require_external_lease("stream")
+            yield from self._stream_without_capacity(*args, **kwargs)
+            return
         lease = self._capacity_acquire("stream")
         reason = "stream_completed"
         try:
@@ -170,6 +218,9 @@ class ModelCapacityCallMixin:
 
     async def _agenerate(self, *args: Any, **kwargs: Any):
         """异步普通调用：等待容量不阻塞事件循环。"""
+        if self._capacity_is_external():
+            self._capacity_require_external_lease("agenerate")
+            return await self._agenerate_without_capacity(*args, **kwargs)
         lease = await self._capacity_acquire_async("agenerate")
         reason = "completed"
         try:
@@ -185,6 +236,11 @@ class ModelCapacityCallMixin:
 
     async def _astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         """异步流式调用：断线（GeneratorExit）与任务取消都释放租约。"""
+        if self._capacity_is_external():
+            self._capacity_require_external_lease("astream")
+            async for chunk in self._astream_without_capacity(*args, **kwargs):
+                yield chunk
+            return
         lease = await self._capacity_acquire_async("astream")
         reason = "stream_completed"
         try:
@@ -222,6 +278,8 @@ class GatedChatOpenAI(ModelCapacityCallMixin, ChatOpenAIBase):  # type: ignore[m
     capacity_business_object: str = ""
     capacity_user_id: str = ""
     capacity_request_id: str = ""
+    #: "" / "acquire"：自己取放租约；"external"：租约由业务层持有（AI 预审等）
+    capacity_mode: str = ""
 
 
 class GatedOpenAI(ModelCapacityCallMixin, OpenAIBase):  # type: ignore[misc]
@@ -236,6 +294,8 @@ class GatedOpenAI(ModelCapacityCallMixin, OpenAIBase):  # type: ignore[misc]
     capacity_business_object: str = ""
     capacity_user_id: str = ""
     capacity_request_id: str = ""
+    #: "" / "acquire"：自己取放租约；"external"：租约由业务层持有（AI 预审等）
+    capacity_mode: str = ""
 
 
 class GatedChatPlatformAI(ModelCapacityCallMixin, ChatPlatformAIBase):  # type: ignore[misc]
@@ -251,6 +311,8 @@ class GatedChatPlatformAI(ModelCapacityCallMixin, ChatPlatformAIBase):  # type: 
     capacity_business_object: str = ""
     capacity_user_id: str = ""
     capacity_request_id: str = ""
+    #: "" / "acquire"：自己取放租约；"external"：租约由业务层持有（AI 预审等）
+    capacity_mode: str = ""
 
 
 # ---------------------------------------------------------------------------

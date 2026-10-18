@@ -91,7 +91,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 19
+        assert current_version(conn) == 20
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
@@ -455,8 +455,8 @@ class TestV12Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [12, 13, 14, 15, 16, 17, 18, 19]
-            assert current_version(conn) == 19
+            assert [m.version for m in result.applied] == [12, 13, 14, 15, 16, 17, 18, 19, 20]
+            assert current_version(conn) == 20
             row = conn.exec_driver_sql(
                 "SELECT id, status, stage, summary_json, round_no FROM research_run"
             ).first()

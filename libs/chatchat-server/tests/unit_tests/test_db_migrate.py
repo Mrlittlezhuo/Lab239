@@ -105,7 +105,7 @@ def _failing_registry(fail_version: int) -> MigrationRegistry:
 
 def test_builtin_registry_order_and_latest():
     registry = build_registry()
-    assert [m.version for m in registry.migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    assert [m.version for m in registry.migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     assert [m.name for m in registry.migrations] == [
         "baseline", "user_account", "conversation_owner",
         "openai_file", "legacy_conversation_owner", "user_memory",
@@ -117,8 +117,9 @@ def test_builtin_registry_order_and_latest():
         "supervision_collaboration",
         "supervision_work_loop",
         "supervision_research_brief",
+        "supervision_ai_review",
     ]
-    assert registry.latest_version == 19
+    assert registry.latest_version == 20
 
 
 def test_registry_rejects_duplicate_version():
@@ -160,8 +161,8 @@ def test_first_upgrade_on_empty_file_db(temp_db_file):
     with engine.connect() as conn:
         assert current_version(conn) is None
         result = apply_migrations(registry, conn)
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        assert result.final_version == 19
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert result.final_version == 20
     with engine.connect() as conn:
         rows = conn.execute(
             text("SELECT version, name FROM schema_migrations")
@@ -173,6 +174,7 @@ def test_first_upgrade_on_empty_file_db(temp_db_file):
             (17, "supervision_collaboration"),
             (18, "supervision_work_loop"),
             (19, "supervision_research_brief"),
+            (20, "supervision_ai_review"),
         ]
         # 空库尚无业务表 conversation，v3 跳过 ALTER（由 create_all 建带新字段表）
         assert not inspect(conn).has_table("conversation")
@@ -192,14 +194,14 @@ def test_double_upgrade_is_idempotent(temp_db_file):
     engine = _file_engine(temp_db_file)
     with engine.connect() as conn:
         first = apply_migrations(registry, conn)
-        assert [m.version for m in first.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        assert [m.version for m in first.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         second = apply_migrations(registry, conn)
         assert second.applied == []
-        assert second.final_version == 19
+        assert second.final_version == 20
     with engine.connect() as conn:
         assert conn.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar() == 19
+        ).scalar() == 20
     engine.dispose()
 
 
@@ -226,8 +228,8 @@ def test_in_memory_db_upgrades_without_backup(tmp_path):
     assert sqlite_db_file(engine) is None
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
-        assert result.final_version == 19
-        assert current_version(conn) == 19
+        assert result.final_version == 20
+        assert current_version(conn) == 20
     engine.dispose()
 
 
@@ -470,7 +472,7 @@ def test_v2_creates_user_account_schema(temp_db_file):
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
         # v1→v2→v3→v4→v5；v3 在空库无 conversation 表时跳过 ALTER
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         cols = {c["name"] for c in inspect(conn).get_columns("user_account")}
         expected = {
             "id", "username", "password_hash", "display_name",
@@ -509,12 +511,12 @@ def test_v2_only_runs_on_existing_v1_db(temp_db_file):
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
         # 已有 v1：执行 v2、v3、v4、v5（v3 无 conversation 表，跳过 ALTER）
-        assert [m.version for m in result.applied] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        assert result.final_version == 19
+        assert [m.version for m in result.applied] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert result.final_version == 20
         assert conn.execute(text("SELECT COUNT(*) FROM user_account")).scalar() == 0
         result2 = apply_migrations(registry, conn)
         assert result2.applied == []
-        assert result2.final_version == 19
+        assert result2.final_version == 20
     engine.dispose()
 
 
@@ -645,8 +647,8 @@ def test_v3_upgrades_existing_v2_db_and_preserves_data(tmp_path):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        assert result.final_version == 19
+        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert result.final_version == 20
         # v4 创建 openai_file 表
         assert inspect(conn).has_table("openai_file")
 
@@ -687,7 +689,7 @@ def test_v3_upgrades_existing_v2_db_and_preserves_data(tmp_path):
     with engine.connect() as conn:
         result2 = apply_migrations(build_registry(), conn)
         assert result2.applied == []
-        assert result2.final_version == 19
+        assert result2.final_version == 20
     engine.dispose()
 
 
@@ -724,8 +726,8 @@ def test_v3_skips_when_conversation_table_missing(temp_db_file):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        assert result.final_version == 19
+        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert result.final_version == 20
         # conversation 表未被创建（由 create_all 负责）
         assert not inspect(conn).has_table("conversation")
         # v4 创建 openai_file 表
@@ -820,7 +822,7 @@ def test_sample_data_preserved_through_real_upgrade(tmp_path):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert result.final_version == 19
+        assert result.final_version == 20
 
     with engine.connect() as conn:
         after = set(inspect(conn).get_table_names())
@@ -838,7 +840,7 @@ def test_sample_data_preserved_through_real_upgrade(tmp_path):
     # 新增 user_account，原有表全部保留；知识库表未被改动
     assert "user_account" in after
     assert before <= after
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     assert null_owner == 0
     assert distinct_owner == 1
     assert legacy_user == 1
@@ -881,7 +883,7 @@ def test_cli_status_shows_pending_and_final(tmp_path, monkeypatch):
     runner_result, db_path = _cli(monkeypatch, tmp_path, "status")
     assert runner_result.exit_code == 0
     assert "当前数据库版本" in runner_result.output
-    assert "代码最新版本：19" in runner_result.output
+    assert "代码最新版本：20" in runner_result.output
     assert "v1" in runner_result.output
     assert "v2" in runner_result.output
     assert "v3" in runner_result.output
@@ -898,7 +900,7 @@ def test_cli_status_shows_pending_and_final(tmp_path, monkeypatch):
     upgrade_result, _ = _cli(monkeypatch, tmp_path, "upgrade")
     assert upgrade_result.exit_code == 0
     assert "已执行迁移" in upgrade_result.output
-    assert "最终版本：19" in upgrade_result.output
+    assert "最终版本：20" in upgrade_result.output
     assert "备份" in upgrade_result.output
 
     status_result, _ = _cli(monkeypatch, tmp_path, "status")
@@ -928,7 +930,7 @@ def test_cli_upgrade_is_idempotent(tmp_path, monkeypatch):
     result, _ = _cli(monkeypatch, tmp_path, "upgrade")
     assert result.exit_code == 0
     assert "无待执行迁移" in result.output
-    assert "最终版本：19" in result.output
+    assert "最终版本：20" in result.output
     assert Path(db_path).is_file()
     backups = [p for p in db_path.parent.iterdir() if ".bak-" in p.name]
     # 第二次升级无待执行迁移，不触发新的备份
@@ -1011,7 +1013,7 @@ def test_v7_creates_agent_run_schema_on_empty_db(temp_db_file):
     engine = _file_engine(temp_db_file)
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         run_cols = {c["name"] for c in inspect(conn).get_columns("agent_run")}
         assert {
             "id", "owner_id", "conversation_id", "source_message_id",
@@ -1038,7 +1040,7 @@ def test_v7_creates_agent_run_schema_on_empty_db(temp_db_file):
     with engine.connect() as conn:
         result2 = apply_migrations(registry, conn)
         assert result2.applied == []
-        assert result2.final_version == 19
+        assert result2.final_version == 20
         assert conn.execute(text("SELECT COUNT(*) FROM agent_run")).scalar() == 0
     engine.dispose()
 
@@ -1085,8 +1087,8 @@ def test_v7_upgrades_existing_v6_db_preserving_data(temp_db_file):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        assert result.final_version == 19
+        assert [m.version for m in result.applied] == [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert result.final_version == 20
         # 新表已创建
         assert inspect(conn).has_table("agent_run")
         assert inspect(conn).has_table("agent_step")
@@ -1100,6 +1102,83 @@ def test_v7_upgrades_existing_v6_db_preserving_data(temp_db_file):
             ).scalar()
             == "legacy-user"
         )
+    engine.dispose()
+
+
+def test_v20_ai_review_schema_matches_the_orm(temp_db_file):
+    """v20 建出的三张预审表必须与 ORM 定义一致。
+
+    预审模块的测试靠 ``Base.metadata.create_all`` 建表，迁移路径本身不会被它们
+    覆盖；这里专门用真实迁移建库，再逐列比对 ORM，钉住"手写 DDL 与模型不漂移"
+    （AGENTS.md：迁移必须幂等、可验证）。索引也一并按名字比对，否则队列查询会
+    在真实库里静默退化成全表扫描。
+    """
+    from chatchat.server.db.models.supervision_ai_review_model import (
+        SupervisionAIReviewFindingModel,
+        SupervisionAIReviewRunModel,
+        SupervisionAIReviewSettingModel,
+    )
+
+    engine = _file_engine(temp_db_file)
+    with engine.connect() as conn:
+        result = apply_migrations(build_registry(), conn)
+        assert result.final_version == 20
+        insp = inspect(conn)
+        for model in (
+            SupervisionAIReviewRunModel,
+            SupervisionAIReviewFindingModel,
+            SupervisionAIReviewSettingModel,
+        ):
+            table = model.__table__
+            assert insp.has_table(table.name), table.name
+            migrated = {column["name"] for column in insp.get_columns(table.name)}
+            expected = {column.name for column in table.columns}
+            assert migrated == expected, (table.name, expected - migrated, migrated - expected)
+            indexed = {item["name"] for item in insp.get_indexes(table.name)}
+            assert {ix.name for ix in table.indexes} <= indexed, table.name
+        # 幂等：再跑一次不报错、不重复建表
+        second = apply_migrations(build_registry(), conn)
+        assert second.applied == []
+        assert second.final_version == 20
+    engine.dispose()
+
+
+def test_v20_upgrade_keeps_existing_submission_and_review_rows(temp_db_file):
+    """升级到 v20 前已存在的提交/审核/附件行必须原样保留（不重建、不清空）。"""
+    from chatchat.server.db.migrate.migrations import _MIGRATIONS
+
+    engine = _file_engine(temp_db_file)
+    registry = build_registry()
+    upto_v19 = MigrationRegistry()
+    for version, name, upgrade in _MIGRATIONS:
+        if version > 19:
+            break
+        upto_v19.register(version, name, upgrade)
+    with engine.connect() as conn:
+        # 先升到 v19（里程碑1 的十张表已在），插入真实业务行
+        apply_migrations(upto_v19, conn)
+        assert current_version(conn) == 19
+        conn.execute(
+            text(
+                "INSERT INTO supervision_submission (id, code, project_id, task_id,"
+                " version, author_id, summary, ac_snapshot, create_time)"
+                " VALUES ('sub1','S-v1','p1','t1',1,'u1','摘要',"
+                " '[{\"code\":\"AC-1\",\"statement\":\"跑通基线\"}]',"
+                " '2026-01-01 00:00:00')"
+            )
+        )
+        conn.commit()
+        apply_migrations(registry, conn)
+        assert current_version(conn) == 20
+        row = conn.execute(
+            text(
+                "SELECT summary, ac_snapshot, status FROM supervision_submission"
+                " WHERE id = 'sub1'"
+            )
+        ).one()
+        assert row[0] == "摘要"
+        assert "AC-1" in row[1]  # 提交里的验收标准快照原样保留
+        assert row[2] == "submitted"
     engine.dispose()
 
 

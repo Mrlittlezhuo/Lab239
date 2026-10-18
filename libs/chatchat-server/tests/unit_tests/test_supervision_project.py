@@ -65,7 +65,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 19
+        assert current_version(conn) == 20
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
@@ -227,7 +227,7 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_empty.db'}")
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert result.final_version == 19
+            assert result.final_version == 20
             assert 17 in [m.version for m in result.applied]
             tables = set(conn.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -274,8 +274,8 @@ class TestV17Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [17, 18, 19]
-            assert result.final_version == 19
+            assert [m.version for m in result.applied] == [17, 18, 19, 20]
+            assert result.final_version == 20
             assert conn.execute(
                 text("SELECT COUNT(*) FROM conversation WHERE id = 'c-old'")
             ).scalar() == 1
@@ -293,11 +293,11 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_idem.db'}")
         with engine.connect() as conn:
             first = apply_migrations(build_registry(), conn)
-            assert first.final_version == 19
+            assert first.final_version == 20
         with engine.connect() as conn:
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 19
+            assert second.final_version == 20
         # 直接重跑 v17 的 DDL 也不报错、不丢数据（IF NOT EXISTS）
         with engine.connect() as conn:
             conn.execute(text(

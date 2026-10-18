@@ -73,9 +73,11 @@ from .errors import (
     ModelCapacityCancelledError,
     ModelCapacityDuplicateError,
     ModelCapacityError,
+    ModelCapacityLeaseNotHeldError,
     ModelCapacityQueueTimeoutError,
     ModelCapacityReentrancyError,
 )
+from .lease_adapter import DEFAULT_CAPACITY_ADAPTER, CapacityLeaseAdapter
 from .gate import (
     CapacityLease,
     ModelCapacityGate,
@@ -88,6 +90,8 @@ from .gate import (
 from .gated_model import (
     CAPACITY_KWARGS,
     CAPACITY_KWARG_ALIASES,
+    CAPACITY_MODE_EXTERNAL,
+    CAPACITY_MODE_ACQUIRE,
     GatedChatOpenAI,
     GatedChatPlatformAI,
     GatedOpenAI,
@@ -111,6 +115,7 @@ __all__ = [
     "ModelCapacityCancelledError",
     "ModelCapacityDuplicateError",
     "ModelCapacityReentrancyError",
+    "ModelCapacityLeaseNotHeldError",
     # 身份声明
     "ModelCallSpec",
     "model_call_context",
@@ -126,6 +131,11 @@ __all__ = [
     "pop_model_call_kwargs",
     "CAPACITY_KWARGS",
     "CAPACITY_KWARG_ALIASES",
+    "CAPACITY_MODE_ACQUIRE",
+    "CAPACITY_MODE_EXTERNAL",
+    # 业务层代持租约（AI 预审按 AC 批次取放）
+    "CapacityLeaseAdapter",
+    "DEFAULT_CAPACITY_ADAPTER",
     # 通道与消费者登记
     "CHANNEL_INTERACTIVE",
     "CHANNEL_USER_TASK",

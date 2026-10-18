@@ -177,6 +177,7 @@ def _model(
     fail_at: str = "",
     business_object: str = "",
     request_id: str = "",
+    capacity_mode: str = "",
 ) -> _FakeChatModel:
     return _FakeChatModel(
         model_name="fake-gated-model",
@@ -186,6 +187,7 @@ def _model(
         capacity_consumer=consumer,
         capacity_business_object=business_object,
         capacity_request_id=request_id,
+        capacity_mode=capacity_mode,
         tracker=tracker,
         delay=delay,
         chunks=chunks,
@@ -1138,3 +1140,88 @@ def test_capacity_limit_greater_than_one_is_honoured_if_configured():
     wider.release(second, "completed")
     wider.release(third_outcome["lease"], "completed")
     assert wider.status()["active_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# capacity_mode="external"：租约由业务层代持（AI 预审按 AC 批次取放，§12.2.1）
+# ---------------------------------------------------------------------------
+
+
+def test_external_model_refuses_to_call_without_lease(gate):
+    """声明 external 却没持有租约 → 拒绝发起，不绕过闸门直接打模型。"""
+    model = _model(consumer="student_check", capacity_mode=mc.CAPACITY_MODE_EXTERNAL)
+    with pytest.raises(mc.ModelCapacityLeaseNotHeldError):
+        model.invoke("没人替我取容量")
+    assert gate.status()["active_count"] == 0
+    assert gate.status()["counters"]["enqueued"] == 0
+    # 默认模式的模型不受影响，照常在四个汇聚点取放
+    normal = _model(consumer="student_check")
+    normal.invoke("照常排队")
+    assert gate.status()["active_count"] == 0
+
+
+def test_external_model_runs_under_adapter_lease_without_double_acquire(gate):
+    """适配器取一次租约 → 模型不再取第二次：上限为 1 时不会自锁。"""
+    adapter = mc.CapacityLeaseAdapter()
+    model = _model(consumer="mentor_review", capacity_mode=mc.CAPACITY_MODE_EXTERNAL)
+    lease = adapter.acquire(
+        consumer="mentor_review", business_ref="AR-r1", user_id="u-1"
+    )
+    assert lease.spec.consumer_type == "mentor_review"
+    assert lease.spec.business_object == "AR-r1"
+    assert lease.spec.user_id == "u-1"
+    assert gate.status()["active_count"] == 1
+    model.invoke("预审批次 1")
+    assert gate.status()["active_count"] == 1
+    assert gate.max_active_observed == 1
+    adapter.release(lease, reason="completed")
+    assert gate.status()["active_count"] == 0
+    # 租约释放后再调用必须拒绝：防止"取了一次容量，后面所有批次都白跑"
+    with pytest.raises(mc.ModelCapacityLeaseNotHeldError):
+        model.invoke("租约已释放")
+    assert gate.status()["active_count"] == 0
+
+
+def test_adapter_release_is_idempotent_and_none_safe(gate):
+    """业务层在 finally 里无条件 release：None 与重复释放都必须是 no-op。"""
+    adapter = mc.CapacityLeaseAdapter()
+    adapter.release(None, reason="completed")
+    lease = adapter.acquire(consumer="auto_review", business_ref="AR-r2")
+    adapter.release(lease, "completed")
+    adapter.release(lease, "error")
+    assert gate.status()["active_count"] == 0
+    assert len(gate.status()["recent_releases"]) == 1
+    assert mc.CapacityLeaseAdapter.describe(lease)["lease_id"] == lease.lease_id
+    assert mc.CapacityLeaseAdapter.describe(None) == {}
+
+
+def test_adapter_batches_release_between_ac_batches(gate):
+    """按 AC 批次取放：每批之间释放，前台调用能排到下一批之前（§8.2、§12.2）。"""
+    adapter = mc.CapacityLeaseAdapter()
+    model = _model(consumer="auto_review", capacity_mode=mc.CAPACITY_MODE_EXTERNAL)
+    for batch in range(2):
+        lease = adapter.acquire(consumer="auto_review", business_ref="AR-r3")
+        model.invoke(f"批次 {batch}")
+        adapter.release(lease, "completed")
+    assert gate.status()["counters"]["enqueued"] == 2
+    # 批间释放后前台聊天立刻取得到容量，不会被预审长期霸占
+    chat = _model(consumer="smart_chat")
+    chat.invoke("插在两批之间的前台聊天")
+    assert gate.max_active_observed == 1
+    assert gate.status()["active_count"] == 0
+
+
+def test_external_mode_is_declared_through_the_factory(gate):
+    """``get_ChatOpenAI(capacity_mode="external")`` 不把声明漏进 openai SDK。"""
+    from chatchat.server.utils import get_ChatOpenAI
+
+    model = get_ChatOpenAI(
+        model_name="qwen:7b",
+        consumer="mentor_review",
+        capacity_mode=mc.CAPACITY_MODE_EXTERNAL,
+        streaming=False,
+    )
+    assert model.capacity_mode == mc.CAPACITY_MODE_EXTERNAL
+    assert model.capacity_consumer == "mentor_review"
+    # 外部持有的模型构造时不持容量
+    assert gate.status()["active_count"] == 0

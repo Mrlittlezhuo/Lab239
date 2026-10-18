@@ -41,6 +41,15 @@ class ModelCapacityDuplicateError(ModelCapacityError):
     """重复请求：同一业务请求已在排队或运行，不再重复入队。"""
 
 
+class ModelCapacityLeaseNotHeldError(ModelCapacityError):
+    """声明了 ``capacity_mode="external"`` 却没有持有租约就发起调用。
+
+    与 ``ModelCapacityReentrancyError`` 是一对镜像：前者防"取两次"，本类防
+    "一次都没取"。业务层（AI 预审按 AC 批次取放容量）负责取租约，模型只确认
+    确实持有；缺了这道检查，"由业务层取容量"就会退化成"谁都没取容量"。
+    """
+
+
 class ModelCapacityReentrancyError(ModelCapacityError):
     """同一调用上下文里嵌套取租约（外层持锁、内层再取会自锁）。"""
 
@@ -62,4 +71,5 @@ __all__ = [
     "ModelCapacityCancelledError",
     "ModelCapacityDuplicateError",
     "ModelCapacityReentrancyError",
+    "ModelCapacityLeaseNotHeldError",
 ]

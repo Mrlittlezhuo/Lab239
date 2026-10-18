@@ -44,6 +44,9 @@ from chatchat.server.db.models.user_model import UserModel
 from chatchat.server.db.repository import supervision_work_repository as work
 from chatchat.server.db.repository.supervision_repository import ROLE_MENTOR
 from chatchat.server.db.session import get_db
+from chatchat.utils import build_logger
+
+logger = build_logger(__name__)
 
 supervision_work_router = APIRouter(
     prefix="/supervision", tags=["Supervision - 研究任务与审核"],
@@ -762,6 +765,19 @@ def create_submission(
         known_issues=body.known_issues, unfinished_items=body.unfinished_items,
         attachment_codes=body.attachment_codes,
     )
+    # 提交后自动预审（AI预审方案 §7.2）：开关默认关闭，打开时也只创建 queued
+    # 运行并交给后台线程，模型调用按 AC 批次经过统一容量闸门。这里任何失败都
+    # 只写日志，绝不回滚或改写已经成功的提交（P-06、P-11）。
+    try:
+        from chatchat.server import ai_review_runtime
+
+        ai_review_runtime.queue_auto_review(
+            project_id=submission.project_id,
+            submission_id=submission.id,
+            actor_id=user.id,
+        )
+    except Exception:
+        logger.warning("自动预审创建失败，提交不受影响", exc_info=True)
     return _submission_out(submission)
 
 
