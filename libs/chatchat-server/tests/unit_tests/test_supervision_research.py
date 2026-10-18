@@ -9,9 +9,11 @@
 5. 确认共享后另一方只能读结构化版本，不能反查来源消息；
 6. 项目内容不会被自动写成用户的全局个人偏好。
 
-外加：未登录 401、非成员 404、项目角色越权 403、版本比较与"重新提取不
-覆盖旧版本"（§4.3.1）。全部使用临时 SQLite，模型一律用假对象喂固定内容，
-不联网、不调真实模型。
+外加：项目内 AI 讨论回复（§15.2 第1、6条：发言先落库、模型缺席不陪葬、
+上下文只含本人历史与已确认共享内容）、未登录 401、非成员 404、项目角色
+越权 403、版本比较与"重新提取不覆盖旧版本"（§4.3.1）。全部使用临时
+SQLite，模型一律用假对象喂固定内容，不联网、不调真实模型（autouse 夹具
+默认把所有消费者置为"未接入"）。
 """
 import asyncio
 import json
@@ -181,6 +183,23 @@ users_id = {}
 def _track_users(users):
     users_id.clear()
     users_id.update({k: v["id"] for k, v in users.items()})
+
+
+#: 真工厂留一份引用：只有一个用例需要走真构造路径核对消费者声明。
+_REAL_BUILD_GATED_MODEL = research_routes._build_gated_model
+
+
+@pytest.fixture(autouse=True)
+def _no_real_model(monkeypatch):
+    """整个文件都不许起真模型：默认所有消费者都"未接入"（→ 503）。
+
+    需要模型行为的用例自己把 ``_resolve_llm`` / ``_resolve_discussion_llm``
+    换成 ``FakeLLM``。少了这道保险，测试环境里配了默认 LLM 就会真的联网。
+    """
+    research_routes.reset_research_model_cache()
+    monkeypatch.setattr(research_routes, "_build_gated_model", lambda consumer: None)
+    yield
+    research_routes.reset_research_model_cache()
 
 
 @contextmanager
@@ -536,12 +555,208 @@ class TestProjectContext:
 
 
 # ---------------------------------------------------------------------------
+# 3.5 项目内 AI 讨论回复（§15.2 第1、6条；边界同 §16.3 第2、3条）
+# ---------------------------------------------------------------------------
+
+AI_ANSWER = "可以先把多反射面拆成可验证的子问题，再决定基线怎么选。"
+
+
+class TestProjectDiscussionTurn:
+    def _post(self, client, db, pid, conversation_id, text="基线到底该选哪一个？"):
+        return client.post(
+            f"/supervision/projects/{pid}/research/dialogues/{conversation_id}/messages",
+            headers=_headers(db, "alice"), json={"text": text},
+        )
+
+    def _messages(self, client, db, pid, conversation_id):
+        r = client.get(
+            f"/supervision/projects/{pid}/research/dialogues/{conversation_id}/messages",
+            headers=_headers(db, "alice"),
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["messages"]
+
+    def test_message_survives_when_model_unavailable(self, client, temp_db):
+        """模型未接入：发言照样落库（503 只针对回复），讨论记录不陪葬。"""
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        r = self._post(client, temp_db, pid, dialogue["conversation_id"])
+        assert r.status_code == 503
+        assert "已保存" in r.text
+        messages = self._messages(client, temp_db, pid, dialogue["conversation_id"])
+        assert messages[-1]["query"] == "基线到底该选哪一个？"
+        assert not messages[-1]["response"]
+        assert messages[-1]["metadata"]["pending_reply"] is True
+
+    def test_reply_is_written_back_to_the_same_turn(self, client, temp_db, monkeypatch):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+
+        r = self._post(client, temp_db, pid, dialogue["conversation_id"])
+        assert r.status_code == 200, r.text
+        assert r.json()["response"] == AI_ANSWER
+        assert r.json()["metadata"]["pending_reply"] is False
+        assert r.json()["metadata"]["consumer"] == "project_discussion"
+
+        messages = self._messages(client, temp_db, pid, dialogue["conversation_id"])
+        assert messages[-1]["query"] == "基线到底该选哪一个？"
+        assert messages[-1]["response"] == AI_ANSWER
+        assert len(fake.prompts) == 1
+
+    def test_prompt_has_own_history_and_confirmed_brief_only(
+        self, client, temp_db, monkeypatch
+    ):
+        """模型上下文 = 本人会话历史 + 已确认共享内容；另一角色私人内容不进。"""
+        pid = _active_project(client, temp_db)["project_id"]
+        student = _private_dialogue(client, temp_db, pid)
+        mentor = _dialogue(client, temp_db, "mentor", pid, "导师会话·私有")
+        _add_turns(temp_db, mentor["conversation_id"], [(MENTOR_SECRET, "收到。")])
+        draft = _create_draft(client, temp_db, pid)
+        client.post(
+            f"/supervision/projects/{pid}/research/briefs/{draft['code']}/confirm",
+            headers=_headers(temp_db, "alice"), json={"note": "作为当前工作定义"},
+        )
+
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        r = self._post(client, temp_db, pid, student["conversation_id"])
+        assert r.status_code == 200, r.text
+
+        prompt_text = json.dumps(fake.prompts[0], ensure_ascii=False)
+        assert STUDENT_SECRET in prompt_text          # 本人历史带入
+        assert MENTOR_SECRET not in prompt_text       # 对方私人消息绝不带入
+        assert "项目共享研究内容" in prompt_text       # 已确认结构化内容注入
+        assert EXTRACTED["question"] in prompt_text
+        assert r.json()["metadata"]["project_context_injected"] is True
+        # 项目内容不是个人偏好：提示词里必须这样声明
+        assert "不是成员的个人偏好" in prompt_text
+
+    def test_prompt_says_when_nothing_confirmed_yet(self, client, temp_db, monkeypatch):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        _create_draft(client, temp_db, pid)  # 只有草稿，未确认
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        assert self._post(client, temp_db, pid, dialogue["conversation_id"]).status_code == 200
+        prompt_text = json.dumps(fake.prompts[0], ensure_ascii=False)
+        assert "还没有已确认共享的研究内容" in prompt_text
+        assert EXTRACTED["question"] not in prompt_text  # 草稿不进模型
+
+    def test_pending_reply_can_be_generated_later(self, client, temp_db, monkeypatch):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        first = self._post(client, temp_db, pid, dialogue["conversation_id"])
+        assert first.status_code == 503
+        pending = self._messages(client, temp_db, pid, dialogue["conversation_id"])[-1]
+
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        r = client.post(
+            f"/supervision/projects/{pid}/research/messages/{pending['message_id']}/reply",
+            headers=_headers(temp_db, "alice"),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["response"] == AI_ANSWER
+
+    def test_answered_turn_is_not_regenerated(self, client, temp_db, monkeypatch):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        answered = self._post(client, temp_db, pid, dialogue["conversation_id"]).json()
+
+        r = client.post(
+            f"/supervision/projects/{pid}/research/messages/{answered['message_id']}/reply",
+            headers=_headers(temp_db, "alice"),
+        )
+        assert r.status_code == 409
+        assert len(fake.prompts) == 1  # 不重复烧模型
+
+    def test_other_role_cannot_post_into_your_dialogue(self, client, temp_db, monkeypatch):
+        pid = _active_project(client, temp_db)["project_id"]
+        student = _dialogue(client, temp_db, "alice", pid)
+        fake = FakeLLM(AI_ANSWER)
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        r = client.post(
+            f"/supervision/projects/{pid}/research/dialogues/{student['conversation_id']}/messages",
+            headers=_headers(temp_db, "mentor"), json={"text": "偷看学生的会话"},
+        )
+        assert r.status_code == 404
+        assert fake.prompts == []
+        assert self._messages(client, temp_db, pid, student["conversation_id"]) == []
+
+    def test_outsider_and_anonymous_are_rejected(self, client, temp_db):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        url = f"/supervision/projects/{pid}/research/dialogues/{dialogue['conversation_id']}/messages"
+        outsider = client.post(url, headers=_headers(temp_db, "bob"), json={"text": "外项目用户"})
+        assert outsider.status_code == 404
+        anonymous = client.post(url, json={"text": "未登录"})
+        assert anonymous.status_code == 401
+
+    def test_blank_and_oversized_text_are_rejected(self, client, temp_db):
+        """空正文是字段非法（400），超列宽由 pydantic 形状检查拦下（422）。"""
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        blank = self._post(client, temp_db, pid, dialogue["conversation_id"], "   ")
+        assert blank.status_code == 400
+        assert "不能为空" in blank.text
+        too_long = self._post(
+            client, temp_db, pid, dialogue["conversation_id"], "长" * 4097,
+        )
+        assert too_long.status_code == 422
+        assert self._messages(client, temp_db, pid, dialogue["conversation_id"]) == []
+
+    def test_history_is_capped_and_truncation_is_recorded(
+        self, client, temp_db, monkeypatch
+    ):
+        pid = _active_project(client, temp_db)["project_id"]
+        dialogue = _dialogue(client, temp_db, "alice", pid)
+        _add_turns(
+            temp_db, dialogue["conversation_id"],
+            [(f"问{i}", f"答{i}") for i in range(research.DISCUSSION_HISTORY_LIMIT + 5)],
+        )
+        fake = FakeLLM("长" * (research.MAX_RESPONSE_CHARS + 500))
+        monkeypatch.setattr(research_routes, "_resolve_discussion_llm", lambda: fake)
+        r = self._post(client, temp_db, pid, dialogue["conversation_id"])
+        assert r.status_code == 200, r.text
+        # 提示词 = system + 最近 N 轮（每轮 user+assistant）+ 本次提问
+        assert len(fake.prompts[0]) == 1 + 2 * research.DISCUSSION_HISTORY_LIMIT + 1
+        body = r.json()
+        assert len(body["response"]) == research.MAX_RESPONSE_CHARS
+        assert body["metadata"]["truncated_response"] is True
+
+    def test_discussion_and_extraction_declare_registered_consumers(self, monkeypatch):
+        """两个入口各自声明消费者，通道由登记表推导（§8.2、§16.1B 第5条）。"""
+        import chatchat.server.utils as server_utils
+
+        captured = {}
+
+        def fake_factory(**kwargs):
+            captured[kwargs["consumer"]] = kwargs
+            return SimpleNamespace(model_name=kwargs["model_name"])
+
+        monkeypatch.setattr(research_routes, "_build_gated_model", _REAL_BUILD_GATED_MODEL)
+        monkeypatch.setattr(server_utils, "get_ChatOpenAI", fake_factory)
+
+        assert research_routes._resolve_discussion_llm() is not None
+        assert research_routes._resolve_llm() is not None
+        assert captured["project_discussion"]["consumer"] == "project_discussion"
+        assert captured["research_definition"]["consumer"] == "research_definition"
+        assert captured["project_discussion"]["streaming"] is False
+        research_routes.reset_research_model_cache()
+
+
+# ---------------------------------------------------------------------------
 # 4. 从本人聊天提取、编辑、确认（§16.3 第4条）
 # ---------------------------------------------------------------------------
 
 
 class TestExtractionAndConfirmation:
-    def test_extract_returns_503_until_model_is_wired(self, client, temp_db):
+    def test_extract_returns_503_when_model_unavailable(self, client, temp_db):
+        """模型未接入 → 503 + 中文说明，绝不假装生成过（autouse 夹具已断模型）。"""
         pid = _active_project(client, temp_db)["project_id"]
         _private_dialogue(client, temp_db, pid)
         r = client.post(
@@ -550,6 +765,8 @@ class TestExtractionAndConfirmation:
         )
         assert r.status_code == 503
         assert "模型能力尚未接入" in r.text
+        with _session(temp_db) as s:
+            assert s.query(SupervisionResearchBriefModel).count() == 0
 
     def test_extract_builds_draft_from_own_messages(self, client, temp_db, monkeypatch):
         pid = _active_project(client, temp_db)["project_id"]

@@ -16,9 +16,10 @@
 - 本模块**不写** ``memory`` / ``session_summary`` 等个人记忆表：项目
   内容只作为项目范围上下文注入，不变成任何人的全局个人偏好（§9.3）。
 
-模型调用通过参数注入（``extract_brief_draft(..., llm=...)``）：统一容量
-闸门在别处实现，这里只要求对象有 ``.invoke(messages)`` 并返回带
-``.content`` 的结果。提示词组装与结果解析都是纯函数，可单独测试。
+模型调用通过参数注入（``extract_brief_draft(..., llm=...)``、
+``generate_dialogue_reply(..., llm=...)``）：统一容量闸门在别处实现，这里
+只要求对象有 ``.invoke(messages)`` 并返回带 ``.content`` 的结果。提示词
+组装与结果解析都是纯函数，可单独测试。
 """
 from __future__ import annotations
 
@@ -68,6 +69,15 @@ KIND_MENTOR_GUIDANCE = "mentor_guidance"
 # 提取时最多带回多少条消息：长会话全量塞给模型既慢又容易把无关历史
 # 一起提炼进研究定义。
 MAX_EXTRACTION_MESSAGES = 60
+
+# 一次讨论回复带入的历史轮次上限。讨论是长对话，全量重放既超预算又会
+# 让模型反复回到早已澄清过的旧问题；界面要看的完整历史仍从库里读。
+DISCUSSION_HISTORY_LIMIT = 20
+
+# message 表的 query / response 列宽（String(4096)）。超出就截断并在
+# meta_data 里标 truncated，绝不静默丢弃后半段。
+MAX_QUERY_CHARS = 4096
+MAX_RESPONSE_CHARS = 4096
 
 # 结构化内容的长度上限（模型输出与界面输入都受这一条约束）。
 MAX_FIELD_CHARS = 8000
@@ -250,6 +260,172 @@ def get_dialogue_messages(
     project, _ = require_member(session, project_id, user_id)
     conversation = _owned_dialogue(session, project, user_id, conversation_id)
     return _dialogue_messages(session, conversation, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# 项目内 AI 讨论：一次发言 + 一次模型回复（§4.2、§15.2 第1/6条）
+# ---------------------------------------------------------------------------
+
+
+def build_discussion_prompt(
+    *,
+    project_code: str,
+    project_name: str,
+    role: str,
+    project_context: str,
+    history: Iterable[Any],
+    question: str,
+) -> list[dict]:
+    """组装项目内讨论的一次调用（纯函数，可直接单测）。
+
+    上下文边界（§9.3、§16.3 第2、3、6条）：
+
+    - 历史只放**当前用户自己**这条会话里的消息，另一角色的原始消息、
+      摘要、私人草稿永远进不来（调用方已按 ``owner_id`` 取过）；
+    - 项目范围信息只有 ``build_project_context`` 给的已确认结构化版本；
+    - 提示词里明确要求模型不得把项目内容当个人偏好、不得声称已写入
+      个人记忆，也不得替成员确认研究内容（确认必须在界面上操作）。
+    """
+    role_label = "导师" if role == ROLE_MENTOR else "学生"
+    system = (
+        f"你是科研协作项目「{project_code} {project_name}」里的研究讨论助手，"
+        f"正在与{role_label}讨论研究问题。\n"
+        "你的职责是帮助成员逐步澄清背景、研究问题、方向、限制和已有尝试，"
+        "而不是替成员决定研究方向，也不是替成员写出结论。\n"
+        "硬性要求：\n"
+        "1. 只能依据成员在讨论中说过的内容和下面给出的「项目共享研究内容」"
+        "作答；信息不足时直接提问澄清，不得编造论文、数据、实验结果或"
+        "“已完成检索”之类的既成事实。\n"
+        "2. 不得把 AI 的建议表述成成员已经采纳或已经确认的决定；研究内容"
+        "的确认只能在界面上由成员本人操作。\n"
+        "3. 「项目共享研究内容」属于项目范围信息，不是成员的个人偏好或长期"
+        "记忆；不得声称已把它写入个人记忆，也不得把它带到本项目之外。\n"
+        "4. 已确认的研究内容只代表当前工作定义，不代表已被论文证据证实。\n"
+        "5. 用中文回答，简洁、可执行；需要成员补充信息时列出具体问题。"
+    )
+    if project_context:
+        system = f"{system}\n\n{project_context}"
+    else:
+        system = (
+            f"{system}\n\n（本项目还没有已确认共享的研究内容；"
+            "需要结构化研究内容时，请提示成员在界面上提取并确认。）"
+        )
+
+    messages: list[dict] = [{"role": "system", "content": system}]
+    for row in history:
+        if isinstance(row, dict):
+            query = row.get("query") or ""
+            response = row.get("response") or ""
+        else:
+            query = getattr(row, "query", None) or ""
+            response = getattr(row, "response", None) or ""
+        if query:
+            messages.append({"role": "user", "content": query})
+        if response:
+            messages.append({"role": "assistant", "content": response})
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def append_dialogue_message(
+    session: Session,
+    project_id: str,
+    user_id: str,
+    *,
+    text: str,
+    conversation_id: str = "",
+) -> tuple[ConversationModel, MessageModel]:
+    """把成员这条发言先落库，**不**调用模型。
+
+    分两步是刻意的：模型不可用或调用失败时，发言本身不能跟着回滚——
+    讨论记录是成员的工作内容，不是模型的附属品。回复由
+    ``generate_dialogue_reply`` 单独写入，失败时这条消息保持
+    ``response=""``，界面显示"尚未回复"并可重试。
+
+    逐条聊天消息不写审计事件（EV 列表会被淹没）；模型调用的事实记在
+    ``meta_data`` 里，可追溯又不污染审计清单。
+    """
+    project, _ = require_member(session, project_id, user_id)
+    conversation = (
+        _owned_dialogue(session, project, user_id, conversation_id)
+        if conversation_id
+        else _default_dialogue(session, project, user_id)
+    )
+    content = (text or "").strip()
+    if not content:
+        raise WorkValidationError("消息内容不能为空")
+    if len(content) > MAX_QUERY_CHARS:
+        raise WorkValidationError(
+            f"单条消息最多 {MAX_QUERY_CHARS} 字，请拆分后重新发送"
+        )
+    now = _now()
+    message = MessageModel(
+        id=new_id(),
+        conversation_id=conversation.id,
+        chat_type=conversation.chat_type or DIALOGUE_CHAT_TYPE,
+        query=content,
+        response="",
+        meta_data={"project_code": project.code, "pending_reply": True},
+        create_time=now,
+    )
+    session.add(message)
+    conversation.update_time = now
+    session.flush()
+    return conversation, message
+
+
+def generate_dialogue_reply(
+    session: Session,
+    project_id: str,
+    user_id: str,
+    *,
+    message_id: str,
+    llm,
+    history_limit: int = DISCUSSION_HISTORY_LIMIT,
+) -> MessageModel:
+    """为一条已有发言生成 AI 回复并写回同一行。
+
+    - ``llm`` 由路由层注入（统一容量闸门包好的模型）；传 ``None`` 时报
+      409，路由层提前返回 503，仓储层绝不自己起模型。
+    - 只读本人这条会话的消息；模型上下文里不含另一角色的任何私人内容。
+    - 回复超过 ``response`` 列宽时截断保存，并在 ``meta_data`` 里标
+      ``truncated_response``，不假装完整。
+    - 已有回复的消息不重复生成（重复点击不会白烧一次模型）。
+    """
+    project, role = require_member(session, project_id, user_id)
+    if llm is None:
+        raise WorkError("模型能力尚未接入，无法生成研究讨论回复")
+    message = session.get(MessageModel, message_id)
+    if message is None:
+        raise LookupError("消息不存在或无权访问")
+    conversation = _owned_dialogue(session, project, user_id, message.conversation_id)
+    if (message.response or "").strip():
+        raise WorkError("这条消息已经有回复，不需要重新生成")
+
+    rows = _dialogue_messages(session, conversation, limit=10_000)
+    history = [row for row in rows if row.id != message_id][-max(1, history_limit):]
+    context = build_project_context(session, project.id, user_id)
+    prompt = build_discussion_prompt(
+        project_code=project.code, project_name=project.name, role=role,
+        project_context=context, history=history, question=message.query or "",
+    )
+    raw = _invoke_llm(llm, prompt)
+    truncated = len(raw) > MAX_RESPONSE_CHARS
+    now = _now()
+    message.response = raw[:MAX_RESPONSE_CHARS]
+    message.meta_data = {
+        **(message.meta_data or {}),
+        "pending_reply": False,
+        "project_context_injected": bool(context),
+        "history_turns": len(history),
+        "model_name": str(getattr(llm, "model_name", "") or ""),
+        "consumer": "project_discussion",
+        "truncated_response": truncated,
+        "reply_time": now.isoformat(),
+    }
+    conversation.update_time = now
+    session.flush()
+    return message
 
 
 # ---------------------------------------------------------------------------
@@ -1224,7 +1400,12 @@ __all__ = [
     "MAX_FIELD_CHARS",
     "MAX_LIST_ITEMS",
     "MAX_LIST_ITEM_CHARS",
+    "MAX_QUERY_CHARS",
+    "MAX_RESPONSE_CHARS",
+    "DISCUSSION_HISTORY_LIMIT",
+    "append_dialogue_message",
     "brief_payload",
+    "build_discussion_prompt",
     "build_extraction_prompt",
     "build_project_context",
     "compare_brief_versions",
@@ -1236,6 +1417,7 @@ __all__ = [
     "dialogue_code",
     "diff_brief_content",
     "extract_brief_draft",
+    "generate_dialogue_reply",
     "get_brief",
     "get_brief_source_messages",
     "get_dialogue_messages",

@@ -12,9 +12,10 @@
 - 非成员、不存在、别人的会话/草稿一律 404（不区分原因，避免枚举）；
 - 项目角色不足 403，状态机不允许 409，字段非法 400。
 
-模型调用留接口不实现：``_resolve_llm()`` 现在恒返回 ``None``，提取端点
-因此返回 503 + 中文说明。集成阶段把统一容量闸门包好的模型接进
-``_resolve_llm()`` 即可，仓储层签名不变。
+模型调用统一走 ``_build_gated_model``：返回的是经过统一容量闸门的模型
+对象（每次 ``invoke`` 内部取放一次租约，消费者类型决定它排在哪条业务
+通道）。模型构造不出来时接口返回 503 + 中文说明，绝不假装跑过；讨论
+发言本身在这种情况下**仍然保存**，回复可以之后补（``…/messages/{id}/reply``）。
 """
 from __future__ import annotations
 
@@ -27,6 +28,10 @@ from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
 from chatchat.server.db.models.conversation_model import ConversationModel
+from chatchat.server.model_capacity import (
+    CONSUMER_PROJECT_DISCUSSION,
+    CONSUMER_RESEARCH_DEFINITION,
+)
 from chatchat.server.db.models.message_model import MessageModel
 from chatchat.server.db.models.supervision_research_model import (
     SupervisionResearchBriefModel,
@@ -36,6 +41,9 @@ from chatchat.server.db.models.user_model import UserModel
 from chatchat.server.db.repository import supervision_research_repository as research
 from chatchat.server.db.repository.supervision_repository import require_member
 from chatchat.server.db.session import get_db
+from chatchat.utils import build_logger
+
+logger = build_logger(__name__)
 
 supervision_research_router = APIRouter(
     prefix="/supervision", tags=["Supervision - 研究讨论与结构化研究定义"],
@@ -88,14 +96,55 @@ def call(session: Session, action, *args, **kwargs):
         raise _conflict(str(exc))
 
 
-def _resolve_llm():
-    """返回可用于提取的模型对象；当前恒为 ``None``。
+#: 模型对象按消费者类型缓存：构造与缓存模型对象不持有任何容量，真正的
+#: 租约在每次 ``invoke`` 内部由统一容量闸门取放（里程碑0B）。
+_MODEL_CACHE: Dict[str, Any] = {}
 
-    统一模型容量闸门（``chatchat/server/model_capacity/``）由另一条线在写，
-    这里不 import 它、也不自己起模型，避免绕过闸门抢占容量。集成时把
-    闸门包好的、带 ``.invoke(messages) -> .content`` 的模型在这里返回。
+
+def _build_gated_model(consumer: str) -> Optional[Any]:
+    """构造经过统一容量闸门的模型对象；构造失败返回 ``None``（→ 503）。
+
+    刻意不在仓储层里起模型：仓储只接受注入的对象，测试才能塞假模型；
+    也只有路由/运行时这一层知道"这次调用是谁发起的"（消费者类型决定
+    它排在哪条业务通道）。失败不缓存，配置热更新后下一次就能恢复。
     """
-    return None
+    cached = _MODEL_CACHE.get(consumer)
+    if cached is not None:
+        return cached
+    try:
+        from chatchat.settings import Settings
+        from chatchat.server.utils import get_ChatOpenAI, get_default_llm
+
+        model = get_ChatOpenAI(
+            model_name=get_default_llm(),
+            temperature=Settings.model_settings.TEMPERATURE,
+            max_tokens=Settings.model_settings.MAX_TOKENS,
+            streaming=False,
+            verbose=False,
+            consumer=consumer,
+        )
+    except Exception:  # 模型没配好：接口返回 503，不假装跑过
+        logger.exception("构造研究讨论生成模型失败（consumer={}）", consumer)
+        return None
+    if model is None:
+        return None
+    _MODEL_CACHE[consumer] = model
+    return model
+
+
+def reset_research_model_cache() -> None:
+    """测试与运维用：清掉模型缓存，下一次调用重新构造。"""
+    _MODEL_CACHE.clear()
+
+
+def _resolve_llm():
+    """提取结构化研究定义用的模型（``research_definition`` 通道）。"""
+    return _build_gated_model(CONSUMER_RESEARCH_DEFINITION)
+
+
+def _resolve_discussion_llm():
+    """项目内讨论回复用的模型（``project_discussion`` 前台交互通道）。"""
+    return _build_gated_model(CONSUMER_PROJECT_DISCUSSION)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +155,11 @@ def _resolve_llm():
 class DialogueBody(BaseModel):
     title: str = Field(min_length=1, max_length=50)
     chat_type: str = Field(default="", max_length=50)
+
+
+class DialogueMessageBody(BaseModel):
+    # 上限与 message.query 列宽一致（4096），超了直接 422，不静默截断。
+    text: str = Field(min_length=1, max_length=4096)
 
 
 # 结构化内容里的"文本卡片"字段。库里是文本，但"候选方法""评价指标"这类
@@ -374,6 +428,67 @@ def get_dialogue_messages(
         code=research.dialogue_code(session, conversation),
         messages=[_message_out(m) for m in messages],
     )
+
+
+@supervision_research_router.post(
+    "/projects/{project_ref}/research/dialogues/{conversation_id}/messages",
+    response_model=DialogueMessageOut,
+)
+def post_dialogue_message(
+    project_ref: str,
+    conversation_id: str,
+    body: DialogueMessageBody = Body(...),
+    session: Session = Depends(get_db),
+    user: UserModel = Depends(require_password_changed),
+):
+    """在项目内研究讨论里发一条言，并请求 AI 回复（§4.2、§15.2 第1/6条）。
+
+    刻意分两步提交：发言先独立落库并提交，模型不可用或调用失败时发言
+    不会跟着回滚——讨论记录是成员的工作内容，不是模型的附属品。此时
+    接口返回 503，消息保持未回复状态，可用下面的 ``…/reply`` 补。
+
+    模型上下文只含本人这条会话的历史 + 项目已确认共享的结构化内容，
+    绝不含另一角色的任何私人消息（§16.3 第2、3条）。
+    """
+    _, message = call(
+        session, research.append_dialogue_message, project_ref, user.id,
+        text=body.text, conversation_id=conversation_id,
+    )
+    message_id = message.id
+    llm = _resolve_discussion_llm()
+    if llm is None:
+        raise _unavailable(
+            "模型能力尚未接入：这条发言已保存，AI 回复可在模型接入后补生成。"
+        )
+    message = call(
+        session, research.generate_dialogue_reply, project_ref, user.id,
+        message_id=message_id, llm=llm,
+    )
+    return _message_out(message)
+
+
+@supervision_research_router.post(
+    "/projects/{project_ref}/research/messages/{message_id}/reply",
+    response_model=DialogueMessageOut,
+)
+def regenerate_dialogue_reply(
+    project_ref: str,
+    message_id: str,
+    session: Session = Depends(get_db),
+    user: UserModel = Depends(require_password_changed),
+):
+    """给一条还没有回复的发言补 AI 回复（模型刚接入、或上次生成失败）。
+
+    已有回复的消息不会重复生成：仓储层报 409，避免重复点击白烧一次模型。
+    """
+    llm = _resolve_discussion_llm()
+    if llm is None:
+        raise _unavailable("模型能力尚未接入，无法生成研究讨论回复。")
+    message = call(
+        session, research.generate_dialogue_reply, project_ref, user.id,
+        message_id=message_id, llm=llm,
+    )
+    return _message_out(message)
 
 
 # ---------------------------------------------------------------------------
