@@ -20,7 +20,9 @@
 - ``DELETE /supervision/projects/{pid}`` 软删除（仅空白筹备项目）；
 - ``GET  /supervision/projects/{pid}/audit`` 项目审计记录；
 - ``GET  /supervision/notifications`` 我的通知；
-- ``POST /supervision/notifications/read`` 标记单条或全部已读。
+- ``POST /supervision/notifications/read`` 标记单条或全部已读；
+- ``GET  /supervision/users?q=`` 按关键字找人（只返回 id/用户名/显示名称），
+  用于把主导师绑进项目；账户不存在或已禁用时加入成员返回 404。
 
 管理员查看不属于自己项目的记录时放行，但这次查看本身会另起一条审计
 事件（§13）；管理员拿不到项目角色，因此不能据此执行学生或导师动作。
@@ -86,6 +88,14 @@ class ProjectMemberOut(BaseModel):
     status: str
     joined_at: Optional[str] = None
     removed_at: Optional[str] = None
+
+
+class SupervisionUserOut(BaseModel):
+    """绑定项目成员用的最小用户信息（不含角色、状态、时间戳）。"""
+
+    user_id: str
+    username: str
+    display_name: str
 
 
 class ProjectOut(BaseModel):
@@ -281,6 +291,9 @@ def add_member(
             role=body.role,
             actor_id=user.id,
         )
+    except LookupError as exc:  # 账户不存在或已禁用：不暴露账户细节
+        session.rollback()
+        raise _not_found(str(exc))
     except Exception as exc:  # 唯一索引兜住"第二个学生/第二个主导师"
         session.rollback()
         raise _conflict(f"加入成员失败：{exc}")
@@ -568,6 +581,30 @@ def mark_read(
         raise _bad_request(str(exc))
     session.commit()
     return {"updated": updated}
+
+
+@supervision_router.get("/users", response_model=List[SupervisionUserOut])
+def search_supervision_users(
+    q: str = Query(default=""),
+    session: Session = Depends(get_db),
+    user: UserModel = Depends(require_password_changed),
+):
+    """把导师绑进项目需要对方用户 ID，这里只给 id / 用户名 / 显示名称。
+
+    这是产品取舍：任何登录用户都能按关键字看到「平台上有谁」，否则学生
+    无法自行组建项目，只能让管理员代填。因此这里必须限制关键字长度、只返回
+    启用中的账户、只返回三个可辨识字段，并且不写进任何业务对象。
+    """
+    try:
+        rows = repo.search_users(session, keyword=q)
+    except ValueError as exc:
+        raise _bad_request(str(exc))
+    return [
+        SupervisionUserOut(
+            user_id=u.id, username=u.username, display_name=u.display_name
+        )
+        for u in rows
+    ]
 
 
 def _project_detail_out(

@@ -83,6 +83,12 @@
   ``supervision_review_ac`` / ``supervision_review_note``（导师审核、逐条
   结论与发布后的追加意见）、``supervision_attachment``（项目附件，含版本、
   sha256 与存储路径）。只建新表建索引，不改列不删表，既有数据一律不动。
+- v19（师生协作里程碑2）：新增 ``supervision_research_brief``（结构化研究
+  定义，按项目隔离、按角色归属，含确认共享版本与撤回时点）与
+  ``supervision_research_brief_version``（每次确认/改动的版本快照，用于
+  版本比较与"另一角色继续读到旧依据"的判定）。项目内研究讨论不建新表，
+  只写 v17 已加好的 ``conversation.supervision_project_id``。只建新表建
+  索引，不改列不删表，既有会话与消息一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1557,6 +1563,128 @@ def _v18_supervision_work_loop(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+_SUPERVISION_RESEARCH_BRIEF_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_research_brief (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    owner_user_id VARCHAR(32) NOT NULL,
+    owner_role VARCHAR(16) NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    entry_type VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    current_version INTEGER NOT NULL,
+    shared_version INTEGER,
+    confirmed_by VARCHAR(32) NOT NULL,
+    confirmed_at TIMESTAMP,
+    source_conversation_id VARCHAR(32),
+    deleted_at TIMESTAMP,
+    delete_reason TEXT NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    background TEXT NOT NULL,
+    question TEXT NOT NULL,
+    objectives TEXT NOT NULL,
+    subjects TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    prior_attempts TEXT NOT NULL,
+    hypotheses TEXT NOT NULL,
+    constraints TEXT NOT NULL,
+    methods TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    expected_outcomes TEXT NOT NULL,
+    to_verify TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    sub_questions TEXT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_research_brief_code UNIQUE (project_id, code),
+    CONSTRAINT ck_supervision_research_brief_status
+        CHECK (status IN ('draft', 'confirmed', 'rejected', 'superseded')),
+    CONSTRAINT ck_supervision_research_brief_kind
+        CHECK (kind IN ('research_brief', 'mentor_guidance')),
+    CONSTRAINT ck_supervision_research_brief_owner_role
+        CHECK (owner_role IN ('student', 'mentor')),
+    CONSTRAINT ck_supervision_research_brief_entry_type CHECK (entry_type IN (
+        'research_question', 'hypothesis', 'scope_constraint',
+        'to_verify_judgement', 'candidate_method', 'evaluation_metric', 'mixed')),
+    CONSTRAINT ck_supervision_research_brief_current_version
+        CHECK (current_version >= 1)
+)
+"""
+
+_SUPERVISION_RESEARCH_BRIEF_VERSION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_research_brief_version (
+    id VARCHAR(32) NOT NULL,
+    brief_id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    version INTEGER NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    entry_type VARCHAR(32) NOT NULL,
+    ai_content TEXT NOT NULL,
+    edited_fields TEXT NOT NULL,
+    source_conversation_id VARCHAR(32),
+    source_message_ids TEXT NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    confirmed_by VARCHAR(32) NOT NULL,
+    confirmed_at TIMESTAMP,
+    confirm_note TEXT NOT NULL,
+    superseded_at TIMESTAMP,
+    create_time TIMESTAMP,
+    background TEXT NOT NULL,
+    question TEXT NOT NULL,
+    objectives TEXT NOT NULL,
+    subjects TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    prior_attempts TEXT NOT NULL,
+    hypotheses TEXT NOT NULL,
+    constraints TEXT NOT NULL,
+    methods TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    expected_outcomes TEXT NOT NULL,
+    to_verify TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    sub_questions TEXT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_research_brief_version UNIQUE (brief_id, version),
+    CONSTRAINT ck_supervision_research_brief_version_status
+        CHECK (status IN ('draft', 'confirmed', 'rejected', 'superseded')),
+    CONSTRAINT ck_supervision_research_brief_version_entry_type CHECK (entry_type IN (
+        'research_question', 'hypothesis', 'scope_constraint',
+        'to_verify_judgement', 'candidate_method', 'evaluation_metric', 'mixed')),
+    CONSTRAINT ck_supervision_research_brief_version_number CHECK (version >= 1)
+)
+"""
+
+_SUPERVISION_RESEARCH_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_research_brief_project_status "
+    "ON supervision_research_brief (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_research_brief_project_owner "
+    "ON supervision_research_brief (project_id, owner_user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_research_brief_version_brief "
+    "ON supervision_research_brief_version (brief_id, version)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_research_brief_version_project "
+    "ON supervision_research_brief_version (project_id, brief_id)",
+]
+
+
+def _v19_supervision_research_brief(conn: Connection) -> None:
+    """v19：里程碑2 的研究定义（ResearchBrief）与其版本表。
+
+    研究讨论会话不建新表，只写 v17 已加好的
+    ``conversation.supervision_project_id``；这里只新增两张表，同样用
+    ``IF NOT EXISTS``，不动任何既有表与列。
+    """
+    for ddl in (
+        _SUPERVISION_RESEARCH_BRIEF_TABLE,
+        _SUPERVISION_RESEARCH_BRIEF_VERSION_TABLE,
+    ):
+        conn.execute(text(ddl))
+    for stmt in _SUPERVISION_RESEARCH_INDEXES:
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1576,6 +1704,7 @@ _MIGRATIONS = [
     (16, "context_correctness", _v16_context_correctness),
     (17, "supervision_collaboration", _v17_supervision_collaboration),
     (18, "supervision_work_loop", _v18_supervision_work_loop),
+    (19, "supervision_research_brief", _v19_supervision_research_brief),
 ]
 
 

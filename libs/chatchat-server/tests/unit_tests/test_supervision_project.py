@@ -65,7 +65,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 18
+        assert current_version(conn) == 19
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
@@ -227,7 +227,7 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_empty.db'}")
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert result.final_version == 18
+            assert result.final_version == 19
             assert 17 in [m.version for m in result.applied]
             tables = set(conn.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -274,8 +274,8 @@ class TestV17Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [17, 18]
-            assert result.final_version == 18
+            assert [m.version for m in result.applied] == [17, 18, 19]
+            assert result.final_version == 19
             assert conn.execute(
                 text("SELECT COUNT(*) FROM conversation WHERE id = 'c-old'")
             ).scalar() == 1
@@ -293,11 +293,11 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_idem.db'}")
         with engine.connect() as conn:
             first = apply_migrations(build_registry(), conn)
-            assert first.final_version == 18
+            assert first.final_version == 19
         with engine.connect() as conn:
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 18
+            assert second.final_version == 19
         # 直接重跑 v17 的 DDL 也不报错、不丢数据（IF NOT EXISTS）
         with engine.connect() as conn:
             conn.execute(text(
@@ -745,6 +745,65 @@ class TestAuditAndNotifications:
         assert filtered == []
 
 
+class TestUserLookup:
+    """绑主导师需要对方用户 ID，所以给一个只暴露最小可辨识字段的找人接口。
+
+    这是明确的产品取舍：任何登录用户都能按关键字看到「平台上有谁」，否则
+    学生无法自行组建项目。因此返回字段必须只有三个、必须有关键字长度下限、
+    不得包含被禁用的账户，也不得成为读取项目内容的入口。
+    """
+
+    def test_search_returns_only_identifying_fields(self, client, temp_db):
+        r = client.get(
+            "/supervision/users?q=entor", headers=_headers(temp_db, "alice")
+        )
+        assert r.status_code == 200, r.text
+        rows = r.json()
+        assert [u["username"] for u in rows] == ["mentor"]
+        assert rows[0]["user_id"] == users_id["mentor"]
+        for u in rows:
+            assert set(u) == {"user_id", "username", "display_name"}
+
+    def test_search_matches_display_name(self, client, temp_db):
+        r = client.get(
+            "/supervision/users?q=Men", headers=_headers(temp_db, "bob")
+        )
+        assert r.status_code == 200, r.text
+        assert users_id["mentor"] in {u["user_id"] for u in r.json()}
+
+    def test_keyword_too_short_is_rejected(self, client, temp_db):
+        r = client.get(
+            "/supervision/users?q=m", headers=_headers(temp_db, "alice")
+        )
+        assert r.status_code == 400, r.text
+
+    def test_disabled_accounts_are_not_offered(self, client, temp_db):
+        with _session(temp_db) as s:
+            account = (
+                s.query(UserModel)
+                .filter(UserModel.id == users_id["mentor"])
+                .one()
+            )
+            account.status = "disabled"
+            s.commit()
+        rows = client.get(
+            "/supervision/users?q=mentor", headers=_headers(temp_db, "alice")
+        ).json()
+        assert users_id["mentor"] not in {u["user_id"] for u in rows}
+
+    def test_anonymous_search_is_rejected(self, client, temp_db):
+        assert client.get("/supervision/users?q=mentor").status_code == 401
+
+    def test_binding_a_missing_user_is_rejected(self, client, temp_db):
+        project = _create_project(client, temp_db, "绑不上的人")
+        r = client.post(
+            f"/supervision/projects/{project['project_id']}/members",
+            headers=_headers(temp_db, "alice"),
+            json={"user_id": "0" * 32, "role": "mentor"},
+        )
+        assert r.status_code == 404, r.text
+
+
 def test_router_is_mounted_on_the_real_server_app():
     """钉住挂载点：真实服务应用必须暴露协作接口（否则前端只会打到 SPA 兜底）。"""
     from chatchat.server.api_server.server_app import create_app
@@ -753,3 +812,10 @@ def test_router_is_mounted_on_the_real_server_app():
     assert "/supervision/projects" in paths
     assert "/supervision/projects/{project_ref}/audit" in paths
     assert "/supervision/notifications" in paths
+    assert "/supervision/users" in paths
+    # 里程碑1 与里程碑2 的接口同样必须挂在真实应用上。
+    assert "/supervision/projects/{project_ref}/tasks" in paths
+    assert "/supervision/projects/{project_ref}/attachments" in paths
+    assert "/supervision/projects/{project_ref}/review-queue" in paths
+    assert "/supervision/projects/{project_ref}/research/briefs" in paths
+    assert "/supervision/projects/{project_ref}/research/context" in paths

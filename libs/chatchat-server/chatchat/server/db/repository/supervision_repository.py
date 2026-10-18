@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from chatchat.server.db.models.supervision_model import (
     SupervisionProjectMemberModel,
     SupervisionProjectModel,
 )
+from chatchat.server.db.models.user_model import UserModel
 
 ROLE_STUDENT = "student"
 ROLE_MENTOR = "mentor"
@@ -353,11 +354,50 @@ def create_project(
     raise RuntimeError("项目编号生成失败，请重试")
 
 
+def search_users(
+    session: Session, *, keyword: str, limit: int = 20
+) -> list[UserModel]:
+    """按用户名或显示名称查找可用账户，用于把导师绑进项目（§3.2）。
+
+    只返回启用中的账户，调用方只允许暴露 id / 用户名 / 显示名称三个字段；
+    这是任何登录用户都能看到「平台上有谁」的接口，因此不返回邮箱、角色、
+    状态、时间戳，也不返回被禁用的账户，并且必须带关键字、有返回上限。
+    """
+    keyword = (keyword or "").strip()
+    if len(keyword) < 2:
+        raise ValueError("关键字至少两个字符")
+    pattern = f"%{keyword}%"
+    return list(
+        session.execute(
+            select(UserModel)
+            .where(
+                UserModel.status == "active",
+                or_(UserModel.username.like(pattern), UserModel.display_name.like(pattern)),
+            )
+            .order_by(UserModel.username)
+            .limit(max(1, min(limit, 50)))
+        )
+        .scalars()
+        .all()
+    )
+
+
+def get_active_user(session: Session, user_id: str) -> Optional[UserModel]:
+    """成员绑定前的账户存在性校验，避免把项目成员挂到不存在的用户上。"""
+    return session.execute(
+        select(UserModel).where(
+            UserModel.id == user_id, UserModel.status == "active"
+        )
+    ).scalar_one_or_none()
+
+
 def add_member(
     session: Session, *, project_ref: str, user_id: str, role: str, actor_id: str
 ) -> SupervisionProjectMemberModel:
     """加入成员。首期每项目一名在册学生 + 一名在册主导师，由库层索引兜住。"""
     project, _ = require_member(session, project_ref, actor_id)
+    if get_active_user(session, user_id) is None:
+        raise LookupError("用户不存在或已被禁用")
     now = _now()
     member = SupervisionProjectMemberModel(
         id=new_id(),

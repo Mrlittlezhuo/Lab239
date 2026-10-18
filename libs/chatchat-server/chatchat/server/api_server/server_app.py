@@ -32,6 +32,9 @@ from chatchat.server.api_server.openai_routes import openai_router
 from chatchat.server.api_server.research_routes import research_router
 from chatchat.server.api_server.server_routes import server_router
 from chatchat.server.api_server.spa_static import install_spa, resolve_web_dist
+from chatchat.server.api_server.supervision_research_routes import (
+    supervision_research_router,
+)
 from chatchat.server.api_server.supervision_routes import supervision_router
 from chatchat.server.api_server.supervision_work_routes import (
     supervision_work_router,
@@ -108,6 +111,7 @@ def create_app(run_mode: str = None):
     app.include_router(research_router)
     app.include_router(supervision_router)
     app.include_router(supervision_work_router)
+    app.include_router(supervision_research_router)
 
     # 其它接口
     app.post(
