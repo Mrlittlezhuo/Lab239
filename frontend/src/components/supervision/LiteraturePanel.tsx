@@ -64,7 +64,9 @@ export function LiteraturePanel({ project }: { project: ProjectDetail }) {
   const [keywords, setKeywords] = useState("");
   const [synonyms, setSynonyms] = useState("");
   const [excludeTerms, setExcludeTerms] = useState("");
-  const [sources, setSources] = useState("");
+  // 检索按任务上登记的来源跑（来源 × 关键词批次），留空会在检索时给出
+  // 「必须指定至少一个论文来源」，所以默认填上当前已接入的两个来源。
+  const [sources, setSources] = useState("arxiv、local_kb");
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [resultLimit, setResultLimit] = useState("30");
@@ -245,13 +247,13 @@ export function LiteraturePanel({ project }: { project: ProjectDetail }) {
             <div className="flex flex-wrap gap-2">
               <div className="space-y-1">
                 <Label htmlFor="lit-task-sources" className="text-xs text-muted-foreground">
-                  来源（留空由检索方案建议）
+                  来源（必填；当前已接入 arxiv 与实验室论文库 local_kb）
                 </Label>
                 <Input
                   id="lit-task-sources"
                   value={sources}
                   onChange={(event) => setSources(event.target.value)}
-                  placeholder="例如：arxiv、crossref"
+                  placeholder="当前已接入：arxiv、local_kb"
                   className="w-[240px]"
                 />
               </div>

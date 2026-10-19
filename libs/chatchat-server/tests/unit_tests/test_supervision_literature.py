@@ -50,11 +50,18 @@ P-01…P-30 属于里程碑4），因此这里按「里程碑3 的 P 类用例�
 - P3-28 论文处理失败不阻塞人工任务与进展记录（§16.4 第7条）
 - P3-29 正式动作都进审计日志（§13）
 - P3-30 字段非法 400、pydantic 形状不符 422（与既有 supervision 模块一致）
+- P3-31 来源 provider 适配层桥接论文研究模块的 async 来源；未知来源只让该来源
+  失败并列出当前可用来源，不退化成「搜到了 0 篇」
+- P3-32 默认注入真实来源适配层；``CHATCHAT_LITERATURE_ENABLE_SOURCES=0`` 退回
+  「未接入」→ 检索 503
+- P3-33 走真实来源接线的检索：候选入库、来源与 arXiv 编号可追溯，没接入的
+  来源逐条标失败
 
 夹具与 ``test_supervision_research.py`` / ``test_supervision_ai_review.py``
 一致：临时 SQLite + ``apply_migrations`` + ``Base.metadata.create_all`` +
 httpx ASGITransport + 真实 JWT。模型一律用注入的假 llm，来源一律用注入的
-假 provider，**不联网、不调真实模型、不起任何服务**；容量闸门用替身记录
+假 provider（P3-31/33 用假 async 适配器验证桥接，P3-32 只检查接线与自检），
+**不联网、不调真实模型、不起任何服务**；容量闸门用替身记录
 取用/释放（真正的单模型并发证据由 ``test_model_capacity_gate.py`` 覆盖）。
 """
 import asyncio
@@ -70,6 +77,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from chatchat.server.api_server.supervision_literature_routes import (
+    ResearchSourcesLiteratureProvider,
     get_literature_capacity,
     get_literature_llm,
     get_literature_provider,
@@ -2497,3 +2505,93 @@ def test_field_validation_shapes_and_state_rules(client, app, temp_db):
                      json={"keywords": ["换个关键词"]})
     assert r.status_code == 409, r.text
     assert "不能修改检索输入" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 来源接线：默认 provider 复用论文研究模块的 async 来源适配层
+# ---------------------------------------------------------------------------
+
+
+class FakeAsyncSource:
+    """``chatchat/server/research/sources.py`` 的适配器形状：async search()。"""
+
+    def __init__(self, name: str, rows=(), *, fail=False):
+        self.name = name
+        self.rows = list(rows)
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    async def search(self, query, limit=10):
+        self.calls.append({"query": query, "limit": limit})
+        if self.fail:
+            raise RuntimeError(f"{self.name} 暂时不可用")
+        return self.rows
+
+
+# P3-31 ---------------------------------------------------------------------
+def test_p3_31_provider_adapter_bridges_async_sources_and_names_availability():
+    """来源适配器是 async 的，检索契约是同步的：桥接必须真的取回结果。
+
+    未知来源只让那一个来源失败并说明当前可用来源，绝不退化成「搜到了 0 篇」
+    （§15.3 第6条、§16.4 第2条）。
+    """
+    arxiv = FakeAsyncSource("arxiv", [CAND_A, CAND_B])
+    provider = ResearchSourcesLiteratureProvider({"arxiv": arxiv})
+
+    ok, note = provider.available()
+    assert ok is True and "arxiv" in note
+
+    rows = provider.search(query="indoor localization", source="arxiv", limit=5)
+    assert [row["title"] for row in rows] == [CAND_A["title"], CAND_B["title"]]
+    assert arxiv.calls == [{"query": "indoor localization", "limit": 5}]
+
+    with pytest.raises(lit.LiteratureSourceError) as exc:
+        provider.search(query="q", source="crossref", limit=5)
+    assert "未接入来源「crossref」" in str(exc.value)
+    assert "arxiv" in str(exc.value)
+
+    broken = ResearchSourcesLiteratureProvider({"arxiv": FakeAsyncSource("arxiv", fail=True)})
+    with pytest.raises(lit.LiteratureSourceError) as broken_exc:
+        broken.search(query="q", source="arxiv", limit=5)
+    assert "arxiv 暂时不可用" in str(broken_exc.value)
+
+    assert ResearchSourcesLiteratureProvider({}).available()[0] is False
+
+
+# P3-32 ---------------------------------------------------------------------
+def test_p3_32_default_provider_is_wired_to_real_sources_unless_forced_off(monkeypatch):
+    """默认注入真实来源；``CHATCHAT_LITERATURE_ENABLE_SOURCES=0`` 退回「未接入」。
+
+    退回后检索一律 503，界面显示「外部论文来源尚未接入」而不是空结果。
+    """
+    monkeypatch.setenv("CHATCHAT_LITERATURE_ENABLE_SOURCES", "0")
+    provider = get_literature_provider()
+    assert isinstance(provider, lit.UnconfiguredLiteratureProvider)
+    assert provider.available()[0] is False
+
+    monkeypatch.delenv("CHATCHAT_LITERATURE_ENABLE_SOURCES", raising=False)
+    wired = get_literature_provider()
+    ok, note = wired.available()
+    assert ok is True
+    assert "arxiv" in note
+
+
+# P3-33 ---------------------------------------------------------------------
+def test_p3_33_search_through_the_real_wiring_stores_candidates_and_lists_failures(
+    client, app, temp_db
+):
+    """走真实来源接线（async 适配器 + 同步仓储）：候选入库，没接的来源如实标失败。"""
+    pid = _active_project(client, temp_db)["project_id"]
+    provider = ResearchSourcesLiteratureProvider(
+        {"arxiv": FakeAsyncSource("arxiv", [CAND_A, CAND_B])}
+    )
+    searched = _searched_task(client, app, temp_db, pid, provider=provider)
+
+    assert searched["stored_total"] == 2, searched
+    assert searched["subtask_failed_total"] > 0  # crossref 未接入
+    failures = {str(item.get("source")) for item in searched["source_failures"]}
+    assert "crossref" in failures
+
+    rows = _results(client, temp_db, pid)
+    assert {row["source"] for row in rows} == {"arxiv"}
+    assert all(row["arxiv_id"] for row in rows)

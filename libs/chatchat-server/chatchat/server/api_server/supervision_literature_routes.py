@@ -22,11 +22,13 @@
 ``capacity_mode="external"`` 的生成模型（容量由 ``get_literature_capacity()``
 的适配器在仓储层按**每次实际调用**取放，消费者类型 ``research_plan`` /
 ``paper_extract`` / ``paper_compare``）；``get_literature_provider()`` 返回
-外部论文来源 provider，默认实现明确报告「尚未接入」，首版不联网。测试用
+外部论文来源 provider，默认复用论文研究模块的来源适配层（arxiv / local_kb），
+没有任何来源可注入时明确报告「尚未接入」→ 503，绝不造一批假候选。测试用
 ``dependency_overrides`` 注入假模型与假 provider。
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -115,16 +117,90 @@ def get_literature_capacity() -> Any:
     return capacity_adapter
 
 
+class ResearchSourcesLiteratureProvider:
+    """把论文研究模块已有的来源适配层包成检索契约（arxiv / local_kb）。
+
+    来源适配器是 async 的，检索接口与仓储层是同步的，所以在**独立线程里的新
+    事件循环**中跑一次，绝不在请求所在的事件循环里 ``asyncio.run``（那会直接
+    报错）。这一步仍然阻塞当前工作线程，与整个模块"同步执行、没有后台 worker"
+    的现状一致。
+
+    单个来源失败只抛 ``LiteratureSourceError``：仓储层把它记成该来源的失败并
+    继续其它来源，界面上逐条列出，不会把一次失败伪装成"搜到了 0 篇"。
+    """
+
+    name = "research_sources"
+
+    def __init__(self, sources: Optional[Dict[str, Any]] = None) -> None:
+        if sources is None:
+            from chatchat.server.research.sources import build_default_sources
+
+            sources = build_default_sources()
+        self._sources = dict(sources or {})
+
+    def available(self) -> tuple[bool, str]:
+        if not self._sources:
+            return False, "没有可用的论文来源适配器"
+        return True, "可用来源：" + "、".join(sorted(self._sources))
+
+    def search(self, *, query: str, source: str, limit: int) -> list:
+        name = (source or "").strip().lower()
+        adapter = self._sources.get(name)
+        if adapter is None:
+            raise lit.LiteratureSourceError(
+                f"未接入来源「{source}」；当前可用来源："
+                + ("、".join(sorted(self._sources)) or "无")
+            )
+        try:
+            return _run_source_search(adapter, query=query, limit=limit)
+        except lit.LiteratureSourceError:
+            raise
+        except Exception as exc:  # 来源自己的报错：只说原因，来源名由上层标注
+            raise lit.LiteratureSourceError(str(exc) or type(exc).__name__) from exc
+
+
+def _run_source_search(adapter: Any, *, query: str, limit: int) -> list:
+    """在独立线程的事件循环里跑一次 async 来源检索。"""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    async def _call() -> list:
+        return await adapter.search(query, limit)
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="literature-source") as pool:
+        return list(pool.submit(asyncio.run, _call()).result() or [])
+
+
+def _sources_enabled() -> bool:
+    return os.environ.get("CHATCHAT_LITERATURE_ENABLE_SOURCES", "1").strip() not in (
+        "0",
+        "false",
+        "off",
+        "no",
+    )
+
+
 def get_literature_provider() -> Any:
     """外部论文来源 provider。
 
-    首版不联网：默认实现明确报告「尚未接入」，检索接口据此返回 503，
-    而不是造一批假候选（§16.4 第2条要求展示来源与去重，但绝不伪造命中）。
-    集成阶段把现有论文研究模块的来源适配层
-    （``chatchat/server/research/sources.py`` 的 ArXiv / local_kb 等）包成
-    同样契约注入进来即可，仓储层签名不变。
+    默认复用论文研究模块的来源适配层（``chatchat/server/research/sources.py``
+    的 ArXiv 与实验室论文库），仓储层签名不变。来源本身失败时按来源逐条记
+    失败并继续其它来源；没有任何来源可注入时退回
+    ``UnconfiguredLiteratureProvider``，检索接口据此返回 503，而不是造一批
+    假候选（§16.4 第2条要求展示来源与去重，但绝不伪造命中）。
+
+    ``CHATCHAT_LITERATURE_ENABLE_SOURCES=0`` 可强制退回"未接入"（离线演示或
+    排障时用），此时检索一律 503。
     """
-    return lit.UnconfiguredLiteratureProvider()
+    if not _sources_enabled():
+        return lit.UnconfiguredLiteratureProvider()
+    try:
+        provider = ResearchSourcesLiteratureProvider()
+    except Exception:  # 来源层导入失败也不能让接口 500：退回未接入并说明原因
+        logger.exception("加载论文来源适配层失败（检索将返回 503）")
+        return lit.UnconfiguredLiteratureProvider()
+    ok, _ = provider.available()
+    return provider if ok else lit.UnconfiguredLiteratureProvider()
 
 
 # ---------------------------------------------------------------------------
@@ -725,8 +801,9 @@ def run_search(
 ):
     """执行检索：显示批次、来源、命中、去重与失败来源，不隐藏检索过程。
 
-    检索本身不联网（来源 provider 未接入时 503），也**不会**自动深度提取
-    任何候选论文（§16.4 第3条）。
+    来源由注入的 provider 决定（默认复用论文研究模块的 arxiv / local_kb）；
+    没有任何可用来源时 503，单个来源失败只标该来源。检索**不会**自动深度
+    提取任何候选论文（§16.4 第3条）。
     """
     task = call(
         session, lit.run_search, project_ref, user.id, task_ref,
