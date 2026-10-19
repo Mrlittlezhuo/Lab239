@@ -861,7 +861,8 @@ def get_review(
         session, work.get_submission, project_ref=project_ref,
         submission_ref=submission_ref, actor_id=user.id,
     )
-    review = work.get_review(
+    # 未发布的审核草稿只对写它的导师可见；学生拿到 null（§5.4、§5.6）。
+    review = work.get_review_for_reader(
         session, project_ref=submission.project_id, submission_id=submission.id,
         actor_id=user.id,
     )

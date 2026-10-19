@@ -1080,6 +1080,28 @@ def get_review(
     ).scalar_one_or_none()
 
 
+def get_review_for_reader(
+    session: Session, *, project_ref: str, submission_id: str, actor_id: str
+) -> Optional[SupervisionReviewModel]:
+    """按读取者返回审核记录：**未发布的草稿只对写它的导师可见**。
+
+    ``drafting`` 是导师的私人工作状态：逐条结论可能只填了一半、理由还是
+    写给自己的备忘。把它端给学生等于替导师提前表态，也会让"退回修改"
+    之类的派生标签在学生侧凭空出现（§5.4、§5.6）。
+
+    对学生返回 ``None`` 而不是 404：提交本身可见，只是还没有已发布结论，
+    界面据此显示"导师尚未给出结论"。
+    """
+    review = get_review(
+        session, project_ref=project_ref, submission_id=submission_id, actor_id=actor_id
+    )
+    if review is None:
+        return None
+    if review.status != "published" and review.reviewer_id != actor_id:
+        return None
+    return review
+
+
 def _ensure_draft(
     session: Session, project: SupervisionProjectModel, submission: SupervisionSubmissionModel,
     actor_id: str, role: str,
@@ -1567,6 +1589,7 @@ __all__ = [
     "get_attachment",
     "get_milestone",
     "get_review",
+    "get_review_for_reader",
     "get_review_by_ref",
     "get_submission",
     "get_task",

@@ -619,6 +619,52 @@ class TestMentorReview:
         with _session(temp_db) as s:
             assert s.query(SupervisionReviewModel).count() == 0
 
+    def test_unpublished_draft_is_invisible_to_the_student(self, client, temp_db):
+        """drafting 是导师的私人工作状态：学生读不到半截结论（§5.4、§5.6）。
+
+        学生仍能从任务标签看到"审核草稿中"（那是事实，不是结论内容），
+        但审核正文、逐条结论和 must_fix 必须等到发布才出现。
+        """
+        pid = _active_project(client, temp_db)["project_id"]
+        task = _published_task(client, temp_db, pid)
+        submission = _submitted(client, temp_db, pid, task["code"])
+        url = (
+            f"/supervision/projects/{pid}/submissions/{submission['submission_id']}"
+            "/review"
+        )
+        draft = client.post(
+            f"{url}/draft", headers=_headers(temp_db, "mentor"),
+            json={
+                "conclusions": [{"ac_code": "AC-1", "conclusion": "not_met",
+                                 "reason": "先记着：多种子结果还没跑"}],
+                "feedback": "草稿里的半截想法，还没打算现在给学生看",
+                "must_fix": ["补多种子结果"],
+            },
+        )
+        assert draft.status_code == 200, draft.text
+        assert draft.json()["status"] == "drafting"
+
+        as_student = client.get(url, headers=_headers(temp_db, "alice"))
+        assert as_student.status_code == 200, as_student.text
+        assert as_student.json() is None
+        assert "还没打算现在给学生看" not in as_student.text
+
+        # 写草稿的导师本人仍然读得到自己的草稿
+        as_mentor = client.get(url, headers=_headers(temp_db, "mentor"))
+        assert as_mentor.status_code == 200
+        assert as_mentor.json()["status"] == "drafting"
+        assert as_mentor.json()["feedback"] == "草稿里的半截想法，还没打算现在给学生看"
+
+        published = client.post(
+            f"{url}/publish", headers=_headers(temp_db, "mentor"),
+            json={"decision": "revision_required", "reason": "先补实验",
+                  "feedback": "多种子结果缺失", "must_fix": ["补多种子结果"]},
+        )
+        assert published.status_code == 200, published.text
+        after = client.get(url, headers=_headers(temp_db, "alice"))
+        assert after.json()["status"] == "published"
+        assert after.json()["feedback"] == "多种子结果缺失"
+
     def test_approved_requires_conclusion_on_every_required_ac(self, client, temp_db):
         pid = _active_project(client, temp_db)["project_id"]
         task = _published_task(client, temp_db, pid)
