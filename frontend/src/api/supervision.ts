@@ -1117,3 +1117,743 @@ export const adoptAiSuggestion = (
     ac_code: acCode,
     reason,
   });
+
+// ---------------------------------------------------------------------------
+// LaTeX 稿件分析与进展草稿（里程碑5）
+//
+// 三条硬口径写在这里，免得界面自己发明：
+// 1. 全程静态解析，`compiled` 恒为 false，界面不得暗示"已经编译/已运行"；
+// 2. 草稿 `requires_student_confirmation` 恒为 true：只有学生本人确认才会
+//    生成正式进展，导师调用是 403；
+// 3. 危险压缩包、超预算、条目被截断都会原样出现在响应里，界面必须显示。
+// ---------------------------------------------------------------------------
+
+export interface LatexSourceLocation {
+  path: string;
+  line: number;
+  end_line: number;
+  snippet: string;
+}
+
+export interface LatexFinding {
+  kind: string;
+  severity: "error" | "warning" | "notice" | string;
+  message: string;
+  path: string;
+  line: number;
+  end_line: number;
+  snippet: string;
+  target: string;
+  detail: string;
+}
+
+export interface LatexSnapshot {
+  snapshot_id: string;
+  code: string;
+  project_id: string;
+  attachment_code: string;
+  attachment_name: string;
+  attachment_sha256: string;
+  attachment_version: number;
+  main_file: string;
+  main_path: string;
+  /** resolved / user_specified / ambiguous / not_found / invalid_selection */
+  main_status: string;
+  main: Record<string, unknown>;
+  candidates: Record<string, unknown>[];
+  parser_version: string;
+  checker_version: string;
+  zip_safety_version: string;
+  limits: Record<string, unknown>;
+  parse_budget: Record<string, unknown>;
+  document_present: boolean;
+  /** 恒 false：系统绝不调用 LaTeX 编译器。 */
+  compiled: boolean;
+  counts: Record<string, number>;
+  outline: string[];
+  word_count: number;
+  findings: LatexFinding[];
+  finding_counts: Record<string, number>;
+  dangerous_findings: LatexFinding[];
+  partially_read: Record<string, unknown>[];
+  not_read: Record<string, unknown>[];
+  unreferenced_tex: string[];
+  available_files: string[];
+  extracted_files: Record<string, unknown>[];
+  file_count: number;
+  total_bytes: number;
+  document?: Record<string, unknown> | null;
+  check?: Record<string, unknown> | null;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+}
+
+export interface LatexDraftItem {
+  item_type: string;
+  /** added / removed / modified / summary */
+  change: string;
+  statement: string;
+  locations: LatexSourceLocation[];
+  delta: Record<string, unknown>;
+}
+
+export interface LatexProgressDraft {
+  draft_id: string;
+  code: string;
+  project_id: string;
+  library_draft_id: string;
+  /** draft / baseline / confirmed / discarded */
+  status: string;
+  /** 恒 false：草稿本身永远不会被系统发布。 */
+  published: boolean;
+  /** 恒 true：必须学生本人确认。 */
+  requires_student_confirmation: boolean;
+  baseline_only: boolean;
+  draft_version: string;
+  parser_version: string;
+  checker_version: string;
+  zip_safety_version: string;
+  snapshot_code: string;
+  base_snapshot_code: string;
+  attachment_code: string;
+  attachment_sha256: string;
+  attachment_version: number;
+  base_attachment_code: string;
+  base_attachment_version: number;
+  base_attachment_sha256: string;
+  main_file: string;
+  base_main_file: string;
+  summary: string;
+  /** 固定口径说明：静态差异不能证明实验已执行。 */
+  caveat: string;
+  items: LatexDraftItem[];
+  item_count: number;
+  truncated: boolean;
+  dropped_items: number;
+  counts: Record<string, number>;
+  word_count_old: number;
+  word_count_new: number;
+  word_count_delta: number;
+  model_summary: string;
+  /** "" / generated / unavailable / failed */
+  model_summary_status: string;
+  model_summary_note: string;
+  model_name: string;
+  confirmed_progress_code: string;
+  confirmed_by: string;
+  confirmed_role: string;
+  confirmed_at?: string | null;
+  discarded_by: string;
+  discarded_role: string;
+  discarded_at?: string | null;
+  discard_reason: string;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  update_time?: string | null;
+}
+
+export interface LatexProgress {
+  progress_id: string;
+  code: string;
+  project_id: string;
+  task_id?: string | null;
+  done: string;
+  results: string;
+  materials: string;
+  problems: string;
+  next_steps: string;
+  links: Record<string, unknown>[];
+  author_id: string;
+  author_role: string;
+  create_time?: string | null;
+}
+
+export interface LatexConfirmResult {
+  draft: LatexProgressDraft;
+  progress: LatexProgress;
+}
+
+export interface LatexDraftConfirmBody {
+  task_ref?: string;
+  milestone_ref?: string;
+  done?: string;
+  results?: string;
+  materials?: string;
+  problems?: string;
+  next_steps?: string;
+}
+
+export const analyzeLatexArchive = (
+  projectRef: string,
+  body: { attachment_ref: string; main_file?: string },
+) => postJson<LatexSnapshot>(projectPath(projectRef, "/latex/analyze"), body);
+
+export const listLatexSnapshots = (projectRef: string, attachmentRef = "") =>
+  getJson<LatexSnapshot[]>(projectPath(projectRef, "/latex/snapshots"), {
+    query: attachmentRef ? { attachment_ref: attachmentRef } : undefined,
+  });
+
+export const getLatexSnapshot = (projectRef: string, snapshotRef: string) =>
+  getJson<LatexSnapshot>(
+    projectPath(projectRef, `/latex/snapshots/${encodeURIComponent(snapshotRef)}`),
+  );
+
+/** 两个版本做静态差异生成进展草稿；没有 base 时只出基线，不编造进展。 */
+export const createLatexProgressDraft = (
+  projectRef: string,
+  body: {
+    attachment_ref: string;
+    base_attachment_ref?: string;
+    main_file?: string;
+    base_main_file?: string;
+  },
+) => postJson<LatexProgressDraft>(projectPath(projectRef, "/latex/progress-draft"), body);
+
+export const listLatexProgressDrafts = (
+  projectRef: string,
+  query?: { status?: string; attachment_ref?: string },
+) =>
+  getJson<LatexProgressDraft[]>(projectPath(projectRef, "/latex/progress-drafts"), {
+    query,
+  });
+
+export const getLatexProgressDraft = (projectRef: string, draftRef: string) =>
+  getJson<LatexProgressDraft>(
+    projectPath(projectRef, `/latex/progress-drafts/${encodeURIComponent(draftRef)}`),
+  );
+
+/** 只有草稿创建者本人（学生）能确认；确认后生成一条正式进展 PR-NNN。 */
+export const confirmLatexProgressDraft = (
+  projectRef: string,
+  draftRef: string,
+  body: LatexDraftConfirmBody,
+) =>
+  postJson<LatexConfirmResult>(
+    projectPath(projectRef, `/latex/progress-drafts/${encodeURIComponent(draftRef)}/confirm`),
+    body,
+  );
+
+/** 丢弃只改状态，草稿与快照都保留。 */
+export const discardLatexProgressDraft = (
+  projectRef: string,
+  draftRef: string,
+  reason = "",
+) =>
+  postJson<LatexProgressDraft>(
+    projectPath(projectRef, `/latex/progress-drafts/${encodeURIComponent(draftRef)}/discard`),
+    { reason },
+  );
+
+// ---------------------------------------------------------------------------
+// 论文检索与文献结论（《学生研究与导师审核功能重新设计方案》里程碑3）
+//
+// 三条必须照后端显示的口径：
+// 1. 检索依据必须是已确认并共享的研究定义版本，只有草稿时后端 409 并说明原因；
+// 2. 外部论文来源尚未接入 → 503，界面显示成「来源未接入」而不是检索失败；
+// 3. 结论按版本保留（旧版本标 superseded），文献快照哈希用于判定依据已变。
+// ---------------------------------------------------------------------------
+
+export interface LiteratureSubtask {
+  subtask_id: string;
+  code: string;
+  kind: string;
+  /** pending / queued / running / completed / failed / cancelled */
+  status: string;
+  attempt: number;
+  source: string;
+  query: string;
+  payload: Record<string, unknown>;
+  result_total: number;
+  new_total: number;
+  duplicate_total: number;
+  error_code: string;
+  error_message: string;
+  failure_history: Record<string, unknown>[];
+  model_calls: Record<string, unknown>[];
+  consumer: string;
+  model_name: string;
+  prompt_version: string;
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  cancelled_by: string;
+  cancelled_at?: string | null;
+  cancel_reason: string;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  update_time?: string | null;
+}
+
+export interface LiteratureTask {
+  task_id: string;
+  code: string;
+  project_id: string;
+  /** draft / pending / searching / triage / concluded / closed */
+  status: string;
+  /** verify / supplement / refute / explore */
+  purpose: string;
+  goal: string;
+  keywords: string[];
+  synonyms: string[];
+  exclude_terms: string[];
+  sources: string[];
+  year_from?: number | null;
+  year_to?: number | null;
+  require_fulltext: boolean;
+  result_limit: number;
+  deep_extract_limit: number;
+  brief_id: string;
+  brief_code: string;
+  brief_version: number;
+  brief_kind: string;
+  brief_confirmed_by: string;
+  brief_confirmed_at?: string | null;
+  brief_snapshot: Record<string, unknown>;
+  /** 依据的研究定义版本已被更新版取代：结论要提示"依据已变" */
+  brief_superseded: boolean;
+  brief_shared_version?: number | null;
+  brief_latest_version?: number | null;
+  search_plan: Record<string, unknown>;
+  search_plan_note: string;
+  search_plan_model: string;
+  search_plan_prompt_version: string;
+  search_plan_generated_at?: string | null;
+  search_plan_confirmed_at?: string | null;
+  search_plan_confirmed_by: string;
+  plan_status: string;
+  plan_error: string;
+  hits_total: number;
+  deduped_total: number;
+  stored_total: number;
+  source_failures: Record<string, unknown>[];
+  searched_at?: string | null;
+  concluded_at?: string | null;
+  closed_at?: string | null;
+  close_reason: string;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  update_time?: string | null;
+  result_total: number;
+  included_total: number;
+  excluded_total: number;
+  read_later_total: number;
+  undecided_total: number;
+  deep_extract_used: number;
+  conclusion_total: number;
+  subtask_total: number;
+  subtask_failed_total: number;
+  recent_subtasks: LiteratureSubtask[];
+}
+
+export interface LiteratureEvidenceCard {
+  card_id: string;
+  code: string;
+  project_id: string;
+  result_id: string;
+  result_code: string;
+  extraction_id?: string | null;
+  extraction_version: number;
+  evidence_type: string;
+  summary: string;
+  quote: string;
+  locator: Record<string, unknown>;
+  /** 引句是否能在标题+摘要里逐字对上（v1 只有摘要级定位） */
+  quote_verified: boolean;
+  level: string;
+  support_relation: string;
+  brief_field: string;
+  sub_question: string;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  updated_at?: string | null;
+}
+
+export interface LiteratureResult {
+  result_id: string;
+  code: string;
+  project_id: string;
+  search_task_id: string;
+  subtask_id: string;
+  dedup_key: string;
+  doi?: string | null;
+  arxiv_id?: string | null;
+  title_key?: string | null;
+  title: string;
+  authors: string;
+  year?: number | null;
+  abstract: string;
+  url?: string | null;
+  source: string;
+  sources: Record<string, unknown>[];
+  /** unknown / abstract / url / pdf */
+  fulltext_status: string;
+  /** high / relevant / reference / low */
+  relevance_level: string;
+  relevance_reason: string;
+  relevance_matched: Record<string, unknown>[];
+  relevance_missing: Record<string, unknown>[];
+  relevance_score_source: string;
+  /** v1 恒为 null：只有规则排序，没有模型分数 */
+  relevance_score?: number | null;
+  relevance_rules_version: string;
+  /** priority_read / reference / low_relevant */
+  recommended_action: string;
+  /** AI 摘要级语义分析；绝不覆盖规则字段 */
+  semantic_analysis: Record<string, unknown>;
+  /** pending / included / excluded / read_later */
+  decision: string;
+  decision_reason: string;
+  decided_by: string;
+  decided_role: string;
+  decided_at?: string | null;
+  decision_history: Record<string, unknown>[];
+  /** none / queued / running / completed / failed / cancelled */
+  extract_state: string;
+  evidence_cards: LiteratureEvidenceCard[];
+  latest_extraction_version: number;
+  first_seen_at?: string | null;
+  create_time?: string | null;
+  update_time?: string | null;
+}
+
+export interface LiteratureExtraction {
+  extraction_id: string;
+  project_id: string;
+  result_id: string;
+  result_code: string;
+  version: number;
+  subtask_id: string;
+  subtask_code: string;
+  /** fulltext / abstract：v1 只有 abstract */
+  level: string;
+  summary: string;
+  research_problem: string;
+  method: string;
+  algorithm: string;
+  experiments: string;
+  results_metrics: string;
+  limitations: string;
+  differences: Record<string, unknown>;
+  evidence: Record<string, unknown>[];
+  model_name: string;
+  prompt_version: string;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  superseded_at?: string | null;
+}
+
+export interface LiteratureConclusion {
+  conclusion_id: string;
+  code: string;
+  version: number;
+  project_id: string;
+  search_task_id?: string | null;
+  search_task_code: string;
+  statement: string;
+  supported_facts: Record<string, unknown>[];
+  student_judgements: Record<string, unknown>[];
+  unverified_hypotheses: Record<string, unknown>[];
+  research_gaps: string[];
+  literature_snapshot: Record<string, unknown>[];
+  literature_snapshot_hash: string;
+  literature_count: number;
+  evidence_cards: Record<string, unknown>[];
+  /** draft / confirmed / superseded */
+  status: string;
+  confirmed_by: string;
+  confirmed_at?: string | null;
+  confirm_note: string;
+  /** "" / confirmed / questioned / evidence_required */
+  mentor_state: string;
+  mentor_note: string;
+  mentor_by: string;
+  mentor_role: string;
+  mentor_at?: string | null;
+  superseded_at?: string | null;
+  superseded_by_code: string;
+  superseded_by_version: number;
+  /** 结论绑定的文献集合已变化：结论依据不再对应当前纳入集合 */
+  literature_changed: boolean;
+  current_included_count: number;
+  created_by: string;
+  created_role: string;
+  create_time?: string | null;
+  update_time?: string | null;
+}
+
+export interface LiteratureCitation {
+  citation_id: string;
+  code: string;
+  project_id: string;
+  /** project_result / conclusion / private_paper / private_evidence_card */
+  source_kind: string;
+  source_ref: string;
+  source_code: string;
+  source_owner_id: string;
+  /** mentor_review / research_plan / submission / progress */
+  purpose: string;
+  bound_object_type: string;
+  bound_object_code: string;
+  snapshot: Record<string, unknown>;
+  source_version: string;
+  content_hash: string;
+  granted_by: string;
+  granted_role: string;
+  granted_at?: string | null;
+  note: string;
+  revoked_at?: string | null;
+  revoked_by: string;
+  revoke_reason: string;
+  create_time?: string | null;
+}
+
+export interface LiteratureTaskBody {
+  brief_ref: string;
+  goal: string;
+  purpose?: string;
+  keywords?: string[];
+  synonyms?: string[];
+  exclude_terms?: string[];
+  sources?: string[];
+  year_from?: number | null;
+  year_to?: number | null;
+  require_fulltext?: boolean;
+  result_limit?: number;
+  deep_extract_limit?: number | null;
+  as_draft?: boolean;
+}
+
+export interface LiteratureConclusionBody {
+  statement: string;
+  supported_facts?: Record<string, unknown>[];
+  student_judgements?: Record<string, unknown>[];
+  unverified_hypotheses?: Record<string, unknown>[];
+  research_gaps?: string[];
+  evidence_card_codes?: string[];
+  task_ref?: string;
+  confirm?: boolean;
+}
+
+export const createLiteratureTask = (projectRef: string, body: LiteratureTaskBody) =>
+  postJson<LiteratureTask>(projectPath(projectRef, "/literature/tasks"), body);
+
+export const listLiteratureTasks = (projectRef: string, status = "") =>
+  getJson<LiteratureTask[]>(projectPath(projectRef, "/literature/tasks"), {
+    query: status ? { status } : undefined,
+  });
+
+export const getLiteratureTask = (projectRef: string, taskRef: string) =>
+  getJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}`),
+  );
+
+export const updateLiteratureTask = (
+  projectRef: string,
+  taskRef: string,
+  body: Partial<Omit<LiteratureTaskBody, "brief_ref" | "as_draft">>,
+) =>
+  patchJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}`),
+    body,
+  );
+
+export const closeLiteratureTask = (projectRef: string, taskRef: string, reason: string) =>
+  postJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/close`),
+    { reason },
+  );
+
+export const generateLiteraturePlan = (projectRef: string, taskRef: string, note = "") =>
+  postJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/plan`),
+    { note },
+  );
+
+export const confirmLiteraturePlan = (projectRef: string, taskRef: string, note = "") =>
+  postJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/plan/confirm`),
+    { note },
+  );
+
+export const runLiteratureSearch = (
+  projectRef: string,
+  taskRef: string,
+  body: { sources?: string[]; keyword_batches?: Record<string, unknown>[] } = {},
+) =>
+  postJson<LiteratureTask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/search`),
+    body,
+  );
+
+export const listLiteratureSubtasks = (
+  projectRef: string,
+  taskRef: string,
+  query?: { kind?: string; status?: string; limit?: number },
+) =>
+  getJson<LiteratureSubtask[]>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/subtasks`),
+    { query },
+  );
+
+export const retryLiteratureSubtask = (projectRef: string, taskRef: string, subtaskRef: string) =>
+  postJson<LiteratureSubtask>(
+    projectPath(
+      projectRef,
+      `/literature/tasks/${encodeURIComponent(taskRef)}/subtasks/${encodeURIComponent(subtaskRef)}/retry`,
+    ),
+    {},
+  );
+
+export const cancelLiteratureSubtask = (
+  projectRef: string,
+  taskRef: string,
+  subtaskRef: string,
+  note = "",
+) =>
+  postJson<LiteratureSubtask>(
+    projectPath(
+      projectRef,
+      `/literature/tasks/${encodeURIComponent(taskRef)}/subtasks/${encodeURIComponent(subtaskRef)}/cancel`,
+    ),
+    { note },
+  );
+
+export const listLiteratureResults = (
+  projectRef: string,
+  query?: { task_ref?: string; decision?: string; relevance?: string; limit?: number; offset?: number },
+) =>
+  getJson<LiteratureResult[]>(projectPath(projectRef, "/literature/results"), { query });
+
+export const getLiteratureResult = (projectRef: string, resultRef: string) =>
+  getJson<LiteratureResult>(
+    projectPath(projectRef, `/literature/results/${encodeURIComponent(resultRef)}`),
+  );
+
+export const decideLiteratureResult = (
+  projectRef: string,
+  resultRef: string,
+  body: { decision: string; reason: string },
+) =>
+  postJson<LiteratureResult>(
+    projectPath(projectRef, `/literature/results/${encodeURIComponent(resultRef)}/decision`),
+    body,
+  );
+
+export const runLiteratureDeepExtract = (projectRef: string, resultRef: string) =>
+  postJson<LiteratureResult>(
+    projectPath(projectRef, `/literature/results/${encodeURIComponent(resultRef)}/deep-extract`),
+    {},
+  );
+
+export const getLiteratureExtraction = (projectRef: string, resultRef: string) =>
+  getJson<LiteratureExtraction | null>(
+    projectPath(projectRef, `/literature/results/${encodeURIComponent(resultRef)}/extraction`),
+  );
+
+export const listLiteratureExtractions = (projectRef: string, resultRef: string) =>
+  getJson<LiteratureExtraction[]>(
+    projectPath(projectRef, `/literature/results/${encodeURIComponent(resultRef)}/extractions`),
+  );
+
+export const createLiteratureEvidenceCard = (
+  projectRef: string,
+  body: {
+    result_ref: string;
+    quote: string;
+    evidence_type?: string;
+    summary?: string;
+    locator?: Record<string, unknown>;
+    support_relation?: string;
+    brief_field?: string;
+    sub_question?: string;
+    level?: string;
+    extraction_id?: string;
+  },
+) => postJson<LiteratureEvidenceCard>(projectPath(projectRef, "/literature/evidence-cards"), body);
+
+export const listLiteratureEvidenceCards = (projectRef: string, resultRef = "") =>
+  getJson<LiteratureEvidenceCard[]>(projectPath(projectRef, "/literature/evidence-cards"), {
+    query: resultRef ? { result_ref: resultRef } : undefined,
+  });
+
+export const runLiteratureAbstractAnalysis = (
+  projectRef: string,
+  taskRef: string,
+  body: { result_refs?: string[]; limit?: number | null } = {},
+) =>
+  postJson<LiteratureSubtask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/abstract-analysis`),
+    body,
+  );
+
+export const compareLiteraturePapers = (projectRef: string, taskRef: string, resultRefs: string[]) =>
+  postJson<LiteratureSubtask>(
+    projectPath(projectRef, `/literature/tasks/${encodeURIComponent(taskRef)}/compare`),
+    { result_refs: resultRefs },
+  );
+
+export const createLiteratureConclusion = (projectRef: string, body: LiteratureConclusionBody) =>
+  postJson<LiteratureConclusion>(projectPath(projectRef, "/literature/conclusions"), body);
+
+export const listLiteratureConclusions = (
+  projectRef: string,
+  query?: { status?: string; include_superseded?: boolean },
+) =>
+  getJson<LiteratureConclusion[]>(projectPath(projectRef, "/literature/conclusions"), { query });
+
+export const getLiteratureConclusion = (projectRef: string, conclusionRef: string) =>
+  getJson<LiteratureConclusion>(
+    projectPath(projectRef, `/literature/conclusions/${encodeURIComponent(conclusionRef)}`),
+  );
+
+export const reviseLiteratureConclusion = (
+  projectRef: string,
+  conclusionRef: string,
+  body: LiteratureConclusionBody,
+) =>
+  postJson<LiteratureConclusion>(
+    projectPath(projectRef, `/literature/conclusions/${encodeURIComponent(conclusionRef)}/revise`),
+    body,
+  );
+
+export const mentorReviewLiteratureConclusion = (
+  projectRef: string,
+  conclusionRef: string,
+  body: { state: string; note?: string },
+) =>
+  postJson<LiteratureConclusion>(
+    projectPath(
+      projectRef,
+      `/literature/conclusions/${encodeURIComponent(conclusionRef)}/mentor-review`,
+    ),
+    body,
+  );
+
+export const createLiteratureCitation = (
+  projectRef: string,
+  body: {
+    source_kind: string;
+    source_ref: string;
+    purpose: string;
+    bound_object_type?: string;
+    bound_object_code?: string;
+    note?: string;
+  },
+) => postJson<LiteratureCitation>(projectPath(projectRef, "/literature/citations"), body);
+
+export const listLiteratureCitations = (
+  projectRef: string,
+  query?: { purpose?: string; source_kind?: string; include_revoked?: boolean },
+) => getJson<LiteratureCitation[]>(projectPath(projectRef, "/literature/citations"), { query });
+
+export const revokeLiteratureCitation = (projectRef: string, citationRef: string, reason: string) =>
+  postJson<LiteratureCitation>(
+    projectPath(projectRef, `/literature/citations/${encodeURIComponent(citationRef)}/revoke`),
+    { reason },
+  );

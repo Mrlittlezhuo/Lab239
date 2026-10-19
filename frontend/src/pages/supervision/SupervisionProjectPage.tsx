@@ -11,6 +11,8 @@ import { AuditPanel } from "@/components/supervision/AuditPanel";
 import { BriefPanel } from "@/components/supervision/BriefPanel";
 import { DialoguePanel } from "@/components/supervision/DialoguePanel";
 import { ExecutionPanel } from "@/components/supervision/ExecutionPanel";
+import { LatexPanel } from "@/components/supervision/LatexPanel";
+import { LiteraturePanel } from "@/components/supervision/LiteraturePanel";
 import { MembersPanel } from "@/components/supervision/MembersPanel";
 import { OverviewPanel } from "@/components/supervision/OverviewPanel";
 import { ReviewPanel } from "@/components/supervision/ReviewPanel";
@@ -30,6 +32,8 @@ const TABS = [
   { key: "execution", label: "进展与提交", roles: ["student", "mentor"] },
   { key: "review", label: "导师审核", roles: ["mentor"] },
   { key: "ai-review", label: "AI 预审", roles: ["student", "mentor"] },
+  { key: "literature", label: "论文检索", roles: ["student", "mentor"] },
+  { key: "latex", label: "稿件分析", roles: ["student", "mentor"] },
   { key: "attachments", label: "附件", roles: ["student", "mentor"] },
   { key: "overview", label: "概览", roles: ["student", "mentor"] },
   { key: "members", label: "成员与设置", roles: ["student", "mentor"] },
@@ -153,6 +157,10 @@ function Panel({
       return <ReviewPanel {...props} />;
     case "ai-review":
       return <AiReviewPanel {...props} />;
+    case "literature":
+      return <LiteraturePanel project={project} />;
+    case "latex":
+      return <LatexPanel {...props} />;
     case "attachments":
       return <AttachmentsPanel {...props} />;
     case "members":
