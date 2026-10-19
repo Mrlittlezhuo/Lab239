@@ -251,7 +251,7 @@ class TestV15Migration:
         finally:
             s.close()
         with engine.connect() as conn:
-            conn.execute(text("DELETE FROM schema_migrations WHERE version IN (15, 16, 17, 18, 19, 20)"))
+            conn.execute(text("DELETE FROM schema_migrations WHERE version IN (15, 16, 17, 18, 19, 20, 21, 22)"))
             conn.execute(text("DROP TABLE IF EXISTS memory_revision"))
             conn.execute(text("DROP TABLE IF EXISTS conversation_memory_ignore"))
             conn.execute(text("ALTER TABLE conversation DROP COLUMN project_id"))
@@ -304,9 +304,11 @@ class TestV15Migration:
         engine, old_user_id = self._legacy_db(tmp_path)
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            # 造库时把 v15 与 v16 的记录都退掉了，重新升级要跑两支迁移
-            assert [m.version for m in result.applied] == [15, 16, 17, 18, 19, 20]
-            assert result.final_version == 20
+            # 造库时把 v15 之后的记录都退掉了（迁移记录必须连续，不能只退中间
+            # 一段），所以重新升级要跑 v15~v22；v21/v22 的表已在库里，靠
+            # IF NOT EXISTS 幂等跳过
+            assert [m.version for m in result.applied] == [15, 16, 17, 18, 19, 20, 21, 22]
+            assert result.final_version == 22
 
             columns = {c["name"] for c in inspect(conn).get_columns("memory")}
             assert {
@@ -363,7 +365,7 @@ class TestV15Migration:
         with db["engine"].connect() as conn:
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 20
+            assert second.final_version == 22
 
     def test_new_user_switch_defaults(self, db):
         """默认只开"个人偏好 + 已确认决策"（设计方案 §4.1）。"""

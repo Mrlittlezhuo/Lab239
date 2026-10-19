@@ -10,6 +10,8 @@
   等待点**，重启后必须原样保留，不能当成中断；
 - AI 预审运行：由预审模块自己的 ``sweep_interrupted_runs`` 处理，本模块在
   它可用时调用（里程碑4 之后生效）。
+- 论文检索子任务：由论文检索模块自己的 ``converge_interrupted_subtasks``
+  处理，本模块在它可用时调用（里程碑3 之后生效）；已入库的候选论文不动。
 
 收敛动作只改状态与错误摘要，不删除任何历史数据，并把结果写日志。
 """
@@ -63,6 +65,23 @@ def sweep_ai_review_runs(session: Session) -> int:
     return int(hook(session) or 0)
 
 
+def sweep_literature_subtasks(session: Session) -> int:
+    """收敛重启时仍在排队/执行的论文检索子任务（里程碑3 之后生效）。
+
+    检索、排序、摘要分析、深度提取与对比都在请求内同步执行，重启会让它们
+    永远停在 ``queued``/``running``。仓储层自己知道每种 ``kind`` 收敛成什么
+    状态、要不要保留已入库的候选，所以这里只转调，不自己改状态。
+    """
+    try:
+        from chatchat.server.db.repository import supervision_literature_repository
+    except ImportError:  # 论文检索模块尚未落地
+        return 0
+    hook = getattr(supervision_literature_repository, "converge_interrupted_subtasks", None)
+    if hook is None:
+        return 0
+    return int(hook(session) or 0)
+
+
 def sweep_interrupted_runs() -> Dict[str, Any]:
     """应用启动时调用；任何一项失败都不应该阻塞服务启动。"""
     summary: Dict[str, Any] = {}
@@ -71,6 +90,7 @@ def sweep_interrupted_runs() -> Dict[str, Any]:
         summary["agent_run"] = sweep_agent_runs(session)
         summary["research_run"] = sweep_research_runs(session)
         summary["ai_review_run"] = sweep_ai_review_runs(session)
+        summary["literature_subtask"] = sweep_literature_subtasks(session)
         session.commit()
     except Exception:
         session.rollback()
@@ -117,5 +137,6 @@ __all__ = [
     "sweep_agent_runs",
     "sweep_ai_review_runs",
     "sweep_interrupted_runs",
+    "sweep_literature_subtasks",
     "sweep_research_runs",
 ]

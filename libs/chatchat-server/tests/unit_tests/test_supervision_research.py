@@ -77,7 +77,7 @@ def temp_db(secret, tmp_path, monkeypatch):
         apply_migrations(build_registry(), conn)
         # 里程碑2 不新增迁移：新表由 Base.metadata.create_all 建出来，
         # 正式库的 v19 DDL 由集成方统一补。
-        assert current_version(conn) == 20
+        assert current_version(conn) == 22
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}

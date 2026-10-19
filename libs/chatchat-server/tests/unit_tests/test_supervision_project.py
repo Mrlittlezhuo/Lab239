@@ -65,7 +65,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 20
+        assert current_version(conn) == 22
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}
@@ -227,7 +227,7 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_empty.db'}")
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert result.final_version == 20
+            assert result.final_version == 22
             assert 17 in [m.version for m in result.applied]
             tables = set(conn.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -274,8 +274,8 @@ class TestV17Migration:
 
         with engine.connect() as conn:
             result = apply_migrations(build_registry(), conn)
-            assert [m.version for m in result.applied] == [17, 18, 19, 20]
-            assert result.final_version == 20
+            assert [m.version for m in result.applied] == [17, 18, 19, 20, 21, 22]
+            assert result.final_version == 22
             assert conn.execute(
                 text("SELECT COUNT(*) FROM conversation WHERE id = 'c-old'")
             ).scalar() == 1
@@ -293,11 +293,11 @@ class TestV17Migration:
         engine = create_engine(f"sqlite:///{tmp_path / 'v17_idem.db'}")
         with engine.connect() as conn:
             first = apply_migrations(build_registry(), conn)
-            assert first.final_version == 20
+            assert first.final_version == 22
         with engine.connect() as conn:
             second = apply_migrations(build_registry(), conn)
             assert second.applied == []
-            assert second.final_version == 20
+            assert second.final_version == 22
         # 直接重跑 v17 的 DDL 也不报错、不丢数据（IF NOT EXISTS）
         with engine.connect() as conn:
             conn.execute(text(
@@ -819,3 +819,19 @@ def test_router_is_mounted_on_the_real_server_app():
     assert "/supervision/projects/{project_ref}/review-queue" in paths
     assert "/supervision/projects/{project_ref}/research/briefs" in paths
     assert "/supervision/projects/{project_ref}/research/context" in paths
+    # 里程碑3（论文检索）、里程碑4（AI 预审）与里程碑5（LaTeX 稿件）的接口。
+    # 这三块各自有独立测试，但都用自己的 FastAPI 实例挂 router；真实应用漏挂
+    # 时前端只会打到 SPA 兜底页，看起来像"页面没数据"而不是 404。
+    assert "/supervision/projects/{project_ref}/ai-review/runs" in paths
+    assert "/supervision/projects/{project_ref}/literature/tasks" in paths
+    assert "/supervision/projects/{project_ref}/literature/results" in paths
+    assert "/supervision/projects/{project_ref}/literature/evidence-cards" in paths
+    assert "/supervision/projects/{project_ref}/literature/conclusions" in paths
+    assert "/supervision/projects/{project_ref}/literature/citations" in paths
+    assert "/supervision/projects/{project_ref}/latex/analyze" in paths
+    assert "/supervision/projects/{project_ref}/latex/snapshots" in paths
+    assert "/supervision/projects/{project_ref}/latex/progress-draft" in paths
+    assert (
+        "/supervision/projects/{project_ref}/latex/progress-drafts/{draft_ref}/confirm"
+        in paths
+    )

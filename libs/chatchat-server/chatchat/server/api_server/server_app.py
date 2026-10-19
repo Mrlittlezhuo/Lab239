@@ -42,6 +42,10 @@ from chatchat.server.startup_sweep import sweep_interrupted_runs
 from chatchat.server.api_server.supervision_ai_review_routes import (
     supervision_ai_review_router,
 )
+from chatchat.server.api_server.supervision_latex_routes import supervision_latex_router
+from chatchat.server.api_server.supervision_literature_routes import (
+    supervision_literature_router,
+)
 from chatchat.server.api_server.supervision_research_routes import (
     supervision_research_router,
 )
@@ -138,6 +142,8 @@ def create_app(run_mode: str = None):
     app.include_router(supervision_work_router)
     app.include_router(supervision_research_router)
     app.include_router(supervision_ai_review_router)
+    app.include_router(supervision_literature_router)
+    app.include_router(supervision_latex_router)
 
     # 其它接口
     app.post(

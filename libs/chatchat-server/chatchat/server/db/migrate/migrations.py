@@ -98,6 +98,30 @@
   ``supervision_ai_review_setting``（自动预审开关，``task_id`` 为空串表示
   项目级默认，``(project_id, task_id)`` 唯一）。只建新表建索引，不改列不
   删表，既有提交、审核与附件数据一律不动。
+- v21（师生协作里程碑3 论文检索）：新增
+  ``supervision_literature_search_task``（一次检索任务：绑定的研究定义版本
+  快照、检索目的与关键词、检索计划及其确认时点、状态与命中/去重/入库计数，
+  ``(project_id, code)`` 唯一）、``supervision_literature_subtask``（检索、
+  排序、摘要分析、深度提取、对比等子任务的执行记录与失败历史）、
+  ``supervision_literature_result``（候选论文：规则相关性、学生纳入决定与
+  历史，doi/arxiv/标题三个部分唯一索引做项目内去重）、
+  ``supervision_literature_extraction``（按版本保留的深度提取结果）、
+  ``supervision_literature_evidence_card``（原文引句与支撑关系，
+  ``(project_id, dedup_key)`` 唯一防重复建卡）、
+  ``supervision_literature_conclusion``（文献结论按版本保留，含文献快照
+  哈希用于判定"结论依据已变"）与 ``supervision_literature_citation``
+  （对外引用他人研究对象的授权与撤回，撤回后下游必须重新查询）。只建新表
+  建索引，不改列不删表，既有研究定义、提交与审核数据一律不动。
+- v22（师生协作里程碑5 LaTeX 稿件静态解析）：新增
+  ``supervision_latex_snapshot``（一份 .zip 稿件的分析快照：主文件判定状态
+  与候选清单、章节大纲、计数、检查发现与危险命令、未读取/部分读取清单，
+  ``(project_id, code)`` 唯一，``compiled`` 用 CHECK 钉成恒 false）、
+  ``supervision_latex_progress_draft``（两版稿件的静态差异生成的进展草稿，
+  只追加不覆盖，``published`` CHECK 恒 false、
+  ``requires_student_confirmation`` CHECK 恒 true，即草稿永远不会自动发布、
+  必须学生本人确认）与 ``supervision_latex_draft_confirmation``（草稿→正式
+  进展的确认记录，``draft_id`` 唯一以保证重复确认不会生成第二条进展）。
+  只建新表建索引，不改列不删表，既有附件、进展与提交数据一律不动。
 
 已发布版本不得修改；后续业务 schema 变化追加新版本迁移函数。
 """
@@ -1846,6 +1870,548 @@ def _v20_supervision_ai_review(conn: Connection) -> None:
         conn.execute(text(stmt))
 
 
+
+# ---------------------------------------------------------------------------
+# v21 论文检索（里程碑3）：检索任务、子任务、候选论文、深度提取、
+# 证据卡、文献结论与引用授权七张表。
+# ---------------------------------------------------------------------------
+
+_SUPERVISION_LITERATURE_CITATION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_citation (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    source_kind VARCHAR(32) NOT NULL,
+    source_ref VARCHAR(32) NOT NULL,
+    source_code VARCHAR(32) NOT NULL,
+    source_owner_id VARCHAR(32) NOT NULL,
+    purpose VARCHAR(32) NOT NULL,
+    bound_object_type VARCHAR(32) NOT NULL,
+    bound_object_code VARCHAR(32) NOT NULL,
+    snapshot TEXT NOT NULL,
+    source_version VARCHAR(64) NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    granted_by VARCHAR(32) NOT NULL,
+    granted_role VARCHAR(16) NOT NULL,
+    granted_at TIMESTAMP,
+    note TEXT NOT NULL,
+    revoked_at TIMESTAMP,
+    revoked_by VARCHAR(32) NOT NULL,
+    revoke_reason TEXT NOT NULL,
+    create_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_citation_code UNIQUE (project_id, code),
+    CONSTRAINT ck_supervision_lit_citation_source_kind CHECK (source_kind IN ('project_result', 'conclusion', 'private_paper', 'private_evidence_card')),
+    CONSTRAINT ck_supervision_lit_citation_purpose CHECK (purpose IN ('mentor_review', 'research_plan', 'submission', 'progress'))
+)
+"""
+
+_SUPERVISION_LITERATURE_CITATION_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_citation_bound ON supervision_literature_citation (bound_object_type, bound_object_code)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_citation_owner ON supervision_literature_citation (source_owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_citation_project_kind ON supervision_literature_citation (project_id, source_kind)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_citation_project_purpose ON supervision_literature_citation (project_id, purpose)",
+]
+
+_SUPERVISION_LITERATURE_CONCLUSION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_conclusion (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    version INTEGER NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    search_task_id VARCHAR(32),
+    search_task_code VARCHAR(16) NOT NULL,
+    statement TEXT NOT NULL,
+    supported_facts TEXT NOT NULL,
+    student_judgements TEXT NOT NULL,
+    unverified_hypotheses TEXT NOT NULL,
+    research_gaps TEXT NOT NULL,
+    literature_snapshot TEXT NOT NULL,
+    literature_snapshot_hash VARCHAR(64) NOT NULL,
+    literature_count INTEGER NOT NULL,
+    evidence_cards TEXT NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    confirmed_by VARCHAR(32) NOT NULL,
+    confirmed_at TIMESTAMP,
+    confirm_note TEXT NOT NULL,
+    mentor_state VARCHAR(24) NOT NULL,
+    mentor_note TEXT NOT NULL,
+    mentor_by VARCHAR(32) NOT NULL,
+    mentor_role VARCHAR(16) NOT NULL,
+    mentor_at TIMESTAMP,
+    superseded_at TIMESTAMP,
+    superseded_by_code VARCHAR(16) NOT NULL,
+    superseded_by_version INTEGER NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    deleted_at TIMESTAMP,
+    delete_reason TEXT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_conclusion_version UNIQUE (code, version),
+    CONSTRAINT ck_supervision_lit_conclusion_status CHECK (status IN ('draft', 'confirmed', 'superseded')),
+    CONSTRAINT ck_supervision_lit_conclusion_mentor_state CHECK (mentor_state IN ('', 'confirmed', 'questioned', 'evidence_required')),
+    CONSTRAINT ck_supervision_lit_conclusion_version CHECK (version >= 1),
+    CONSTRAINT ck_supervision_lit_conclusion_count CHECK (literature_count >= 0)
+)
+"""
+
+_SUPERVISION_LITERATURE_CONCLUSION_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_conclusion_project_code ON supervision_literature_conclusion (project_id, code)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_conclusion_project_status ON supervision_literature_conclusion (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_conclusion_task ON supervision_literature_conclusion (search_task_id)",
+]
+
+_SUPERVISION_LITERATURE_EVIDENCE_CARD_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_evidence_card (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    result_id VARCHAR(32) NOT NULL,
+    result_code VARCHAR(16) NOT NULL,
+    extraction_id VARCHAR(32),
+    extraction_version INTEGER NOT NULL,
+    evidence_type VARCHAR(32) NOT NULL,
+    summary TEXT NOT NULL,
+    quote TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    quote_verified BOOLEAN NOT NULL,
+    level VARCHAR(16) NOT NULL,
+    support_relation VARCHAR(24) NOT NULL,
+    brief_field VARCHAR(32) NOT NULL,
+    sub_question VARCHAR(500) NOT NULL,
+    dedup_key VARCHAR(64) NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP,
+    delete_reason TEXT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_card_code UNIQUE (project_id, code),
+    CONSTRAINT uq_supervision_lit_card_dedup UNIQUE (project_id, dedup_key),
+    CONSTRAINT ck_supervision_lit_card_type CHECK (evidence_type IN ('', 'objective', 'method', 'dataset', 'metric', 'result', 'conclusion', 'limitation', 'assumption')),
+    CONSTRAINT ck_supervision_lit_card_level CHECK (level IN ('fulltext', 'abstract')),
+    CONSTRAINT ck_supervision_lit_card_support CHECK (support_relation IN ('', 'supports', 'partially_supports', 'contradicts', 'conflicting', 'background'))
+)
+"""
+
+_SUPERVISION_LITERATURE_EVIDENCE_CARD_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_card_project_result ON supervision_literature_evidence_card (project_id, result_id)",
+]
+
+_SUPERVISION_LITERATURE_EXTRACTION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_extraction (
+    id VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    result_id VARCHAR(32) NOT NULL,
+    result_code VARCHAR(16) NOT NULL,
+    version INTEGER NOT NULL,
+    subtask_id VARCHAR(32) NOT NULL,
+    subtask_code VARCHAR(32) NOT NULL,
+    level VARCHAR(16) NOT NULL,
+    summary TEXT NOT NULL,
+    research_problem TEXT NOT NULL,
+    method TEXT NOT NULL,
+    algorithm TEXT NOT NULL,
+    experiments TEXT NOT NULL,
+    results_metrics TEXT NOT NULL,
+    limitations TEXT NOT NULL,
+    differences TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    model_name VARCHAR(120) NOT NULL,
+    prompt_version VARCHAR(32) NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    superseded_at TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_extraction_version UNIQUE (result_id, version),
+    CONSTRAINT ck_supervision_lit_extraction_level CHECK (level IN ('fulltext', 'abstract')),
+    CONSTRAINT ck_supervision_lit_extraction_version CHECK (version >= 1)
+)
+"""
+
+_SUPERVISION_LITERATURE_EXTRACTION_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_extraction_project_result ON supervision_literature_extraction (project_id, result_id)",
+]
+
+_SUPERVISION_LITERATURE_RESULT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_result (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    search_task_id VARCHAR(32) NOT NULL,
+    subtask_id VARCHAR(32) NOT NULL,
+    dedup_key VARCHAR(200) NOT NULL,
+    doi VARCHAR(200),
+    arxiv_id VARCHAR(100),
+    title_key VARCHAR(200),
+    title VARCHAR(1000) NOT NULL,
+    authors VARCHAR(2000) NOT NULL,
+    year INTEGER,
+    abstract VARCHAR(8000) NOT NULL,
+    url VARCHAR(1000),
+    source VARCHAR(50) NOT NULL,
+    sources TEXT NOT NULL,
+    fulltext_status VARCHAR(16) NOT NULL,
+    relevance_level VARCHAR(16) NOT NULL,
+    relevance_reason TEXT NOT NULL,
+    relevance_matched TEXT NOT NULL,
+    relevance_missing TEXT NOT NULL,
+    relevance_score_source VARCHAR(32) NOT NULL,
+    relevance_score INTEGER,
+    relevance_rules_version VARCHAR(32) NOT NULL,
+    recommended_action VARCHAR(24) NOT NULL,
+    semantic_analysis TEXT NOT NULL,
+    decision VARCHAR(16) NOT NULL,
+    decision_reason TEXT NOT NULL,
+    decided_by VARCHAR(32) NOT NULL,
+    decided_role VARCHAR(16) NOT NULL,
+    decided_at TIMESTAMP,
+    decision_history TEXT NOT NULL,
+    extract_state VARCHAR(16) NOT NULL,
+    first_seen_at TIMESTAMP,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_result_code UNIQUE (project_id, code),
+    CONSTRAINT uq_supervision_lit_result_dedup UNIQUE (project_id, dedup_key),
+    CONSTRAINT ck_supervision_lit_result_decision CHECK (decision IN ('pending', 'included', 'excluded', 'read_later')),
+    CONSTRAINT ck_supervision_lit_result_level CHECK (relevance_level IN ('high', 'relevant', 'reference', 'low')),
+    CONSTRAINT ck_supervision_lit_result_action CHECK (recommended_action IN ('priority_read', 'reference', 'low_relevant')),
+    CONSTRAINT ck_supervision_lit_result_score_source CHECK (relevance_score_source IN ('rule_keyword', 'model_semantic')),
+    CONSTRAINT ck_supervision_lit_result_extract_state CHECK (extract_state IN ('none', 'queued', 'running', 'completed', 'failed', 'cancelled')),
+    CONSTRAINT ck_supervision_lit_result_fulltext CHECK (fulltext_status IN ('unknown', 'abstract', 'url', 'pdf'))
+)
+"""
+
+_SUPERVISION_LITERATURE_RESULT_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_result_project_decision ON supervision_literature_result (project_id, decision)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_result_project_level ON supervision_literature_result (project_id, relevance_level)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_result_task ON supervision_literature_result (search_task_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_supervision_lit_result_arxiv ON supervision_literature_result (project_id, arxiv_id) WHERE arxiv_id IS NOT NULL AND arxiv_id <> ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_supervision_lit_result_doi ON supervision_literature_result (project_id, doi) WHERE doi IS NOT NULL AND doi <> ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_supervision_lit_result_title ON supervision_literature_result (project_id, title_key) WHERE title_key IS NOT NULL AND title_key <> ''",
+]
+
+_SUPERVISION_LITERATURE_SEARCH_TASK_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_search_task (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    brief_id VARCHAR(32) NOT NULL,
+    brief_code VARCHAR(16) NOT NULL,
+    brief_version INTEGER NOT NULL,
+    brief_kind VARCHAR(32) NOT NULL,
+    brief_confirmed_by VARCHAR(32) NOT NULL,
+    brief_confirmed_at TIMESTAMP,
+    brief_snapshot TEXT NOT NULL,
+    purpose VARCHAR(16) NOT NULL,
+    goal TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    synonyms TEXT NOT NULL,
+    exclude_terms TEXT NOT NULL,
+    sources TEXT NOT NULL,
+    year_from INTEGER,
+    year_to INTEGER,
+    require_fulltext BOOLEAN NOT NULL,
+    result_limit INTEGER NOT NULL,
+    deep_extract_limit INTEGER NOT NULL,
+    search_plan TEXT NOT NULL,
+    search_plan_note TEXT NOT NULL,
+    search_plan_model VARCHAR(120) NOT NULL,
+    search_plan_prompt_version VARCHAR(32) NOT NULL,
+    search_plan_generated_at TIMESTAMP,
+    search_plan_confirmed_at TIMESTAMP,
+    search_plan_confirmed_by VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    hits_total INTEGER NOT NULL,
+    deduped_total INTEGER NOT NULL,
+    stored_total INTEGER NOT NULL,
+    source_failures TEXT NOT NULL,
+    searched_at TIMESTAMP,
+    concluded_at TIMESTAMP,
+    closed_at TIMESTAMP,
+    close_reason TEXT NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    deleted_at TIMESTAMP,
+    delete_reason TEXT NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_task_code UNIQUE (project_id, code),
+    CONSTRAINT ck_supervision_lit_task_status CHECK (status IN ('draft', 'pending', 'searching', 'triage', 'concluded', 'closed')),
+    CONSTRAINT ck_supervision_lit_task_purpose CHECK (purpose IN ('verify', 'supplement', 'refute', 'explore')),
+    CONSTRAINT ck_supervision_lit_task_result_limit CHECK (result_limit >= 1 AND result_limit <= 200),
+    CONSTRAINT ck_supervision_lit_task_deep_limit CHECK (deep_extract_limit >= 0 AND deep_extract_limit <= 20),
+    CONSTRAINT ck_supervision_lit_task_brief_version CHECK (brief_version >= 1)
+)
+"""
+
+_SUPERVISION_LITERATURE_SEARCH_TASK_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_task_brief ON supervision_literature_search_task (brief_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_task_project_status ON supervision_literature_search_task (project_id, status)",
+]
+
+_SUPERVISION_LITERATURE_SUBTASK_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_literature_subtask (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(32) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    search_task_id VARCHAR(32) NOT NULL,
+    search_task_code VARCHAR(16) NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    attempt INTEGER NOT NULL,
+    source VARCHAR(50) NOT NULL,
+    "query" TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    result_total INTEGER NOT NULL,
+    new_total INTEGER NOT NULL,
+    duplicate_total INTEGER NOT NULL,
+    error_code VARCHAR(64) NOT NULL,
+    error_message TEXT NOT NULL,
+    failure_history TEXT NOT NULL,
+    model_calls TEXT NOT NULL,
+    consumer VARCHAR(32) NOT NULL,
+    model_name VARCHAR(120) NOT NULL,
+    prompt_version VARCHAR(32) NOT NULL,
+    queued_at TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    cancelled_by VARCHAR(32) NOT NULL,
+    cancelled_at TIMESTAMP,
+    cancel_reason TEXT NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_lit_subtask_code UNIQUE (search_task_id, code),
+    CONSTRAINT ck_supervision_lit_subtask_kind CHECK (kind IN ('plan', 'search', 'rank', 'abstract_analysis', 'deep_extract', 'compare', 'conclusion')),
+    CONSTRAINT ck_supervision_lit_subtask_status CHECK (status IN ('pending', 'queued', 'running', 'completed', 'failed', 'cancelled')),
+    CONSTRAINT ck_supervision_lit_subtask_attempt CHECK (attempt >= 1)
+)
+"""
+
+_SUPERVISION_LITERATURE_SUBTASK_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_subtask_project_status ON supervision_literature_subtask (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_lit_subtask_task_kind ON supervision_literature_subtask (search_task_id, kind)",
+]
+
+
+def _v21_supervision_literature(conn: Connection) -> None:
+    """v21：论文检索的检索任务、子任务、候选论文、深度提取、证据卡、
+    文献结论与引用授权七张表。
+
+    DDL 由 ``supervision_literature_model`` 的表定义生成后按本文件既有约定归一
+    （DATETIME→TIMESTAMP、JSON→TEXT），保证迁移出来的结构与 ORM 一致。全部
+    ``IF NOT EXISTS``，不改列不删表：已确认的研究定义、已提交的提交版本与
+    导师审核结论一律不动（§12、§22.1）。三个部分唯一索引（doi / arxiv /
+    title_key）也补了 ``IF NOT EXISTS``，重复执行不报错。
+    """
+    for ddl in (
+        _SUPERVISION_LITERATURE_SEARCH_TASK_TABLE,
+        _SUPERVISION_LITERATURE_SUBTASK_TABLE,
+        _SUPERVISION_LITERATURE_RESULT_TABLE,
+        _SUPERVISION_LITERATURE_EXTRACTION_TABLE,
+        _SUPERVISION_LITERATURE_EVIDENCE_CARD_TABLE,
+        _SUPERVISION_LITERATURE_CONCLUSION_TABLE,
+        _SUPERVISION_LITERATURE_CITATION_TABLE,
+    ):
+        conn.execute(text(ddl))
+    for stmt in (
+        *_SUPERVISION_LITERATURE_SEARCH_TASK_INDEXES,
+        *_SUPERVISION_LITERATURE_SUBTASK_INDEXES,
+        *_SUPERVISION_LITERATURE_RESULT_INDEXES,
+        *_SUPERVISION_LITERATURE_EXTRACTION_INDEXES,
+        *_SUPERVISION_LITERATURE_EVIDENCE_CARD_INDEXES,
+        *_SUPERVISION_LITERATURE_CONCLUSION_INDEXES,
+        *_SUPERVISION_LITERATURE_CITATION_INDEXES,
+    ):
+        conn.execute(text(stmt))
+
+
+
+# ---------------------------------------------------------------------------
+# v22 LaTeX 稿件静态解析（里程碑5 路由层）：分析快照、进展草稿与
+# 草稿确认记录三张表。
+# ---------------------------------------------------------------------------
+
+_SUPERVISION_LATEX_DRAFT_CONFIRMATION_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_latex_draft_confirmation (
+    id VARCHAR(32) NOT NULL,
+    draft_id VARCHAR(32) NOT NULL,
+    draft_code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    progress_id VARCHAR(32) NOT NULL,
+    progress_code VARCHAR(16) NOT NULL,
+    draft_status VARCHAR(16) NOT NULL,
+    actor_id VARCHAR(32) NOT NULL,
+    actor_role VARCHAR(16) NOT NULL,
+    statement TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    created_at TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_latex_draft_confirmation UNIQUE (draft_id)
+)
+"""
+
+_SUPERVISION_LATEX_DRAFT_CONFIRMATION_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_draft_confirmation_progress ON supervision_latex_draft_confirmation (progress_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_draft_confirmation_project ON supervision_latex_draft_confirmation (project_id, created_at)",
+]
+
+_SUPERVISION_LATEX_PROGRESS_DRAFT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_latex_progress_draft (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    library_draft_id VARCHAR(80) NOT NULL,
+    draft_version VARCHAR(32) NOT NULL,
+    parser_version VARCHAR(32) NOT NULL,
+    checker_version VARCHAR(32) NOT NULL,
+    zip_safety_version VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    published BOOLEAN NOT NULL,
+    requires_student_confirmation BOOLEAN NOT NULL,
+    baseline_only BOOLEAN NOT NULL,
+    snapshot_id VARCHAR(32) NOT NULL,
+    snapshot_code VARCHAR(16) NOT NULL,
+    attachment_id VARCHAR(32) NOT NULL,
+    attachment_code VARCHAR(16) NOT NULL,
+    attachment_sha256 VARCHAR(64) NOT NULL,
+    attachment_version INTEGER NOT NULL,
+    main_file VARCHAR(500) NOT NULL,
+    base_snapshot_id VARCHAR(32),
+    base_snapshot_code VARCHAR(16) NOT NULL,
+    base_attachment_id VARCHAR(32),
+    base_attachment_code VARCHAR(16) NOT NULL,
+    base_attachment_sha256 VARCHAR(64) NOT NULL,
+    base_attachment_version INTEGER NOT NULL,
+    base_main_file VARCHAR(500) NOT NULL,
+    summary TEXT NOT NULL,
+    caveat TEXT NOT NULL,
+    items TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    truncated BOOLEAN NOT NULL,
+    dropped_items INTEGER NOT NULL,
+    draft_json TEXT NOT NULL,
+    diff_counts TEXT NOT NULL,
+    word_count_old INTEGER NOT NULL,
+    word_count_new INTEGER NOT NULL,
+    word_count_delta INTEGER NOT NULL,
+    model_summary TEXT NOT NULL,
+    model_summary_status VARCHAR(32) NOT NULL,
+    model_summary_note TEXT NOT NULL,
+    model_name VARCHAR(120) NOT NULL,
+    confirmed_progress_id VARCHAR(32),
+    confirmed_progress_code VARCHAR(16) NOT NULL,
+    confirmed_by VARCHAR(32) NOT NULL,
+    confirmed_role VARCHAR(16) NOT NULL,
+    confirmed_at TIMESTAMP,
+    discarded_by VARCHAR(32) NOT NULL,
+    discarded_role VARCHAR(16) NOT NULL,
+    discarded_at TIMESTAMP,
+    discard_reason TEXT NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    update_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_latex_draft_code UNIQUE (project_id, code),
+    CONSTRAINT ck_supervision_latex_draft_status CHECK (status IN ('draft', 'baseline', 'confirmed', 'discarded')),
+    CONSTRAINT ck_supervision_latex_draft_published CHECK (published = 0),
+    CONSTRAINT ck_supervision_latex_draft_confirm CHECK (requires_student_confirmation = 1),
+    CONSTRAINT ck_supervision_latex_draft_model_summary CHECK (model_summary_status IN ('', 'generated', 'unavailable', 'failed'))
+)
+"""
+
+_SUPERVISION_LATEX_PROGRESS_DRAFT_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_draft_attachment ON supervision_latex_progress_draft (attachment_id)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_draft_project_status ON supervision_latex_progress_draft (project_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_draft_project_time ON supervision_latex_progress_draft (project_id, create_time)",
+]
+
+_SUPERVISION_LATEX_SNAPSHOT_TABLE = """
+CREATE TABLE IF NOT EXISTS supervision_latex_snapshot (
+    id VARCHAR(32) NOT NULL,
+    code VARCHAR(16) NOT NULL,
+    project_id VARCHAR(32) NOT NULL,
+    attachment_id VARCHAR(32) NOT NULL,
+    attachment_code VARCHAR(16) NOT NULL,
+    attachment_name VARCHAR(300) NOT NULL,
+    attachment_sha256 VARCHAR(64) NOT NULL,
+    attachment_version INTEGER NOT NULL,
+    main_file VARCHAR(500) NOT NULL,
+    main_status VARCHAR(32) NOT NULL,
+    main_path VARCHAR(500) NOT NULL,
+    main_json TEXT NOT NULL,
+    parser_version VARCHAR(32) NOT NULL,
+    checker_version VARCHAR(32) NOT NULL,
+    zip_safety_version VARCHAR(32) NOT NULL,
+    limits_json TEXT NOT NULL,
+    parse_budget_json TEXT NOT NULL,
+    document_present BOOLEAN NOT NULL,
+    document_json TEXT,
+    check_json TEXT,
+    outline TEXT NOT NULL,
+    counts TEXT NOT NULL,
+    findings TEXT NOT NULL,
+    finding_counts TEXT NOT NULL,
+    dangerous_findings TEXT NOT NULL,
+    partially_read TEXT NOT NULL,
+    not_read TEXT NOT NULL,
+    unreferenced_tex TEXT NOT NULL,
+    available_files TEXT NOT NULL,
+    extracted_files TEXT NOT NULL,
+    file_count INTEGER NOT NULL,
+    total_bytes INTEGER NOT NULL,
+    word_count INTEGER NOT NULL,
+    compiled BOOLEAN NOT NULL,
+    created_by VARCHAR(32) NOT NULL,
+    created_role VARCHAR(16) NOT NULL,
+    create_time TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_supervision_latex_snapshot_code UNIQUE (project_id, code),
+    CONSTRAINT ck_supervision_latex_snapshot_main_status CHECK (main_status IN ('resolved', 'user_specified', 'ambiguous', 'not_found', 'invalid_selection')),
+    CONSTRAINT ck_supervision_latex_snapshot_compiled CHECK (compiled = 0)
+)
+"""
+
+_SUPERVISION_LATEX_SNAPSHOT_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_snapshot_attachment ON supervision_latex_snapshot (attachment_id, create_time)",
+    "CREATE INDEX IF NOT EXISTS ix_supervision_latex_snapshot_project_time ON supervision_latex_snapshot (project_id, create_time)",
+]
+
+
+def _v22_supervision_latex(conn: Connection) -> None:
+    """v22：LaTeX 稿件的分析快照、进展草稿与草稿确认记录三张表。
+
+    同样由 ``supervision_latex_model`` 生成后归一。表上的
+    ``ck_..._compiled CHECK (compiled = 0)``、``ck_..._published CHECK
+    (published = 0)`` 与 ``ck_..._confirm CHECK
+    (requires_student_confirmation = 1)`` 是刻意的：静态解析永不编译、草稿永不
+    自动发布、必须学生本人确认，把这三条口径钉在数据库层，任何写入想绕过都会
+    直接被拒（§16.6）。全部 ``IF NOT EXISTS``，不改列不删表。
+    """
+    for ddl in (
+        _SUPERVISION_LATEX_SNAPSHOT_TABLE,
+        _SUPERVISION_LATEX_PROGRESS_DRAFT_TABLE,
+        _SUPERVISION_LATEX_DRAFT_CONFIRMATION_TABLE,
+    ):
+        conn.execute(text(ddl))
+    for stmt in (
+        *_SUPERVISION_LATEX_SNAPSHOT_INDEXES,
+        *_SUPERVISION_LATEX_PROGRESS_DRAFT_INDEXES,
+        *_SUPERVISION_LATEX_DRAFT_CONFIRMATION_INDEXES,
+    ):
+        conn.execute(text(stmt))
+
+
 _MIGRATIONS = [
     (1, "baseline", _v1_baseline),
     (2, "user_account", _v2_user_account),
@@ -1867,6 +2433,8 @@ _MIGRATIONS = [
     (18, "supervision_work_loop", _v18_supervision_work_loop),
     (19, "supervision_research_brief", _v19_supervision_research_brief),
     (20, "supervision_ai_review", _v20_supervision_ai_review),
+    (21, "supervision_literature", _v21_supervision_literature),
+    (22, "supervision_latex", _v22_supervision_latex),
 ]
 
 

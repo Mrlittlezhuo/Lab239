@@ -72,7 +72,7 @@ def temp_db(secret, tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     with engine.connect() as conn:
         apply_migrations(build_registry(), conn)
-        assert current_version(conn) == 20
+        assert current_version(conn) == 22
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     yield {"Session": Session, "engine": engine}

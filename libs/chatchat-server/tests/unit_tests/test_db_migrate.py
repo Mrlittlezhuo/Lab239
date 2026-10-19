@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from chatchat.server.db.base import Base
 from chatchat.server.db.migrate.base import (
@@ -105,7 +105,7 @@ def _failing_registry(fail_version: int) -> MigrationRegistry:
 
 def test_builtin_registry_order_and_latest():
     registry = build_registry()
-    assert [m.version for m in registry.migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    assert [m.version for m in registry.migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
     assert [m.name for m in registry.migrations] == [
         "baseline", "user_account", "conversation_owner",
         "openai_file", "legacy_conversation_owner", "user_memory",
@@ -118,8 +118,10 @@ def test_builtin_registry_order_and_latest():
         "supervision_work_loop",
         "supervision_research_brief",
         "supervision_ai_review",
+        "supervision_literature",
+        "supervision_latex",
     ]
-    assert registry.latest_version == 20
+    assert registry.latest_version == 22
 
 
 def test_registry_rejects_duplicate_version():
@@ -161,8 +163,8 @@ def test_first_upgrade_on_empty_file_db(temp_db_file):
     with engine.connect() as conn:
         assert current_version(conn) is None
         result = apply_migrations(registry, conn)
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        assert result.final_version == 20
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        assert result.final_version == 22
     with engine.connect() as conn:
         rows = conn.execute(
             text("SELECT version, name FROM schema_migrations")
@@ -175,6 +177,8 @@ def test_first_upgrade_on_empty_file_db(temp_db_file):
             (18, "supervision_work_loop"),
             (19, "supervision_research_brief"),
             (20, "supervision_ai_review"),
+            (21, "supervision_literature"),
+            (22, "supervision_latex"),
         ]
         # 空库尚无业务表 conversation，v3 跳过 ALTER（由 create_all 建带新字段表）
         assert not inspect(conn).has_table("conversation")
@@ -194,14 +198,14 @@ def test_double_upgrade_is_idempotent(temp_db_file):
     engine = _file_engine(temp_db_file)
     with engine.connect() as conn:
         first = apply_migrations(registry, conn)
-        assert [m.version for m in first.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert [m.version for m in first.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
         second = apply_migrations(registry, conn)
         assert second.applied == []
-        assert second.final_version == 20
+        assert second.final_version == 22
     with engine.connect() as conn:
         assert conn.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar() == 20
+        ).scalar() == 22
     engine.dispose()
 
 
@@ -228,8 +232,8 @@ def test_in_memory_db_upgrades_without_backup(tmp_path):
     assert sqlite_db_file(engine) is None
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
-        assert result.final_version == 20
-        assert current_version(conn) == 20
+        assert result.final_version == 22
+        assert current_version(conn) == 22
     engine.dispose()
 
 
@@ -472,7 +476,7 @@ def test_v2_creates_user_account_schema(temp_db_file):
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
         # v1→v2→v3→v4→v5；v3 在空库无 conversation 表时跳过 ALTER
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
         cols = {c["name"] for c in inspect(conn).get_columns("user_account")}
         expected = {
             "id", "username", "password_hash", "display_name",
@@ -511,12 +515,12 @@ def test_v2_only_runs_on_existing_v1_db(temp_db_file):
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
         # 已有 v1：执行 v2、v3、v4、v5（v3 无 conversation 表，跳过 ALTER）
-        assert [m.version for m in result.applied] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        assert result.final_version == 20
+        assert [m.version for m in result.applied] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        assert result.final_version == 22
         assert conn.execute(text("SELECT COUNT(*) FROM user_account")).scalar() == 0
         result2 = apply_migrations(registry, conn)
         assert result2.applied == []
-        assert result2.final_version == 20
+        assert result2.final_version == 22
     engine.dispose()
 
 
@@ -647,8 +651,8 @@ def test_v3_upgrades_existing_v2_db_and_preserves_data(tmp_path):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        assert result.final_version == 20
+        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        assert result.final_version == 22
         # v4 创建 openai_file 表
         assert inspect(conn).has_table("openai_file")
 
@@ -689,7 +693,7 @@ def test_v3_upgrades_existing_v2_db_and_preserves_data(tmp_path):
     with engine.connect() as conn:
         result2 = apply_migrations(build_registry(), conn)
         assert result2.applied == []
-        assert result2.final_version == 20
+        assert result2.final_version == 22
     engine.dispose()
 
 
@@ -726,8 +730,8 @@ def test_v3_skips_when_conversation_table_missing(temp_db_file):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        assert result.final_version == 20
+        assert [m.version for m in result.applied] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        assert result.final_version == 22
         # conversation 表未被创建（由 create_all 负责）
         assert not inspect(conn).has_table("conversation")
         # v4 创建 openai_file 表
@@ -822,7 +826,7 @@ def test_sample_data_preserved_through_real_upgrade(tmp_path):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert result.final_version == 20
+        assert result.final_version == 22
 
     with engine.connect() as conn:
         after = set(inspect(conn).get_table_names())
@@ -840,7 +844,7 @@ def test_sample_data_preserved_through_real_upgrade(tmp_path):
     # 新增 user_account，原有表全部保留；知识库表未被改动
     assert "user_account" in after
     assert before <= after
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
     assert null_owner == 0
     assert distinct_owner == 1
     assert legacy_user == 1
@@ -883,7 +887,7 @@ def test_cli_status_shows_pending_and_final(tmp_path, monkeypatch):
     runner_result, db_path = _cli(monkeypatch, tmp_path, "status")
     assert runner_result.exit_code == 0
     assert "当前数据库版本" in runner_result.output
-    assert "代码最新版本：20" in runner_result.output
+    assert "代码最新版本：22" in runner_result.output
     assert "v1" in runner_result.output
     assert "v2" in runner_result.output
     assert "v3" in runner_result.output
@@ -900,7 +904,7 @@ def test_cli_status_shows_pending_and_final(tmp_path, monkeypatch):
     upgrade_result, _ = _cli(monkeypatch, tmp_path, "upgrade")
     assert upgrade_result.exit_code == 0
     assert "已执行迁移" in upgrade_result.output
-    assert "最终版本：20" in upgrade_result.output
+    assert "最终版本：22" in upgrade_result.output
     assert "备份" in upgrade_result.output
 
     status_result, _ = _cli(monkeypatch, tmp_path, "status")
@@ -930,7 +934,7 @@ def test_cli_upgrade_is_idempotent(tmp_path, monkeypatch):
     result, _ = _cli(monkeypatch, tmp_path, "upgrade")
     assert result.exit_code == 0
     assert "无待执行迁移" in result.output
-    assert "最终版本：20" in result.output
+    assert "最终版本：22" in result.output
     assert Path(db_path).is_file()
     backups = [p for p in db_path.parent.iterdir() if ".bak-" in p.name]
     # 第二次升级无待执行迁移，不触发新的备份
@@ -1013,7 +1017,7 @@ def test_v7_creates_agent_run_schema_on_empty_db(temp_db_file):
     engine = _file_engine(temp_db_file)
     with engine.connect() as conn:
         result = apply_migrations(registry, conn)
-        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        assert [m.version for m in result.applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
         run_cols = {c["name"] for c in inspect(conn).get_columns("agent_run")}
         assert {
             "id", "owner_id", "conversation_id", "source_message_id",
@@ -1040,7 +1044,7 @@ def test_v7_creates_agent_run_schema_on_empty_db(temp_db_file):
     with engine.connect() as conn:
         result2 = apply_migrations(registry, conn)
         assert result2.applied == []
-        assert result2.final_version == 20
+        assert result2.final_version == 22
         assert conn.execute(text("SELECT COUNT(*) FROM agent_run")).scalar() == 0
     engine.dispose()
 
@@ -1087,8 +1091,8 @@ def test_v7_upgrades_existing_v6_db_preserving_data(temp_db_file):
 
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert [m.version for m in result.applied] == [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        assert result.final_version == 20
+        assert [m.version for m in result.applied] == [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        assert result.final_version == 22
         # 新表已创建
         assert inspect(conn).has_table("agent_run")
         assert inspect(conn).has_table("agent_step")
@@ -1122,7 +1126,7 @@ def test_v20_ai_review_schema_matches_the_orm(temp_db_file):
     engine = _file_engine(temp_db_file)
     with engine.connect() as conn:
         result = apply_migrations(build_registry(), conn)
-        assert result.final_version == 20
+        assert result.final_version == 22
         insp = inspect(conn)
         for model in (
             SupervisionAIReviewRunModel,
@@ -1139,7 +1143,7 @@ def test_v20_ai_review_schema_matches_the_orm(temp_db_file):
         # 幂等：再跑一次不报错、不重复建表
         second = apply_migrations(build_registry(), conn)
         assert second.applied == []
-        assert second.final_version == 20
+        assert second.final_version == 22
     engine.dispose()
 
 
@@ -1169,7 +1173,7 @@ def test_v20_upgrade_keeps_existing_submission_and_review_rows(temp_db_file):
         )
         conn.commit()
         apply_migrations(registry, conn)
-        assert current_version(conn) == 20
+        assert current_version(conn) == 22
         row = conn.execute(
             text(
                 "SELECT summary, ac_snapshot, status FROM supervision_submission"
@@ -1179,6 +1183,495 @@ def test_v20_upgrade_keeps_existing_submission_and_review_rows(temp_db_file):
         assert row[0] == "摘要"
         assert "AC-1" in row[1]  # 提交里的验收标准快照原样保留
         assert row[2] == "submitted"
+    engine.dispose()
+
+
+def _assert_matches_orm(conn, models) -> None:
+    """逐表比对迁移结果与 ORM 定义（列名、索引名、CHECK 约束名）。
+
+    论文检索与 LaTeX 解析的测试都用 ``Base.metadata.create_all`` 建表，迁移
+    路径本身不会被它们覆盖；这里钉住"手写 DDL 与模型不漂移"（AGENTS.md：
+    迁移必须幂等、可验证）。索引名也比对，否则列表查询会在真实库里静默退化成
+    全表扫描；CHECK 名比对是因为那几条口径（永不编译、草稿永不自动发布）是
+    刻意放在数据库层的。
+    """
+    insp = inspect(conn)
+    for model in models:
+        table = model.__table__
+        assert insp.has_table(table.name), table.name
+        migrated = {column["name"] for column in insp.get_columns(table.name)}
+        expected = {column.name for column in table.columns}
+        assert migrated == expected, (table.name, expected - migrated, migrated - expected)
+        indexed = {item["name"] for item in insp.get_indexes(table.name)}
+        assert {ix.name for ix in table.indexes} <= indexed, (table.name, {ix.name for ix in table.indexes} - indexed)
+        checks = {item["name"] for item in insp.get_check_constraints(table.name) if item.get("name")}
+        declared = {
+            constraint.name
+            for constraint in table.constraints
+            if getattr(constraint, "name", None) and type(constraint).__name__ == "CheckConstraint"
+        }
+        assert declared <= checks, (table.name, declared - checks)
+
+
+def test_v21_literature_schema_matches_the_orm(temp_db_file):
+    """v21 建出的七张论文检索表必须与 ORM 定义一致，且重复升级幂等。"""
+    from chatchat.server.db.models.supervision_literature_model import (
+        SupervisionLiteratureCitationModel,
+        SupervisionLiteratureConclusionModel,
+        SupervisionLiteratureEvidenceCardModel,
+        SupervisionLiteratureExtractionModel,
+        SupervisionLiteratureResultModel,
+        SupervisionLiteratureSearchTaskModel,
+        SupervisionLiteratureSubtaskModel,
+    )
+
+    engine = _file_engine(temp_db_file)
+    with engine.connect() as conn:
+        result = apply_migrations(build_registry(), conn)
+        assert result.final_version == 22
+        _assert_matches_orm(
+            conn,
+            (
+                SupervisionLiteratureSearchTaskModel,
+                SupervisionLiteratureSubtaskModel,
+                SupervisionLiteratureResultModel,
+                SupervisionLiteratureExtractionModel,
+                SupervisionLiteratureEvidenceCardModel,
+                SupervisionLiteratureConclusionModel,
+                SupervisionLiteratureCitationModel,
+            ),
+        )
+        second = apply_migrations(build_registry(), conn)
+        assert second.applied == []
+        assert second.final_version == 22
+    engine.dispose()
+
+
+def test_v21_partial_unique_indexes_are_enforced(temp_db_file):
+    """候选论文的 doi/arxiv/标题去重是部分唯一索引：迁移后必须真的生效。
+
+    仓储层靠这三个索引做项目内去重（P3-11 断言第二个检索任务不会重复入库），
+    如果迁移漏掉 ``WHERE`` 条件，去重会在生产库里静默失效。
+    """
+    insert = (
+        "INSERT INTO supervision_literature_result (id, code, project_id, search_task_id,"
+        " subtask_id, dedup_key, doi, title, authors, abstract, source, sources,"
+        " fulltext_status, relevance_level, relevance_reason, relevance_matched,"
+        " relevance_missing, relevance_score_source, relevance_rules_version,"
+        " recommended_action, semantic_analysis, decision, decision_reason, decided_by,"
+        " decided_role, decision_history, extract_state, create_time)"
+        " VALUES (:id, :code, 'p1', 't1', 's1', :dedup, :doi, :title, 'A', 'ab', 's',"
+        " '[]', 'abstract', 'high', '', '[]', '[]', 'rule_keyword', 'lit-rank-v1',"
+        " 'reference', '{}', 'pending', '', 'u1', 'student', '[]', 'none',"
+        " '2026-01-01 00:00:00')"
+    )
+    engine = _file_engine(temp_db_file)
+    with engine.connect() as conn:
+        apply_migrations(build_registry(), conn)
+        conn.execute(
+            text(insert),
+            {"id": "r1", "code": "P-001", "dedup": "k1", "doi": "10.1/a", "title": "同一篇"},
+        )
+        conn.commit()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(insert),
+                {"id": "r2", "code": "P-002", "dedup": "k2", "doi": "10.1/a", "title": "标题不同"},
+            )
+        conn.rollback()
+        # 没有 doi 的行不受该索引约束（部分唯一），仍应能入库
+        conn.execute(
+            text(insert),
+            {"id": "r3", "code": "P-003", "dedup": "k3", "doi": "", "title": "无 doi 的论文"},
+        )
+        conn.commit()
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM supervision_literature_result WHERE project_id = 'p1'")
+        ).scalar() == 2
+    engine.dispose()
+
+
+def test_v21_upgrade_keeps_existing_ai_review_rows(temp_db_file):
+    """升级到 v21 前已存在的预审运行与逐条结论必须原样保留（不重建、不清空）。"""
+    from sqlalchemy import insert
+
+    from chatchat.server.db.migrate.migrations import _MIGRATIONS
+    from chatchat.server.db.models.supervision_ai_review_model import (
+        SupervisionAIReviewFindingModel,
+        SupervisionAIReviewRunModel,
+    )
+
+    engine = _file_engine(temp_db_file)
+    upto_v20 = MigrationRegistry()
+    for version, name, upgrade in _MIGRATIONS:
+        if version > 20:
+            break
+        upto_v20.register(version, name, upgrade)
+    with engine.connect() as conn:
+        apply_migrations(upto_v20, conn)
+        assert current_version(conn) == 20
+        # 用 ORM 的表描述写行（DDL 仍来自迁移），这样列名不会与模型漂移
+        conn.execute(
+            insert(SupervisionAIReviewRunModel.__table__).values(
+                id="run1",
+                code="AR-r1",
+                revision=1,
+                project_id="p1",
+                task_id="t1",
+                task_code="T-001",
+                submission_id="s1",
+                submission_code="S-001",
+                submission_version=1,
+                trigger_source="mentor_manual",
+                triggered_by="u1",
+                triggered_role="mentor",
+                status="completed",
+                check_snapshot={},
+                draft_fingerprint="fp",
+                ac_version=1,
+                input_budget={},
+                material_manifest=[],
+                unread_materials=[],
+                partially_read_materials=[],
+                call_plan=[],
+                total_batches=1,
+                completed_batches=1,
+                unchecked_acs=[],
+                partial_results=False,
+                model_calls=[],
+                summary_state="存在缺失项",
+                summary_note="说明",
+                finding_counts={"partial": 1},
+                model_name="m",
+                rules_version="rules-1",
+                parser_version="parser-1",
+                whitelist_version="wl-1",
+                budget_config_version="budget-1",
+                security_flags=[],
+                create_time=datetime.datetime(2026, 1, 1),
+            )
+        )
+        conn.execute(
+            insert(SupervisionAIReviewFindingModel.__table__).values(
+                id="f1",
+                run_id="run1",
+                project_id="p1",
+                ac_code="AC-1",
+                ac_statement="跑通基线",
+                ac_version=1,
+                required=True,
+                check_type="code",
+                verdict="partial",
+                evidence_depth="E2",
+                support_relation="partially_supports",
+                reason="缺结果文件",
+                satisfied_parts="已有脚本",
+                missing_parts="",
+                evidence_refs=[],
+                missing_materials=[],
+                risks=[],
+                mentor_focus="",
+                injection_suspected=False,
+                injection_note="",
+                runtime_claim_flag=False,
+                downgrade_reason="",
+                validated=False,
+                batch_index=0,
+                create_time=datetime.datetime(2026, 1, 1),
+            )
+        )
+        conn.commit()
+        apply_migrations(build_registry(), conn)
+        assert current_version(conn) == 22
+        row = conn.execute(
+            text(
+                "SELECT summary_state, status FROM supervision_ai_review_run WHERE id = 'run1'"
+            )
+        ).one()
+        assert row == ("存在缺失项", "completed")
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM supervision_ai_review_finding WHERE run_id = 'run1'")
+        ).scalar() == 1
+    engine.dispose()
+
+
+def test_v22_latex_schema_matches_the_orm(temp_db_file):
+    """v22 建出的三张 LaTeX 表必须与 ORM 定义一致，且重复升级幂等。"""
+    from chatchat.server.db.models.supervision_latex_model import (
+        SupervisionLatexDraftConfirmationModel,
+        SupervisionLatexProgressDraftModel,
+        SupervisionLatexSnapshotModel,
+    )
+
+    engine = _file_engine(temp_db_file)
+    with engine.connect() as conn:
+        result = apply_migrations(build_registry(), conn)
+        assert result.final_version == 22
+        _assert_matches_orm(
+            conn,
+            (
+                SupervisionLatexSnapshotModel,
+                SupervisionLatexProgressDraftModel,
+                SupervisionLatexDraftConfirmationModel,
+            ),
+        )
+        second = apply_migrations(build_registry(), conn)
+        assert second.applied == []
+        assert second.final_version == 22
+    engine.dispose()
+
+
+def test_v22_latex_guards_are_pinned_in_the_database(temp_db_file):
+    """「永不编译」「草稿永不自动发布」「必须学生确认」三条口径钉在 CHECK 上。
+
+    这三条是产品口径而不是实现细节（§16.6）：任何写入想绕过仓储层，数据库
+    必须直接拒绝；否则界面上那句"系统不会编译你的稿件"就成了空话。
+    """
+    from sqlalchemy import insert
+
+    from chatchat.server.db.models.supervision_latex_model import (
+        SupervisionLatexProgressDraftModel,
+        SupervisionLatexSnapshotModel,
+    )
+
+    def snapshot_values(**overrides):
+        values = {
+            "id": "s1",
+            "code": "LX-001",
+            "project_id": "p1",
+            "attachment_id": "a1",
+            "attachment_code": "A-001",
+            "attachment_name": "paper.zip",
+            "attachment_sha256": "sha",
+            "attachment_version": 1,
+            "main_file": "main.tex",
+            "main_status": "resolved",
+            "main_path": "main.tex",
+            "main_json": {},
+            "parser_version": "p",
+            "checker_version": "c",
+            "zip_safety_version": "z",
+            "limits_json": {},
+            "parse_budget_json": {},
+            "document_present": True,
+            "outline": [],
+            "counts": {},
+            "findings": [],
+            "finding_counts": {},
+            "dangerous_findings": [],
+            "partially_read": [],
+            "not_read": [],
+            "unreferenced_tex": [],
+            "available_files": [],
+            "extracted_files": [],
+            "file_count": 1,
+            "total_bytes": 10,
+            "word_count": 10,
+            "compiled": False,
+            "created_by": "u1",
+            "created_role": "student",
+            "create_time": datetime.datetime(2026, 1, 1),
+        }
+        values.update(overrides)
+        return values
+
+    def draft_values(**overrides):
+        values = {
+            "id": "d1",
+            "code": "PD-001",
+            "project_id": "p1",
+            "library_draft_id": "lib1",
+            "draft_version": "v1",
+            "parser_version": "p",
+            "checker_version": "c",
+            "zip_safety_version": "z",
+            "status": "draft",
+            "published": False,
+            "requires_student_confirmation": True,
+            "baseline_only": False,
+            "snapshot_id": "s1",
+            "snapshot_code": "LX-001",
+            "attachment_id": "a1",
+            "attachment_code": "A-001",
+            "attachment_sha256": "sha",
+            "attachment_version": 1,
+            "main_file": "main.tex",
+            "base_attachment_id": "a0",
+            "base_attachment_code": "A-000",
+            "base_attachment_sha256": "sha0",
+            "base_attachment_version": 1,
+            "base_main_file": "main.tex",
+            "summary": "摘要",
+            "caveat": "静态差异不能证明实验已执行",
+            "items": [],
+            "item_count": 0,
+            "truncated": False,
+            "dropped_items": 0,
+            "draft_json": {},
+            "diff_counts": {},
+            "word_count_old": 10,
+            "word_count_new": 20,
+            "word_count_delta": 10,
+            "model_summary": "",
+            "model_summary_status": "",
+            "model_summary_note": "",
+            "model_name": "",
+            "confirmed_progress_code": "",
+            "confirmed_by": "",
+            "confirmed_role": "",
+            "discarded_by": "",
+            "discarded_role": "",
+            "discard_reason": "",
+            "created_by": "u1",
+            "created_role": "student",
+            "create_time": datetime.datetime(2026, 1, 1),
+        }
+        values.update(overrides)
+        return values
+
+    engine = _file_engine(temp_db_file)
+    with engine.connect() as conn:
+        apply_migrations(build_registry(), conn)
+        conn.execute(insert(SupervisionLatexSnapshotModel.__table__).values(snapshot_values()))
+        conn.commit()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                insert(SupervisionLatexSnapshotModel.__table__).values(
+                    snapshot_values(id="s2", code="LX-002", compiled=True)
+                )
+            )
+        conn.rollback()
+
+        conn.execute(insert(SupervisionLatexProgressDraftModel.__table__).values(draft_values()))
+        conn.commit()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                insert(SupervisionLatexProgressDraftModel.__table__).values(
+                    draft_values(id="d2", code="PD-002", published=True)
+                )
+            )
+        conn.rollback()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                insert(SupervisionLatexProgressDraftModel.__table__).values(
+                    draft_values(id="d3", code="PD-003", requires_student_confirmation=False)
+                )
+            )
+        conn.rollback()
+        # 状态枚举同样钉在库上：草稿不能直接写成别的状态
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                insert(SupervisionLatexProgressDraftModel.__table__).values(
+                    draft_values(id="d4", code="PD-004", status="published")
+                )
+            )
+        conn.rollback()
+    engine.dispose()
+
+
+def test_v22_upgrade_keeps_existing_literature_rows(temp_db_file):
+    """升级到 v22 前已存在的检索任务与候选论文必须原样保留（不重建、不清空）。"""
+    from sqlalchemy import insert
+
+    from chatchat.server.db.migrate.migrations import _MIGRATIONS
+    from chatchat.server.db.models.supervision_literature_model import (
+        SupervisionLiteratureResultModel,
+        SupervisionLiteratureSearchTaskModel,
+    )
+
+    engine = _file_engine(temp_db_file)
+    upto_v21 = MigrationRegistry()
+    for version, name, upgrade in _MIGRATIONS:
+        if version > 21:
+            break
+        upto_v21.register(version, name, upgrade)
+    with engine.connect() as conn:
+        apply_migrations(upto_v21, conn)
+        assert current_version(conn) == 21
+        conn.execute(
+            insert(SupervisionLiteratureSearchTaskModel.__table__).values(
+                id="t1",
+                code="LT-001",
+                project_id="p1",
+                brief_id="b1",
+                brief_code="RB-001",
+                brief_version=1,
+                brief_kind="shared",
+                brief_confirmed_by="u1",
+                brief_snapshot={},
+                purpose="verify",
+                goal="验证基线",
+                keywords=["baseline"],
+                synonyms=[],
+                exclude_terms=[],
+                sources=[],
+                require_fulltext=False,
+                result_limit=30,
+                deep_extract_limit=3,
+                search_plan={},
+                search_plan_note="",
+                search_plan_model="",
+                search_plan_prompt_version="lit-prompt-v1",
+                search_plan_confirmed_by="",
+                status="pending",
+                hits_total=0,
+                deduped_total=0,
+                stored_total=0,
+                source_failures=[],
+                close_reason="",
+                created_by="u1",
+                created_role="student",
+                create_time=datetime.datetime(2026, 1, 1),
+            )
+        )
+        conn.execute(
+            insert(SupervisionLiteratureResultModel.__table__).values(
+                id="r1",
+                code="P-001",
+                project_id="p1",
+                search_task_id="t1",
+                subtask_id="s1",
+                dedup_key="k1",
+                doi="10.1/a",
+                title="论文",
+                authors="作者",
+                abstract="摘要",
+                source="arxiv",
+                sources=["arxiv"],
+                fulltext_status="abstract",
+                relevance_level="high",
+                relevance_reason="命中关键词",
+                relevance_matched=["baseline"],
+                relevance_missing=[],
+                relevance_score_source="rule_keyword",
+                relevance_rules_version="lit-rank-v1",
+                recommended_action="priority_read",
+                semantic_analysis={},
+                decision="included",
+                decision_reason="纳入",
+                decided_by="u1",
+                decided_role="student",
+                decision_history=[],
+                extract_state="none",
+                create_time=datetime.datetime(2026, 1, 1),
+            )
+        )
+        conn.commit()
+        apply_migrations(build_registry(), conn)
+        assert current_version(conn) == 22
+        task = conn.execute(
+            text(
+                "SELECT goal, status FROM supervision_literature_search_task WHERE id = 't1'"
+            )
+        ).one()
+        assert task == ("验证基线", "pending")
+        paper = conn.execute(
+            text(
+                "SELECT title, decision, decision_reason FROM supervision_literature_result"
+                " WHERE id = 'r1'"
+            )
+        ).one()
+        assert paper == ("论文", "included", "纳入")
     engine.dispose()
 
 
