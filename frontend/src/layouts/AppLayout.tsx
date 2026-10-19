@@ -3,6 +3,7 @@ import {
   BookOpen,
   Brain,
   FileSearch,
+  GraduationCap,
   LogOut,
   MessagesSquare,
   Monitor,
@@ -17,6 +18,7 @@ import { toast } from "sonner";
 
 import { logoutServer } from "@/api/auth";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import { NotificationsBell } from "@/components/supervision/NotificationsBell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { clearAuth, useAuth } from "@/stores/auth";
@@ -30,6 +32,7 @@ const NAV_ITEMS = [
   { to: "/memory", label: "我的记忆", icon: Brain },
   { to: "/agent-runs", label: "Agent 运行", icon: Bot },
   { to: "/research", label: "论文研究", icon: Search },
+  { to: "/supervision", label: "科研协作", icon: GraduationCap },
   { to: "/admin/users", label: "用户管理", icon: UserCog, adminOnly: true },
 ];
 
@@ -79,6 +82,9 @@ export function AppLayout() {
           )}
         </nav>
         <div className="border-t p-3">
+          <div className="mb-2">
+            <NotificationsBell />
+          </div>
           <div className="mb-2 truncate text-sm">
             {user?.display_name || user?.username}
             {user?.role === "admin" && (

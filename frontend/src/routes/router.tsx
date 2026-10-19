@@ -19,6 +19,8 @@ import { RagPage } from "@/pages/RagPage";
 import { ResearchPage } from "@/pages/ResearchPage";
 import { ResearchRunPage } from "@/pages/ResearchRunPage";
 import { LoginPage } from "@/pages/Login";
+import { SupervisionProjectPage } from "@/pages/supervision/SupervisionProjectPage";
+import { SupervisionProjectsPage } from "@/pages/supervision/SupervisionProjectsPage";
 import {
   AUTH_EVENT_EXPIRED,
   AUTH_EVENT_PASSWORD_REQUIRED,
@@ -79,6 +81,14 @@ export const router = createBrowserRouter([
       {
         path: "/research/:projectId/runs/:runId",
         element: <RequireAuth><ResearchRunPage /></RequireAuth>,
+      },
+      {
+        path: "/supervision",
+        element: <RequireAuth><SupervisionProjectsPage /></RequireAuth>,
+      },
+      {
+        path: "/supervision/:projectRef",
+        element: <RequireAuth><SupervisionProjectPage /></RequireAuth>,
       },
       {
         path: "/admin/users",
