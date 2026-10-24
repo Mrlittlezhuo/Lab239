@@ -3,6 +3,7 @@
 *.log
 *.log.*
 *.bak
+/home/lab239/chenzhuo/Langchain-Chatchat/chatchat-study-data/data
 /libs/chatchat-server/chatchat/data/*
 !/libs/chatchat-server/chatchat/data/knowledge_base/samples
 /libs/chatchat-server/chatchat/data/knowledge_base/samples/vector_store
@@ -190,3 +191,4 @@ test.py
 /knowledge_base/samples/content/202311-D平台项目工作大纲参数，人员中间库表结构说明V1.1(1).docx
 /knowledge_base/samples/content/imi_temeplate.txt
 chatchat/data
+chatchat-study-data/data
