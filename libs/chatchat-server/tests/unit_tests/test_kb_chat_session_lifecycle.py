@@ -806,5 +806,31 @@ def test_sse_frame_vocabulary_matches_contract(
         )
 
 
+def test_sse_contract_enums_match_backend_constants():
+    """契约里声明的枚举取值必须等于后端自己的常量，否则契约就是编的。
+
+    `generation_status` 的权威来源是 memory.usage_manifest.GENERATION_STATUSES
+    （写入前会用它过滤，见 usage_manifest.py:149/351）。前端 types.ts 里那份
+    `GenerationStatus` 是第三份手写副本。这里把契约与后端常量对齐，前端再接契约
+    之后就只剩一份来源。
+    """
+    from chatchat.server.memory import usage_manifest
+
+    contract_path = (
+        pathlib.Path(__file__).resolve().parents[4] / "contracts" / "sse-frames.json"
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    frames = {f["name"]: f for f in contract["frames"]}
+
+    assert list(frames["memory_usage"]["semantics"]["generation_status"]) == list(
+        usage_manifest.GENERATION_STATUSES
+    ), "contracts/sse-frames.json 的 generation_status 与后端常量脱节"
+
+    # 不完整状态必须是 generation_status 的子集，且契约要能表达它
+    assert set(usage_manifest.INCOMPLETE_STATUSES) <= set(
+        usage_manifest.GENERATION_STATUSES
+    )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
