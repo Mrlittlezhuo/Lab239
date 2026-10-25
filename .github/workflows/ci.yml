@@ -1,0 +1,127 @@
+name: CI
+
+# 2026-10-25 新增。此前仓库里没有任何会在 push/PR 上跑测试的 workflow：
+#   _test.yml         只有 on: workflow_dispatch（手动，且要求填 working-directory input）
+#   _release.yml / _test_release.yml   on: workflow_call，但仓库内没有任何文件 uses: 它们
+#   close-issue / docker-build / label_ad_issue   与测试无关
+# 也就是说 1400+ 后端用例和 370 个前端用例从来没有门禁。
+#
+# 下划线那几个文件保持原样（上游 LangChain 布局的遗留，删了可能影响将来的发布流程），
+# 本文件是独立新增的门禁。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上的新提交取消尚未跑完的旧 run，省 runner 时间。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # 前端：类型 + 单测 + 构建。三条命令都在本机实测通过
+  # （typecheck exit 0；vitest 42 files / 370 tests；build ✓ 2103 modules）。
+  # ------------------------------------------------------------------
+  frontend:
+    name: 前端 typecheck / 单测 / 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # node 版本对齐开发机（本机 v24.16.0），避免「CI 绿、本机红」的版本漂移。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npx vitest run --reporter=basic
+
+      - name: 生产构建
+        run: npm run build
+
+  # ------------------------------------------------------------------
+  # 契约漂移：已提交的 contracts/openapi.json 与 frontend/src/api/schema.d.ts
+  # 必须一致。这个 job 只用标准库（tools/gen_api_types.py 零依赖），
+  # 不需要装后端，所以很快，也是三层门禁里最稳的一层。
+  # ------------------------------------------------------------------
+  api-contract:
+    name: API 契约 → 前端类型 不得漂移
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 生成的 TS 类型必须与已提交契约一致
+        run: python tools/gen_api_types.py --check
+
+  # ------------------------------------------------------------------
+  # 后端：安装 + 契约导出一致性 + 全量 unit_tests。
+  # Python 版本按 libs/chatchat-server/pyproject.toml 的
+  # `python = ">=3.10,<3.12,!=3.9.7"`；旧 _test.yml 的 3.8/3.9 矩阵装不上，已弃用。
+  # ------------------------------------------------------------------
+  backend:
+    name: 后端单测 + 契约导出一致性
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # 放在 workspace 之外，避免测试写出的数据目录污染仓库工作树。
+      CHATCHAT_ROOT: ${{ runner.temp }}/chatchat-root
+      CHATCHAT_OPENAPI_ROOT: ${{ runner.temp }}/chatchat-openapi-root
+    defaults:
+      run:
+        working-directory: libs/chatchat-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: libs/chatchat-server/pyproject.toml
+
+      # 仓库里没有 poetry.lock，也没有 requirements.txt：按 pyproject 直接解析。
+      # 用 pip 而不是 poetry，与开发机实际的环境搭建方式一致
+      # （poetry 1.7.1 + .github/actions/poetry_setup 是上游遗留）。
+      - name: 安装后端与其测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install \
+            "pytest>=7.3" pytest-cov pytest-dotenv pytest-asyncio pytest-mock \
+            pytest-socket syrupy freezegun responses requests-mock duckdb-engine lark
+
+      # 跑 pytest 之前必须先建好 CHATCHAT_ROOT 的数据目录，否则
+      # test_supervision_project.py::test_router_is_mounted_on_the_real_server_app
+      # 会因 data/media 不存在而假失败（AGENTS.md 里记着这条陷阱）。
+      - name: 准备 CHATCHAT_ROOT 数据目录
+        run: python -c "from chatchat.settings import Settings; Settings.basic_settings.make_dirs()"
+
+      - name: 契约必须与应用真实导出一致
+        working-directory: ${{ github.workspace }}
+        run: python tools/export_openapi.py --check
+
+      # 注意：这里**不用** `make test`。Makefile 的
+      # `pytest --disable-socket --allow-unix-socket` 与 starlette TestClient 冲突
+      # （anyio 建事件循环时要创建 socket → SocketBlockedError），
+      # 本机实测 test_spa_static.py 整批红。修 Makefile 是另一件事，先不混进来。
+      - name: 单元测试
+        run: python -m pytest tests/unit_tests -q
