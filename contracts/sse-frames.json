@@ -1,0 +1,61 @@
+{
+  "kind": "sse-frame-contract",
+  "version": 1,
+  "generated_from": "tests/unit_tests/test_kb_chat_session_lifecycle.py::test_sse_frame_vocabulary_matches_contract",
+  "how_it_was_derived": "契约里的键集不是读代码猜的：由该测试用离线打桩（假 LLM、假检索）真实驱动 POST /kb_chat 的 EventSourceResponse，逐帧解析 data: 负载后取键集合作为基线。",
+  "scope_note": "本文件只覆盖 /chat/kb_chat 与 /chat/file_chat 的帧。route_result / execution_mode / agent_event / agent_steps 属于 smart_conversation 与 agent_run 链路，尚未纳入，见 open_gaps。",
+  "transport": {
+    "media_type": "text/event-stream",
+    "implementation": "sse_starlette.EventSourceResponse",
+    "frame_payload": "每帧 data: 的负载是一个 JSON 对象，由 OpenAIChatOutput.model_dump_json() 产生（OpenAIBaseOutput 配 extra=allow，未声明字段通过 model_extra 摊平进负载）",
+    "event_field_used": false,
+    "discriminator": "class_name"
+  },
+  "common_keys": [
+    "choices",
+    "created",
+    "id",
+    "is_ref",
+    "message_id",
+    "message_type",
+    "model",
+    "object",
+    "status"
+  ],
+  "frames": [
+    {
+      "name": "rag_content",
+      "match": { "class_name_absent": true },
+      "object_values": ["chat.completion.chunk", "chat.completion"],
+      "additional_keys": [
+        "conversation_id",
+        "docs",
+        "references",
+        "retrieval_status"
+      ],
+      "semantics": {
+        "retrieval_status": ["pending", "matched", "empty", "error"],
+        "note": "首包是检索结果包（retrieval_status=pending，references 为空数组）；检索完成后一帧带最终 references。docs 是文件名列表，references 是结构化引用。"
+      }
+    },
+    {
+      "name": "memory_usage",
+      "match": { "class_name": "MemoryUsageEvent" },
+      "additional_keys": [
+        "class_name",
+        "generation_status",
+        "memory_usage_manifest"
+      ],
+      "semantics": {
+        "generation_status": ["prepared", "queued", "started", "partial", "cancelled", "failed", "completed"],
+        "note": "本轮实际使用的上下文快照（第四期 §11.1）。content 恒为空串，旧客户端不会把它拼进回答。"
+      }
+    }
+  ],
+  "known_endpoints": ["/chat/kb_chat", "/chat/file_chat", "/knowledge_base/{mode}/{param}/chat/completions"],
+  "open_gaps": [
+    "帧负载的字段值类型仍未在后端声明：OpenAIBaseOutput 是 ConfigDict(extra=\"allow\")，model_dump 把 model_extra 摊平进去，所以 references / memory_usage_manifest 等真实字段的形状没有任何 schema。本契约目前钉的是键集（新增/改名/删除键会被测试抓到），值类型要等后端把这些 extra 变成声明式模型才能进契约。",
+    "smart_conversation / agent_run 链路的帧（route_result、execution_mode、agent_event、agent_steps、plan/step 事件）未纳入。",
+    "前端 frontend/src/lib/sse/types.ts 的 9 个 kind 是跨两条链路的分类视图，不是线格式本身；接线时应让线格式类型来自本契约，SseEvent 保留为前端视图模型。"
+  ]
+}
