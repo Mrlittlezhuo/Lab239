@@ -39,7 +39,11 @@ import type { components } from "@/api/schema";
 export type Conversation = components["schemas"]["ConversationOut"];
 ```
 
-已接线的示范：`frontend/src/api/conversations.ts` 的 `Conversation`。
+已接线的示范：
+
+- `frontend/src/api/conversations.ts` 的 `Conversation` ← `ConversationOut`
+- `frontend/src/api/server.ts` 的 `ServerModels` / `PlatformModels` / `KbDefaults`
+  ← `ServerModelsOut` / `PlatformModelsOut` / `KBDefaultsOut`
 
 **实测有效性**：把契约里 `ConversationOut.temporary` 改名成 `is_temporary` 后，
 `npm run typecheck` 立刻在 `src/components/chat/ConversationSidebar.tsx:126` 报
@@ -61,7 +65,7 @@ FastAPI 对 `StreamingResponse` 只能给出空响应模式。`POST /chat/kb_cha
 手写在 `frontend/src/lib/sse/types.ts` + `frame-parser.ts`，不受本契约保护。
 要覆盖它需要单独定义帧 schema（建议 `contracts/sse-frames.schema.json`）。
 
-### 2. 98 个接口没有可引用的响应模型
+### 2. 97 个接口没有可引用的响应模型
 
 这些接口返回的是无类型 `object`，**契约保护不到**。补齐办法是在路由上声明
 `response_model=`。按模块分布：
@@ -73,7 +77,7 @@ FastAPI 对 `StreamingResponse` 只能给出空响应模式。`POST /chat/kb_cha
 | `memories` | 10 |
 | `conversations` | 7 |
 | `supervision` | 6 |
-| `server` | 5 |
+| `server` | 4 |
 | `knowledge_base` | 5 |
 | `agent-runs` | 4 |
 | `chat` | 4 |
@@ -81,9 +85,13 @@ FastAPI 对 `StreamingResponse` 只能给出空响应模式。`POST /chat/kb_cha
 
 完整清单：`python tools/gen_api_types.py --report-gaps`。
 
-对比：258 个 operation 里 257 个有 200 响应声明，但其中 98 个的声明是空
+对比：258 个 operation 里 257 个有 200 响应声明，但其中 97 个的声明是空
 `object`。优先补前端正在调用的那批（`GET /conversations/{id}/messages`、
-`GET /server/models`、`GET /memories/*`）。
+`GET /memories/*`、`GET /server/model_capacity*`）。
+
+已补：`GET /server/models` → `ServerModelsOut` / `PlatformModelsOut` / `KBDefaultsOut`。
+补这类模型时的安全前提：`response_model` 会**过滤**输出，必须先证明新模型的键集
+与原返回完全一致，否则会静默删字段。
 
 ### 3. `.gitignore` 里有全局 `*.json`
 

@@ -1,8 +1,9 @@
-from typing import Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends
 
 from chatchat.server.auth.deps import require_password_changed
+from chatchat.server.pydantic_v2 import BaseModel, Field
 from chatchat.server.types.server.response.base import BaseResponse
 from chatchat.settings import Settings
 from chatchat.server.utils import get_prompt_template, get_server_configs
@@ -32,9 +33,57 @@ def _collect_models(field: str) -> list:
     return collected
 
 
+class PlatformModelsOut(BaseModel):
+    """单个模型平台的模型清单（不含任何连接凭据）。"""
+
+    name: str
+    llm_models: List[str] = Field(default_factory=list)
+    embed_models: List[str] = Field(default_factory=list)
+    image2text_models: List[str] = Field(default_factory=list)
+
+
+class KBDefaultsOut(BaseModel):
+    """知识库默认参数。类型用宽口径：这些值由用户 yaml 配置，可被改成任意名称/取值。"""
+
+    chunk_size: int
+    chunk_overlap: int
+    vector_search_top_k: int
+    score_threshold: float
+    default_knowledge_base: str
+    default_vs_type: str
+    default_search_engine: Optional[str] = None
+
+
+class ServerModelsOut(BaseModel):
+    """`GET /server/models` 的响应契约。
+
+    字段必须与 `get_server_models()` 的返回一一对应：FastAPI 的 `response_model`
+    会按本模型**过滤**输出，漏声明字段等于直接从响应里删掉它。改这个模型时，
+    前端 `src/api/server.ts` 会经 `schema.d.ts` 在编译期同步，不需要手抄。
+    """
+
+    platforms: List[PlatformModelsOut] = Field(default_factory=list)
+    llm_models: List[str] = Field(default_factory=list)
+    embedding_models: List[str] = Field(default_factory=list)
+    image2text_models: List[str] = Field(default_factory=list)
+    default_llm: str
+    default_embedding: str
+    history_len: int
+    temperature: float
+    max_tokens: Optional[int] = None
+    support_agent_models: List[str] = Field(default_factory=list)
+    # LLM_MODEL_CONFIG 是 Dict[str, Dict]：键固定为四个阶段，内层取值自由，
+    # 这里刻意不收紧，避免把用户配置里的字段过滤掉。
+    llm_model_config: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    search_engines: List[str] = Field(default_factory=list)
+    vs_types: List[str] = Field(default_factory=list)
+    kb_defaults: KBDefaultsOut
+
+
 @server_router.get(
     "/models",
     summary="获取模型清单与默认参数（需登录，不含任何密钥）",
+    response_model=ServerModelsOut,
     dependencies=[Depends(require_password_changed)],
 )
 def get_server_models() -> dict:

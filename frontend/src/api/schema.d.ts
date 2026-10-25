@@ -857,6 +857,15 @@ export interface components {
       };
       strict?: boolean | null;
     };
+    KBDefaultsOut: {
+      chunk_overlap: number;
+      chunk_size: number;
+      default_knowledge_base: string;
+      default_search_engine?: string | null;
+      default_vs_type: string;
+      score_threshold: number;
+      vector_search_top_k: number;
+    };
     ListResponse: {
       code?: number;
       data: unknown[];
@@ -1253,6 +1262,12 @@ export interface components {
         [key: string]: unknown;
       };
     };
+    PlatformModelsOut: {
+      embed_models?: string[];
+      image2text_models?: string[];
+      llm_models?: string[];
+      name: string;
+    };
     PreferencesOut: {
       enabled: boolean;
       max_count: number;
@@ -1567,6 +1582,26 @@ export interface components {
       evidence?: string;
       note?: string;
       self_assessment: string;
+    };
+    ServerModelsOut: {
+      default_embedding: string;
+      default_llm: string;
+      embedding_models?: string[];
+      history_len: number;
+      image2text_models?: string[];
+      kb_defaults: components["schemas"]["KBDefaultsOut"];
+      llm_model_config?: {
+        [key: string]: {
+          [key: string]: unknown;
+        };
+      };
+      llm_models?: string[];
+      max_tokens?: number | null;
+      platforms?: components["schemas"]["PlatformModelsOut"][];
+      search_engines?: string[];
+      support_agent_models?: string[];
+      temperature: number;
+      vs_types?: string[];
     };
     SetStatusRequest: {
       status: string;

@@ -26,7 +26,12 @@ TYPES_PATH = REPO_ROOT / "frontend" / "src" / "api" / "schema.d.ts"
 GENERATOR_PATH = REPO_ROOT / "tools" / "gen_api_types.py"
 
 # 前端已经在用的契约模型。删掉这些模型说明接口契约被破坏，必须显式改测试。
-REQUIRED_SCHEMAS = ["ConversationOut"]
+REQUIRED_SCHEMAS = [
+    "ConversationOut",
+    "ServerModelsOut",
+    "PlatformModelsOut",
+    "KBDefaultsOut",
+]
 
 
 def _load_generator():

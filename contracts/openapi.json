@@ -4943,6 +4943,56 @@
         "title": "JSONSchema",
         "type": "object"
       },
+      "KBDefaultsOut": {
+        "description": "知识库默认参数。类型用宽口径：这些值由用户 yaml 配置，可被改成任意名称/取值。",
+        "properties": {
+          "chunk_overlap": {
+            "title": "Chunk Overlap",
+            "type": "integer"
+          },
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "default_knowledge_base": {
+            "title": "Default Knowledge Base",
+            "type": "string"
+          },
+          "default_search_engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Search Engine"
+          },
+          "default_vs_type": {
+            "title": "Default Vs Type",
+            "type": "string"
+          },
+          "score_threshold": {
+            "title": "Score Threshold",
+            "type": "number"
+          },
+          "vector_search_top_k": {
+            "title": "Vector Search Top K",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chunk_size",
+          "chunk_overlap",
+          "vector_search_top_k",
+          "score_threshold",
+          "default_knowledge_base",
+          "default_vs_type"
+        ],
+        "title": "KBDefaultsOut",
+        "type": "object"
+      },
       "ListResponse": {
         "example": {
           "code": 200,
@@ -7609,6 +7659,41 @@
         "title": "PlanUpdate",
         "type": "object"
       },
+      "PlatformModelsOut": {
+        "description": "单个模型平台的模型清单（不含任何连接凭据）。",
+        "properties": {
+          "embed_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Embed Models",
+            "type": "array"
+          },
+          "image2text_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Image2Text Models",
+            "type": "array"
+          },
+          "llm_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Llm Models",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PlatformModelsOut",
+        "type": "object"
+      },
       "PreferencesOut": {
         "description": "本次对话实际会注入的个人偏好 + 用户级个人记忆总开关。",
         "properties": {
@@ -9422,6 +9507,107 @@
           "self_assessment"
         ],
         "title": "SelfAssessmentIn",
+        "type": "object"
+      },
+      "ServerModelsOut": {
+        "description": "`GET /server/models` 的响应契约。\n\n字段必须与 `get_server_models()` 的返回一一对应：FastAPI 的 `response_model`\n会按本模型**过滤**输出，漏声明字段等于直接从响应里删掉它。改这个模型时，\n前端 `src/api/server.ts` 会经 `schema.d.ts` 在编译期同步，不需要手抄。",
+        "properties": {
+          "default_embedding": {
+            "title": "Default Embedding",
+            "type": "string"
+          },
+          "default_llm": {
+            "title": "Default Llm",
+            "type": "string"
+          },
+          "embedding_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Embedding Models",
+            "type": "array"
+          },
+          "history_len": {
+            "title": "History Len",
+            "type": "integer"
+          },
+          "image2text_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Image2Text Models",
+            "type": "array"
+          },
+          "kb_defaults": {
+            "$ref": "#/components/schemas/KBDefaultsOut"
+          },
+          "llm_model_config": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Llm Model Config",
+            "type": "object"
+          },
+          "llm_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Llm Models",
+            "type": "array"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformModelsOut"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "search_engines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Search Engines",
+            "type": "array"
+          },
+          "support_agent_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Support Agent Models",
+            "type": "array"
+          },
+          "temperature": {
+            "title": "Temperature",
+            "type": "number"
+          },
+          "vs_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Vs Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "default_llm",
+          "default_embedding",
+          "history_len",
+          "temperature",
+          "kb_defaults"
+        ],
+        "title": "ServerModelsOut",
         "type": "object"
       },
       "SetStatusRequest": {
@@ -17903,9 +18089,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Server Models Server Models Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ServerModelsOut"
                 }
               }
             },
