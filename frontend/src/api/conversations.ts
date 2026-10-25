@@ -1,16 +1,15 @@
 import { deleteJson, getJson, patchJson, postJson } from "@/api/http";
+import type { components } from "@/api/schema";
 
-export interface Conversation {
-  id: string;
-  name: string | null;
-  chat_type: string | null;
-  /** 临时对话：不创建、不保留会话私有上下文（第二期设计方案 §4.4） */
-  temporary: boolean;
-  /** 会话所在项目空间：只有该项目的范围记忆能在本会话召回（第三期 §4.4） */
-  project_id: string | null;
-  create_time: string | null;
-  update_time: string | null;
-}
+/**
+ * 会话。字段定义来自后端契约（`ConversationOut`），不再手写：后端增删改字段时
+ * 编译期就会报错，而不是等到运行时才发现。契约链见 contracts/README.md。
+ *
+ * 语义备注：
+ * - `temporary`：临时对话，不创建、不保留会话私有上下文（第二期设计方案 §4.4）。
+ * - `project_id`：会话所在项目空间，只有该项目的范围记忆能在本会话召回（第三期 §4.4）。
+ */
+export type Conversation = components["schemas"]["ConversationOut"];
 
 export interface MessageRecord {
   id: string;

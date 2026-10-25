@@ -192,3 +192,8 @@ test.py
 /knowledge_base/samples/content/imi_temeplate.txt
 chatchat/data
 chatchat-study-data/data
+
+# API 契约链：仓库根部的 `*.json` 是全局忽略，契约产物必须显式放行才能入库
+!contracts/openapi.json
+# 契约工具链的本地 scratch（CHATCHAT_ROOT 数据根、npm 缓存、临时脚本）
+.tmp/
