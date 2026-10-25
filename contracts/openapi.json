@@ -5969,6 +5969,32 @@
         "title": "MaterialIn",
         "type": "object"
       },
+      "MaterialOut": {
+        "description": "任务要求材料（required_materials 的元素）。\n\nDB 里是 JSON 列，元素由 `MaterialIn.model_dump()` 写入，所以 key/label/required\n三个键一定存在。给 label/required 留默认值只是为了兼容早期写入时缺键的旧行：\n缺键时 pydantic 补默认值再序列化，契约仍然与运行时一致。\n之前这里写 `List[dict]`，契约里元素是 additionalProperties:true 的 object，\n生成的 TS 是 `{}`，前端只能手抄 TaskMaterial。",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "required"
+        ],
+        "title": "MaterialOut",
+        "type": "object"
+      },
       "MemoryCreate": {
         "properties": {
           "category": {
@@ -6661,6 +6687,12 @@
             "type": "string"
           },
           "mentor_confirmation": {
+            "enum": [
+              "",
+              "confirmed",
+              "partially_confirmed",
+              "not_confirmed"
+            ],
             "title": "Mentor Confirmation",
             "type": "string"
           },
@@ -6710,6 +6742,12 @@
             "title": "Planned Start"
           },
           "status": {
+            "enum": [
+              "planning",
+              "active",
+              "completed",
+              "cancelled"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -9351,6 +9389,13 @@
             "type": "string"
           },
           "conclusion": {
+            "enum": [
+              "met",
+              "partially_met",
+              "not_met",
+              "more_evidence_required",
+              "not_applicable"
+            ],
             "title": "Conclusion",
             "type": "string"
           },
@@ -9472,6 +9517,13 @@
             "type": "array"
           },
           "overall_decision": {
+            "enum": [
+              "",
+              "approved",
+              "revision_required",
+              "rejected",
+              "paused"
+            ],
             "title": "Overall Decision",
             "type": "string"
           },
@@ -12219,6 +12271,11 @@
             "title": "Milestone Id"
           },
           "priority": {
+            "enum": [
+              "low",
+              "normal",
+              "high"
+            ],
             "title": "Priority",
             "type": "string"
           },
@@ -12239,8 +12296,7 @@
           },
           "required_materials": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/MaterialOut"
             },
             "title": "Required Materials",
             "type": "array"

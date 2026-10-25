@@ -43,6 +43,9 @@ const TASK: Task = {
   milestone_id: null,
   acs: [],
   cancel_reason: "",
+  // 契约里这两个字段必填（可为 null）：FastAPI 一定会写出。
+  published_at: null,
+  create_time: null,
 };
 
 const SUBMISSION: Submission = {

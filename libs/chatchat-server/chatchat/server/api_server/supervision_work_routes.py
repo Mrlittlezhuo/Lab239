@@ -258,12 +258,30 @@ class MilestoneOut(ResponseModel):
     success_criteria: str
     planned_start: Optional[str] = None
     planned_end: Optional[str] = None
-    status: str
+    # CHECK（migrations.py:1346）status IN ('planning','active','completed','cancelled')
+    status: Literal["planning", "active", "completed", "cancelled"]
     owner_user_id: str
-    mentor_confirmation: str
+    # CHECK（migrations.py:1347-1348）mentor_confirmation IN ('','confirmed',
+    # 'partially_confirmed','not_confirmed')
+    mentor_confirmation: Literal["", "confirmed", "partially_confirmed", "not_confirmed"]
     mentor_confirmation_note: str
     mentor_confirmed_at: Optional[str] = None
     create_time: Optional[str] = None
+
+
+class MaterialOut(ResponseModel):
+    """任务要求材料（required_materials 的元素）。
+
+    DB 里是 JSON 列，元素由 `MaterialIn.model_dump()` 写入，所以 key/label/required
+    三个键一定存在。给 label/required 留默认值只是为了兼容早期写入时缺键的旧行：
+    缺键时 pydantic 补默认值再序列化，契约仍然与运行时一致。
+    之前这里写 `List[dict]`，契约里元素是 additionalProperties:true 的 object，
+    生成的 TS 是 `{}`，前端只能手抄 TaskMaterial。
+    """
+
+    key: str
+    label: str = ""
+    required: bool = True
 
 
 class TaskOut(ResponseModel):
@@ -275,12 +293,13 @@ class TaskOut(ResponseModel):
     # CHECK（migrations.py:1377）status IN ('draft','active','completed','cancelled','archived')
     status: Literal["draft", "active", "completed", "cancelled", "archived"]
     label: str
-    priority: str
+    # CHECK ck_supervision_task_priority（migrations.py:1378）priority IN ('low','normal','high')
+    priority: Literal["low", "normal", "high"]
     version: int
     due_at: Optional[str] = None
     requires_code_review: bool
     requires_runtime: bool
-    required_materials: List[dict] = Field(default_factory=list)
+    required_materials: List[MaterialOut] = Field(default_factory=list)
     milestone_id: Optional[str] = None
     acs: List[AcOut] = Field(default_factory=list)
     published_at: Optional[str] = None
@@ -340,7 +359,13 @@ class SubmissionOut(ResponseModel):
 
 class ReviewAcOut(ResponseModel):
     ac_code: str
-    conclusion: str
+    # CHECK ck_supervision_review_ac_conclusion（migrations.py:1501-1502）
+    # conclusion IN ('met','partially_met','not_met','more_evidence_required',
+    # 'not_applicable')；仓库 _write_ac_conclusions 也按同一集合校验。
+    # 声明成 Literal 契约才产出 enum，前端不必再手抄窄联合。
+    conclusion: Literal[
+        "met", "partially_met", "not_met", "more_evidence_required", "not_applicable"
+    ]
     reason: str
     ai_relation: str
 
@@ -352,7 +377,9 @@ class ReviewOut(ResponseModel):
     task_id: str
     # CHECK（migrations.py:1484）status IN ('not_started','drafting','published')
     status: Literal["not_started", "drafting", "published"]
-    overall_decision: str
+    # CHECK（migrations.py:1485-1486）overall_decision IN ('','approved',
+    # 'revision_required','rejected','paused')；与前端 ReviewDecision 联合逐值一致。
+    overall_decision: Literal["", "approved", "revision_required", "rejected", "paused"]
     decision_reason: str
     feedback: str
     must_fix: List[str] = Field(default_factory=list)

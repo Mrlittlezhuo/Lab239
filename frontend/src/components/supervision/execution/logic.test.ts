@@ -49,6 +49,9 @@ function task(overrides: Partial<Task> = {}): Task {
     milestone_id: null,
     acs: [ac("AC-1"), ac("AC-2")],
     cancel_reason: "",
+    // 契约里这两个字段必填（可为 null）：FastAPI 一定会写出。
+    published_at: null,
+    create_time: null,
     ...overrides,
   };
 }

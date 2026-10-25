@@ -181,34 +181,13 @@ export type Milestone = components["schemas"]["MilestoneOut"];
 export type TaskAc = components["schemas"]["AcOut"];
 
 /**
- * 刻意保持手写，不用契约生成类型。
- * 后端 TaskOut.required_materials 声明为 List[dict]，契约就是
- * `array of additionalProperties:true object`，生成类型是 `{}`；前端需要
- * material.key / label / required 的具体形状（TaskDetail.tsx、taskDraft.ts 在用）。
- * 其余 18 个字段与 TaskOut 逐项一致（含 status 的 Literal 枚举），只差这一处。
- * 要接上，先在后端把材料要求声明成模型。
+ * 与后端契约 `TaskOut` 逐字段一致（字段集 / 必填性 / 枚举取值，脚本比对过）。
+ * 之前刻意手写是因为后端 required_materials 声明成 List[dict]，契约里元素是 `{}`；
+ * 现在后端声明成 MaterialOut（key/label/required），缺口关闭，接上生成类型。
+ * 名字带模块前缀：work 与 literature 两个模块都有 TaskOut，生成器按全限定名去重。
  */
-export interface Task {
-  task_id: string;
-  code: string;
-  title: string;
-  purpose: string;
-  description: string;
-  status: TaskStatus;
-  /** §5.6 派生标签，前端直接显示，不再自行推导 */
-  label: string;
-  priority: string;
-  version: number;
-  due_at?: string | null;
-  requires_code_review: boolean;
-  requires_runtime: boolean;
-  required_materials: { key?: string; label?: string; required?: boolean }[];
-  milestone_id?: string | null;
-  acs: TaskAc[];
-  published_at?: string | null;
-  cancel_reason: string;
-  create_time?: string | null;
-}
+export type Task =
+  components["schemas"]["chatchat__server__api_server__supervision_work_routes__TaskOut"];
 
 /** 与契约 `ProgressNoteOut` 逐字段一致，直接用生成类型。 */
 export type ProgressNote = components["schemas"]["ProgressNoteOut"];
@@ -237,39 +216,20 @@ export interface ProgressUpdate {
  */
 export type Submission = components["schemas"]["SubmissionOut"];
 
-export interface ReviewAcConclusion {
-  ac_code: string;
-  conclusion: AcConclusion;
-  reason: string;
-  ai_relation: string;
-}
+/**
+ * 与契约 `ReviewAcOut` 一致。后端已把 conclusion 声明成 Literal（CHECK
+ * ck_supervision_review_ac_conclusion），契约出 enum，前端不再手抄窄联合。
+ */
+export type ReviewAcConclusion = components["schemas"]["ReviewAcOut"];
 
 /**
- * 刻意保持手写，不用契约生成类型。
- * 后端 ReviewOut.conclusions 的元素里 conclusion: str，契约是 `string`；
- * 前端 ReviewAcConclusion.conclusion 是窄联合 AcConclusion，接上契约会把这条
- * 联合放宽成 string，reviewDraft.ts 的 matrixFromConclusions 就失去编译期保护。
- * 其余 16 个字段与 ReviewOut 逐项一致（含 status 的 Literal 枚举），只差这一处。
- * 要接上，先把 conclusions 的元素声明成模型并给 conclusion 加 Literal。
+ * 与后端契约 `ReviewOut` 逐字段一致（字段集 / 必填性 / 枚举取值，脚本比对过）。
+ * 之前刻意手写是因为 conclusions 元素里 conclusion: str，会把 AcConclusion
+ * 窄联合放宽成 string；后端已把 ReviewAcOut.conclusion 声明成 Literal（CHECK
+ * migrations.py:1501），overall_decision / status 也按 DB CHECK 声明成 Literal，
+ * 缺口关闭，接上生成类型。
  */
-export interface Review {
-  review_id: string;
-  code: string;
-  submission_id: string;
-  task_id: string;
-  status: ReviewStatus;
-  overall_decision: ReviewDecision;
-  decision_reason: string;
-  feedback: string;
-  must_fix: string[];
-  suggestions: string[];
-  next_steps: string;
-  reviewer_id: string;
-  first_touched_at?: string | null;
-  published_at?: string | null;
-  conclusions: ReviewAcConclusion[];
-  notes: ProgressNote[];
-}
+export type Review = components["schemas"]["ReviewOut"];
 
 /**
  * 字段名、字段类型与必填性都与后端契约 `AttachmentOut` 逐项核对一致

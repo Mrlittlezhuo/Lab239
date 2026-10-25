@@ -998,6 +998,11 @@ export interface components {
       label?: string;
       required?: boolean;
     };
+    MaterialOut: {
+      key: string;
+      label: string;
+      required: boolean;
+    };
     MemoryCreate: {
       category?: string | null;
       confirmed?: boolean | null;
@@ -1090,14 +1095,14 @@ export interface components {
       code: string;
       create_time: string | null;
       description: string;
-      mentor_confirmation: string;
+      mentor_confirmation: "" | "confirmed" | "partially_confirmed" | "not_confirmed";
       mentor_confirmation_note: string;
       mentor_confirmed_at: string | null;
       milestone_id: string;
       owner_user_id: string;
       planned_end: string | null;
       planned_start: string | null;
-      status: string;
+      status: "planning" | "active" | "completed" | "cancelled";
       success_criteria: string;
       title: string;
     };
@@ -1499,7 +1504,7 @@ export interface components {
     ReviewAcOut: {
       ac_code: string;
       ai_relation: string;
-      conclusion: string;
+      conclusion: "met" | "partially_met" | "not_met" | "more_evidence_required" | "not_applicable";
       reason: string;
     };
     ReviewDraftBody: {
@@ -1518,7 +1523,7 @@ export interface components {
       must_fix: string[];
       next_steps: string;
       notes: components["schemas"]["ProgressNoteOut"][];
-      overall_decision: string;
+      overall_decision: "" | "approved" | "revision_required" | "rejected" | "paused";
       published_at: string | null;
       review_id: string;
       reviewer_id: string;
@@ -2000,12 +2005,10 @@ export interface components {
       due_at: string | null;
       label: string;
       milestone_id: string | null;
-      priority: string;
+      priority: "low" | "normal" | "high";
       published_at: string | null;
       purpose: string;
-      required_materials: {
-        [key: string]: unknown;
-      }[];
+      required_materials: components["schemas"]["MaterialOut"][];
       requires_code_review: boolean;
       requires_runtime: boolean;
       status: "draft" | "active" | "completed" | "cancelled" | "archived";
