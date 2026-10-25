@@ -6,6 +6,7 @@ import {
   putJson,
   request,
 } from "@/api/http";
+import type { components } from "@/api/schema";
 
 /**
  * 师生科研协作接口封装（《学生研究与导师审核功能重新设计方案》里程碑0A/1/2）。
@@ -74,16 +75,8 @@ export interface ProjectDetail extends SupervisionProject {
   members: ProjectMember[];
 }
 
-export interface AuditEvent {
-  event_code: string;
-  object_type: string;
-  object_code: string;
-  actor_id: string;
-  actor_role: string;
-  action: string;
-  detail: string;
-  created_at?: string | null;
-}
+/** 与契约 `AuditEventOut` 逐字段一致，直接用生成类型。 */
+export type AuditEvent = components["schemas"]["AuditEventOut"];
 
 export interface Notification {
   notification_id: string;
@@ -181,21 +174,12 @@ export const searchUsers = (keyword: string) =>
 // 里程碑1：阶段目标、任务与验收标准、进展、提交、审核、附件
 // ---------------------------------------------------------------------------
 
-export interface Milestone {
-  milestone_id: string;
-  code: string;
-  title: string;
-  description: string;
-  success_criteria: string;
-  planned_start?: string | null;
-  planned_end?: string | null;
-  status: string;
-  owner_user_id: string;
-  mentor_confirmation: string;
-  mentor_confirmation_note: string;
-  mentor_confirmed_at?: string | null;
-  create_time?: string | null;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `MilestoneOut` 逐字段核对一致
+ * （2026-10-25 用脚本比对过），所以直接用生成类型，不再手抄。
+ * 后端改这个模型时，前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type Milestone = components["schemas"]["MilestoneOut"];
 
 export interface TaskAc {
   ac_code: string;
@@ -228,13 +212,8 @@ export interface Task {
   create_time?: string | null;
 }
 
-export interface ProgressNote {
-  note_id: string;
-  note: string;
-  author_id: string;
-  author_role: string;
-  create_time?: string | null;
-}
+/** 与契约 `ProgressNoteOut` 逐字段一致，直接用生成类型。 */
+export type ProgressNote = components["schemas"]["ProgressNoteOut"];
 
 export interface ProgressUpdate {
   progress_id: string;
