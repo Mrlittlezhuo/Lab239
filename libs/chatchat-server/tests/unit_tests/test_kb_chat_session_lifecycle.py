@@ -33,6 +33,7 @@
 """
 import asyncio  # noqa: E402
 import json  # noqa: E402
+import pathlib  # noqa: E402
 import sys  # noqa: E402
 import types  # noqa: E402
 
@@ -726,6 +727,83 @@ def test_kb_chat_rejects_foreign_project_without_creating_anything(
         assert s.query(MessageModel).count() == 0
     finally:
         s.close()
+
+
+def _harvest_kb_chat_frames(client, kbchat_app, temp_user_db, secret):
+    """真实驱动三种 kb_chat 调用，采集每一帧的键集合。
+
+    这是 SSE 帧契约的证据来源：契约不是读代码猜的，而是从真实
+    EventSourceResponse 负载里取出来的。
+    """
+    hdr, _ = _headers_of(temp_user_db, "alice")
+    observed: dict[str, set[str]] = {}
+    for body in (
+        _kb_chat_body(),
+        _kb_chat_body(return_direct=True),
+        _kb_chat_body(stream=False),
+    ):
+        with client.stream("POST", "/kb_chat", headers=hdr, json=body) as resp:
+            assert resp.status_code == 200
+            for frame in _iter_sse_chunks(resp):
+                name = (
+                    "memory_usage"
+                    if frame.get("class_name") == "MemoryUsageEvent"
+                    else "rag_content"
+                )
+                observed.setdefault(name, set()).update(frame.keys())
+    assert observed, "未采集到任何 SSE 帧"
+    return observed
+
+
+def test_sse_frame_vocabulary_matches_contract(
+    client, kbchat_app, temp_user_db, secret
+):
+    """SSE 帧契约门：真实帧的键集必须与 contracts/sse-frames.json 双向一致。
+
+    为什么需要它：kb_chat/file_chat 的每帧负载由 `OpenAIChatOutput` 产生，而
+    `OpenAIBaseOutput` 配了 `ConfigDict(extra="allow")`，`model_dump` 又把
+    `model_extra` 摊平进负载 —— 前端真正消费的 references / retrieval_status /
+    memory_usage_manifest 等字段在后端**没有任何 schema**。于是「后端加一个帧
+    字段」或「改个键名」在编译期与契约层都不会响，只会在前端表现为 undefined。
+    这个测试把键集钉住：新增/改名/删除键都会让这里红，必须先改契约再改代码。
+
+    已知边界（契约文件 open_gaps 里也写了）：钉的是**键集**，不是字段值类型；
+    smart_conversation / agent_run 链路的帧尚未纳入。
+    """
+    contract_path = (
+        pathlib.Path(__file__).resolve().parents[4] / "contracts" / "sse-frames.json"
+    )
+    assert contract_path.exists(), f"缺少 SSE 帧契约文件：{contract_path}"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+
+    common = set(contract["common_keys"])
+    declared = {
+        frame["name"]: common | set(frame["additional_keys"])
+        for frame in contract["frames"]
+    }
+
+    observed = _harvest_kb_chat_frames(client, kbchat_app, temp_user_db, secret)
+
+    # 1) 出现了契约没声明的帧种类（例如新增 class_name 判别值）
+    undeclared_kinds = set(observed) - set(declared)
+    assert not undeclared_kinds, (
+        f"SSE 出现了契约未声明的帧种类 {sorted(undeclared_kinds)}，"
+        "请先在 contracts/sse-frames.json 里声明"
+    )
+    # 2) 契约声明的帧种类实际不再产生（契约里留了死种类）
+    dead_kinds = set(declared) - set(observed)
+    assert not dead_kinds, (
+        f"契约声明的帧种类 {sorted(dead_kinds)} 在真实流里已不再出现，"
+        "契约与实现已经脱节"
+    )
+    # 3) 键集双向一致
+    for name in sorted(observed):
+        added = observed[name] - declared[name]
+        removed = declared[name] - observed[name]
+        assert not added and not removed, (
+            f"帧 {name} 的键集与契约不一致：新增 {sorted(added)}、消失 {sorted(removed)}。"
+            "改帧字段必须同时改 contracts/sse-frames.json。"
+        )
 
 
 if __name__ == "__main__":
