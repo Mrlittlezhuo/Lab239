@@ -874,6 +874,21 @@ class TestAttachments:
             assert stored.startswith(f"{pid}/")
             assert ".." not in stored
 
+    def test_stored_path_uses_posix_separator_on_every_platform(self, client, temp_db):
+        """回归：`stored_path` 是存在库里的逻辑路径，分隔符不能跟着平台走。
+
+        Windows 上 `str(Path(pid) / name)` 会得到 `pid\\name`，同一份数据库拿到
+        Linux 上就被当成一个带反斜杠的文件名而不是子目录，附件取不出来。
+        这里钉住写入格式（读取侧另有归一化，兼容修复前写入的旧行）。
+        """
+        pid = _active_project(client, temp_db)["project_id"]
+        r = _upload(client, temp_db, pid, name="sep.log", content=b"x")
+        assert r.status_code == 200, r.text
+        with _session(temp_db) as s:
+            stored = s.query(SupervisionAttachmentModel).one().stored_path
+        assert "\\" not in stored, f"存进了平台分隔符：{stored!r}"
+        assert stored.startswith(f"{pid}/") and stored.count("/") == 1
+
     def test_attachment_bound_to_submission_cannot_be_removed(self, client, temp_db):
         pid = _active_project(client, temp_db)["project_id"]
         task = _published_task(client, temp_db, pid)

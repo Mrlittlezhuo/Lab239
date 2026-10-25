@@ -1470,7 +1470,7 @@ def save_attachment(
         mime_type=(mime_type or "")[:120],
         size=len(data),
         sha256=digest,
-        stored_path=str(relative),
+        stored_path=relative.as_posix(),
         version=1,
         kind=(kind or "other")[:32],
         status="active",
@@ -1506,7 +1506,11 @@ def get_attachment(
 
 def attachment_path(attachment: SupervisionAttachmentModel) -> Path:
     root = attachment_root().resolve()
-    target = (root / attachment.stored_path).resolve()
+    # stored_path 是存在库里的逻辑路径，必须按 POSIX 分隔符解释：Windows 上早期
+    # 写入的行带反斜杠（`pid\file.txt`），换到 Linux 上会被当成一个文件名而不是
+    # 子目录，附件直接找不到。这里统一归一化，兼容修复前写入的旧行。
+    relative = Path(attachment.stored_path.replace("\\", "/"))
+    target = (root / relative).resolve()
     # 双重保险：库里的路径必须仍在附件根目录内。
     if not str(target).startswith(str(root)):
         raise WorkError("附件路径不合法")
