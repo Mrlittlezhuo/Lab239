@@ -78,6 +78,25 @@ class MessageOut(BaseModel):
     feedback_reason: Optional[str] = ""
 
 
+class ConversationMessagesOut(BaseModel):
+    """`GET /conversations/{id}/messages` 的响应包装。
+
+    以前这个端点标注的是 `-> dict`，FastAPI 推不出 response_model，契约里
+    该端点的响应是空的：前端 `MessageRecord` 只能手写，后端改字段编译期不会响，
+    只会在运行时拿到 undefined。`MessageOut` 模型本来就有，缺的只是把它声明出来。
+    """
+
+    conversation_id: str
+    messages: List[MessageOut]
+
+
+class ConversationDeletedOut(BaseModel):
+    """删除会话的确认响应（同样原先是 `-> dict`，契约里是空的）。"""
+
+    deleted: bool
+    conversation_id: str
+
+
 def _conv_out(c: ConversationModel) -> ConversationOut:
     return ConversationOut(
         id=c.id,
@@ -213,14 +232,14 @@ def delete_my_conversation(
     conversation_id: str,
     user: UserModel = Depends(require_password_changed),
     session: Session = Depends(get_db),
-) -> dict:
+) -> ConversationDeletedOut:
     try:
         delete_owned_conversation(session, conversation_id, user.id)
     except ConversationNotOwned:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在或无权操作"
         )
-    return {"deleted": True, "conversation_id": conversation_id}
+    return ConversationDeletedOut(deleted=True, conversation_id=conversation_id)
 
 
 @conversation_router.get(
@@ -230,17 +249,17 @@ def list_my_conversation_messages(
     conversation_id: str,
     user: UserModel = Depends(require_password_changed),
     session: Session = Depends(get_db),
-) -> dict:
+) -> ConversationMessagesOut:
     try:
         messages = list_messages(session, conversation_id, user.id)
     except ConversationNotOwned:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在或无权访问"
         )
-    return {
-        "conversation_id": conversation_id,
-        "messages": [_msg_out(m) for m in messages],
-    }
+    return ConversationMessagesOut(
+        conversation_id=conversation_id,
+        messages=[_msg_out(m) for m in messages],
+    )
 
 
 __all__ = ["conversation_router"]

@@ -545,6 +545,14 @@ export interface components {
       project_id?: string | null;
       temporary?: boolean;
     };
+    ConversationDeletedOut: {
+      conversation_id: string;
+      deleted: boolean;
+    };
+    ConversationMessagesOut: {
+      conversation_id: string;
+      messages: components["schemas"]["MessageOut"][];
+    };
     ConversationOut: {
       chat_type?: string | null;
       create_time?: string | null;
@@ -1031,6 +1039,18 @@ export interface components {
     };
     MentorRunBody: {
       core_attachment_codes?: string[];
+    };
+    MessageOut: {
+      chat_type?: string | null;
+      create_time?: string | null;
+      feedback_reason?: string | null;
+      feedback_score?: number | null;
+      id: string;
+      metadata?: {
+        [key: string]: unknown;
+      };
+      query?: string | null;
+      response?: string | null;
     };
     MilestoneBody: {
       description?: string;

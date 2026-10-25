@@ -31,6 +31,18 @@ REQUIRED_SCHEMAS = [
     "ServerModelsOut",
     "PlatformModelsOut",
     "KBDefaultsOut",
+    "MessageOut",
+    "ConversationMessagesOut",
+    "ConversationDeletedOut",
+]
+
+# 这些端点的 200 响应必须在契约里有具体模型。写成 `-> dict` 时 FastAPI 推不出
+# response_model，契约里该响应就是空的，前端只能手抄类型 —— 后端改字段编译期
+# 不会报错，只在运行时拿到 undefined。这里钉住，防止注解被改回去。
+TYPED_RESPONSES = [
+    ("get", "/conversations/{conversation_id}/messages"),
+    ("delete", "/conversations/{conversation_id}"),
+    ("get", "/server/models"),
 ]
 
 
@@ -81,4 +93,22 @@ def test_frontend_actually_consumes_generated_types():
     ]
     assert consumers, (
         "没有任何 api 模块引用 @/api/schema —— 契约链已退化为死代码"
+    )
+
+
+@pytest.mark.parametrize("method,path", TYPED_RESPONSES)
+def test_endpoint_response_has_a_declared_model(contract: dict, method, path):
+    op = contract.get("paths", {}).get(path, {}).get(method)
+    assert op, f"契约里缺少 {method.upper()} {path}"
+    schema = (
+        op.get("responses", {})
+        .get("200", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema")
+    )
+    has_model = bool(schema) and ("$ref" in schema or schema.get("type") == "array")
+    assert has_model, (
+        f"{method.upper()} {path} 的 200 响应没有声明模型，退化成 dict 了：{schema!r}。"
+        "这会让前端只能手抄类型，后端改字段时编译期不会报错。"
     )

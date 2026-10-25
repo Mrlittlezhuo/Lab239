@@ -11,16 +11,20 @@ import type { components } from "@/api/schema";
  */
 export type Conversation = components["schemas"]["ConversationOut"];
 
-export interface MessageRecord {
-  id: string;
-  chat_type: string | null;
-  query: string | null;
-  response: string | null;
-  metadata: Record<string, unknown>;
-  create_time: string | null;
-  feedback_score: number | null;
-  feedback_reason: string | null;
-}
+/**
+ * 会话历史消息。字段来自后端契约里的 `MessageOut`（`conversation_routes.py`
+ * 本来就有这个 pydantic 模型，只是端点原先标注 `-> dict`，没进契约）。
+ *
+ * 注意可选性：生成器把「有默认值的字段」标成 `?`，所以这里比原先手抄的
+ * `create_time: string | null` 更宽（`string | null | undefined`）。实际运行时
+ * FastAPI 一定会把这些字段序列化出来（它们有默认值），所以这个 `?` 是契约生成器
+ * 对响应模型的保守近似，不是后端真的会省略字段。
+ */
+export type MessageRecord = components["schemas"]["MessageOut"];
+
+/** `GET /conversations/{id}/messages` 的响应包装，同样来自契约。 */
+export type ConversationMessages =
+  components["schemas"]["ConversationMessagesOut"];
 
 /**
  * 会话列表。chatType 决定只看哪一类会话：智能聊天是 agent_chat，
@@ -77,6 +81,6 @@ export function deleteConversation(id: string): Promise<unknown> {
 
 export function listMessages(
   conversationId: string,
-): Promise<{ conversation_id: string; messages: MessageRecord[] }> {
+): Promise<ConversationMessages> {
   return getJson(`/conversations/${conversationId}/messages`);
 }
