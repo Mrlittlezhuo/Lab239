@@ -25,6 +25,19 @@ CONTRACT_PATH = REPO_ROOT / "contracts" / "openapi.json"
 TYPES_PATH = REPO_ROOT / "frontend" / "src" / "api" / "schema.d.ts"
 GENERATOR_PATH = REPO_ROOT / "tools" / "gen_api_types.py"
 
+# SSE 帧契约链：contracts/sse-frames.json → tools/gen_sse_types.py
+# → frontend/src/api/sse-frames.ts。这条链独立于 OpenAPI，因为 kb_chat/file_chat
+# 的帧负载来自 OpenAIBaseOutput(extra="allow")，字段在 OpenAPI 里没有 schema。
+SSE_CONTRACT_PATH = REPO_ROOT / "contracts" / "sse-frames.json"
+SSE_TYPES_PATH = REPO_ROOT / "frontend" / "src" / "api" / "sse-frames.ts"
+SSE_GENERATOR_PATH = REPO_ROOT / "tools" / "gen_sse_types.py"
+# 必须消费 SSE 生成类型的前端文件；缺一个说明这条链接线又退回手写副本。
+SSE_CONSUMERS = [
+    "frontend/src/lib/sse/types.ts",
+    "frontend/src/lib/sse/classify.ts",
+    "frontend/src/components/chat/MemorySnapshotBadge.tsx",
+]
+
 # 前端已经在用的契约模型。删掉这些模型说明接口契约被破坏，必须显式改测试。
 REQUIRED_SCHEMAS = [
     "ConversationOut",
@@ -112,3 +125,43 @@ def test_endpoint_response_has_a_declared_model(contract: dict, method, path):
         f"{method.upper()} {path} 的 200 响应没有声明模型，退化成 dict 了：{schema!r}。"
         "这会让前端只能手抄类型，后端改字段时编译期不会报错。"
     )
+
+
+def _load_sse_generator():
+    spec = importlib.util.spec_from_file_location(
+        "gen_sse_types", SSE_GENERATOR_PATH
+    )
+    assert spec and spec.loader, f"SSE 生成器缺失: {SSE_GENERATOR_PATH}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sse_generated_types_match_contract():
+    """SSE 生成物不得手改：必须等于 tools/gen_sse_types.py 对契约的渲染结果。"""
+    assert SSE_CONTRACT_PATH.exists(), (
+        f"缺少 {SSE_CONTRACT_PATH}；它被 .gitignore 的全局 *.json 影响，"
+        "需要显式放行才能入库"
+    )
+    assert SSE_TYPES_PATH.exists(), (
+        f"缺少 {SSE_TYPES_PATH}，请运行 python tools/gen_sse_types.py"
+    )
+    gen = _load_sse_generator()
+    contract = json.loads(SSE_CONTRACT_PATH.read_text(encoding="utf-8"))
+    expected = gen.render(contract)
+    actual = SSE_TYPES_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert actual == expected, (
+        "frontend/src/api/sse-frames.ts 与 contracts/sse-frames.json 不一致。"
+        "生成物不要手改，请运行 python tools/gen_sse_types.py 后一起提交。"
+    )
+
+
+def test_frontend_actually_consumes_sse_frame_types():
+    """防止 SSE 契约链接线退化成没人用的死代码（前端又回去手写枚举副本）。"""
+    for rel in SSE_CONSUMERS:
+        path = REPO_ROOT / rel
+        assert path.exists(), f"前端文件缺失: {rel}"
+        assert 'from "@/api/sse-frames"' in path.read_text(encoding="utf-8"), (
+            f"{rel} 不再引用 @/api/sse-frames —— 它可能又手写了一份帧枚举副本，"
+            "这样后端改状态机时前端不会有任何编译期信号"
+        )

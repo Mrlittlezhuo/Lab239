@@ -1,14 +1,36 @@
+import {
+  GENERATION_STATUS,
+  RETRIEVAL_STATUS,
+  type RetrievalStatus,
+} from "@/api/sse-frames";
 import type {
   AgentEventType,
   AgentPlanData,
   AgentStepData,
-  GenerationStatus,
   MemoryUsageManifest,
   ReferenceData,
   RouteResultData,
   SseEvent,
   ToolCallData,
 } from "@/lib/sse/types";
+
+/**
+ * 用契约声明的取值做运行时收窄，而不是 `as` 硬塞。
+ *
+ * 帧负载来自 `OpenAIChatOutput`，其真实字段是 `extra="allow"` 摊平进来的，
+ * 编译期没有任何保证。后端若发出契约里没有的取值，这里得到 undefined，
+ * 界面按「状态未知」处理，而不是把一个契约外的字符串当成合法枚举继续用；
+ * 同时后端 test_sse_contract_enums_match_backend_constants 会先一步红掉。
+ */
+function asEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  return typeof value === "string" &&
+    (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
+}
 
 /**
  * chatchat SSE 块 JSON → 判别联合。判定顺序关键：
@@ -84,10 +106,7 @@ export function classifyFrame(payload: string): SseEvent {
     return {
       kind: "memory",
       manifest: (chunk.memory_usage_manifest ?? {}) as MemoryUsageManifest,
-      status:
-        typeof chunk.generation_status === "string"
-          ? (chunk.generation_status as GenerationStatus)
-          : undefined,
+      status: asEnum(chunk.generation_status, GENERATION_STATUS),
       messageId:
         typeof chunk.message_id === "string" ? chunk.message_id : undefined,
       conversationId,
@@ -102,10 +121,10 @@ export function classifyFrame(payload: string): SseEvent {
       kind: "reference",
       references: (chunk.references ?? []) as ReferenceData[],
       docs: Array.isArray(chunk.docs) ? (chunk.docs as string[]) : undefined,
-      retrievalStatus:
-        typeof chunk.retrieval_status === "string"
-          ? chunk.retrieval_status
-          : undefined,
+      retrievalStatus: asEnum<RetrievalStatus>(
+        chunk.retrieval_status,
+        RETRIEVAL_STATUS,
+      ),
       conversationId,
     };
   }

@@ -58,6 +58,9 @@ jobs:
   # 契约漂移：已提交的 contracts/openapi.json 与 frontend/src/api/schema.d.ts
   # 必须一致。这个 job 只用标准库（tools/gen_api_types.py 零依赖），
   # 不需要装后端，所以很快，也是三层门禁里最稳的一层。
+  # SSE 帧契约（contracts/sse-frames.json → frontend/src/api/sse-frames.ts）
+  # 走同一条路：它不在 OpenAPI 里，因为 kb_chat/file_chat 的帧负载来自
+  # OpenAIBaseOutput(extra="allow")，字段没有 schema。
   # ------------------------------------------------------------------
   api-contract:
     name: API 契约 → 前端类型 不得漂移
@@ -72,6 +75,9 @@ jobs:
 
       - name: 生成的 TS 类型必须与已提交契约一致
         run: python tools/gen_api_types.py --check
+
+      - name: SSE 帧生成类型必须与 SSE 帧契约一致
+        run: python tools/gen_sse_types.py --check
 
   # ------------------------------------------------------------------
   # 后端：安装 + 契约导出一致性 + 全量 unit_tests。

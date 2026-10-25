@@ -1,5 +1,7 @@
 /** chatchat SSE 块分类后的判别联合。 */
 
+import type { GenerationStatus, RetrievalStatus } from "@/api/sse-frames";
+
 export interface RouteResultData {
   path?: string;
   path_label?: string;
@@ -73,15 +75,13 @@ export interface ToolCallData {
 /**
  * 生成状态机（第四期设计方案 §11.1）。`queued` 只在请求确实排队后才出现，
  * `partial / cancelled / failed` 表示这条回答没说完。
+ *
+ * 取值不再手抄：来自 SSE 帧契约 contracts/sse-frames.json（由
+ * tools/gen_sse_types.py 生成），其权威来源是后端
+ * memory.usage_manifest.GENERATION_STATUSES，并由后端测试
+ * test_sse_contract_enums_match_backend_constants 钉住两边一致。
  */
-export type GenerationStatus =
-  | "prepared"
-  | "queued"
-  | "started"
-  | "partial"
-  | "cancelled"
-  | "failed"
-  | "completed";
+export type { GenerationStatus };
 
 /** 一条记忆的使用快照：内容也存下来，记忆后来被改删仍能还原当时注入了什么。 */
 export interface MemoryUsageEntry {
@@ -159,7 +159,7 @@ export type SseEvent =
       kind: "reference";
       references: ReferenceData[];
       docs?: string[];
-      retrievalStatus?: string;
+      retrievalStatus?: RetrievalStatus;
       conversationId?: string;
     }
   | {

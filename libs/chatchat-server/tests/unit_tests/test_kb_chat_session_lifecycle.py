@@ -826,10 +826,11 @@ def test_sse_contract_enums_match_backend_constants():
         usage_manifest.GENERATION_STATUSES
     ), "contracts/sse-frames.json 的 generation_status 与后端常量脱节"
 
-    # 不完整状态必须是 generation_status 的子集，且契约要能表达它
-    assert set(usage_manifest.INCOMPLETE_STATUSES) <= set(
-        usage_manifest.GENERATION_STATUSES
-    )
+    # 前端 MemorySnapshotBadge 需要知道「这条回答没说完」，它原先自己手写了一份
+    # ["partial","cancelled","failed"]；现在契约也承载这个集合，并与后端常量对齐。
+    assert list(frames["memory_usage"]["semantics"]["incomplete_statuses"]) == list(
+        usage_manifest.INCOMPLETE_STATUSES
+    ), "contracts/sse-frames.json 的 incomplete_statuses 与后端常量脱节"
 
 
 if __name__ == "__main__":

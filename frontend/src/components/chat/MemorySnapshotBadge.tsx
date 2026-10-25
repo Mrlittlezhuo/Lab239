@@ -8,8 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { INCOMPLETE_STATUSES } from "@/api/sse-frames";
 import type {
-  GenerationStatus,
   MemoryUsageEntry,
   MemoryUsageManifest,
 } from "@/lib/sse/types";
@@ -22,7 +22,8 @@ import type {
  * 被修改或删除都不会改变这里显示的内容——快照记的是当时真正注入的东西。
  */
 
-const INCOMPLETE_STATUSES: GenerationStatus[] = ["partial", "cancelled", "failed"];
+// 「这条回答没说完」的状态集合现在来自 SSE 帧契约（@/api/sse-frames），
+// 其权威来源是后端 usage_manifest.INCOMPLETE_STATUSES；这里原先是第三份手写副本。
 
 const STAGE_LABELS: Record<string, string> = {
   routing: "意图路由",
