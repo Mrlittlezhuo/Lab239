@@ -148,6 +148,16 @@ class NotificationOut(ResponseModel):
     read_at: Optional[str] = None
 
 
+class MarkReadOut(ResponseModel):
+    """POST /notifications/read 的响应。
+
+    之前路由返回裸 `{"updated": ...}` dict，FastAPI 推不出 response_model，
+    契约里该响应是空 object，前端只能手抄 `{ updated: number }`。
+    """
+
+    updated: int
+
+
 class CreateProjectBody(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
@@ -566,7 +576,7 @@ def list_notifications(
     ]
 
 
-@supervision_router.post("/notifications/read")
+@supervision_router.post("/notifications/read", response_model=MarkReadOut)
 def mark_read(
     body: ReadNotificationsBody = Body(...),
     session: Session = Depends(get_db),
@@ -585,7 +595,7 @@ def mark_read(
     except ValueError as exc:
         raise _bad_request(str(exc))
     session.commit()
-    return {"updated": updated}
+    return MarkReadOut(updated=updated)
 
 
 @supervision_router.get("/users", response_model=List[SupervisionUserOut])

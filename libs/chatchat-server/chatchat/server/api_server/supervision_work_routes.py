@@ -1001,7 +1001,22 @@ def get_attachment(
     )
 
 
-@supervision_work_router.get("/projects/{project_ref}/attachments/{attachment_ref}/download")
+@supervision_work_router.get(
+    "/projects/{project_ref}/attachments/{attachment_ref}/download",
+    # 这是二进制下载，不是 JSON。不写 response_class 时 FastAPI 会按 JSON 生成一个
+    # 空 object 响应，契约里就成了类型洞；显式声明成 binary 才与实际一致。
+    response_class=FileResponse,
+    responses={
+        200: {
+            "description": "附件文件本体",
+            "content": {
+                "application/octet-stream": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
+)
 def download_attachment(
     project_ref: str,
     attachment_ref: str,

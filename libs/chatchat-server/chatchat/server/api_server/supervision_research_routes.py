@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
@@ -321,6 +321,44 @@ class ProjectContextOut(ResponseModel):
     project_id: str
     context: str
     has_project_context: bool
+
+
+class BriefChangeOut(ResponseModel):
+    """diff_brief_content 的一条差异。
+
+    `from` / `to` 是 Python 关键字，所以字段名用 from_value / to_value，靠 alias
+    保持线上 JSON 的键名不变（FastAPI 按 alias 序列化响应）。
+    列表字段给 list[str]，文本字段给 str，所以是 Union。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    field: str
+    label: str
+    from_value: Union[str, List[str]] = Field(..., alias="from")
+    to_value: Union[str, List[str]] = Field(..., alias="to")
+    # 只有列表字段才带这两个键；文本字段省略，序列化时是 null
+    added: Optional[List[str]] = None
+    removed: Optional[List[str]] = None
+
+
+class BriefComparisonOut(ResponseModel):
+    """GET .../research/briefs/{ref}/compare 的响应。
+
+    之前路由没有 response_model，契约里该响应是空 object，前端只能手抄
+    BriefComparison / BriefChange。status 的取值来自 DB CHECK
+    （migrations.py:1636）。
+    """
+
+    brief_id: str
+    code: str
+    from_version: int
+    to_version: int
+    from_status: Literal["draft", "confirmed", "rejected", "superseded"]
+    to_status: Literal["draft", "confirmed", "rejected", "superseded"]
+    from_confirmed_at: Optional[datetime] = None
+    to_confirmed_at: Optional[datetime] = None
+    changes: List[BriefChangeOut] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +724,8 @@ def list_brief_versions(
 
 
 @supervision_research_router.get(
-    "/projects/{project_ref}/research/briefs/{brief_ref}/compare"
+    "/projects/{project_ref}/research/briefs/{brief_ref}/compare",
+    response_model=BriefComparisonOut,
 )
 def compare_brief_versions(
     project_ref: str,

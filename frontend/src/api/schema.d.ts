@@ -274,6 +274,25 @@ export interface components {
       message_ids?: string[];
       title?: string;
     };
+    BriefChangeOut: {
+      added: string[] | null;
+      field: string;
+      from: string | string[];
+      label: string;
+      removed: string[] | null;
+      to: string | string[];
+    };
+    BriefComparisonOut: {
+      brief_id: string;
+      changes: components["schemas"]["BriefChangeOut"][];
+      code: string;
+      from_confirmed_at: string | null;
+      from_status: "draft" | "confirmed" | "rejected" | "superseded";
+      from_version: number;
+      to_confirmed_at: string | null;
+      to_status: "draft" | "confirmed" | "rejected" | "superseded";
+      to_version: number;
+    };
     BriefContentIn: {
       background?: string | string[];
       constraints?: string | string[];
@@ -970,6 +989,9 @@ export interface components {
     MCPProfileStatusResponse: {
       message: string;
       success: boolean;
+    };
+    MarkReadOut: {
+      updated: number;
     };
     MaterialIn: {
       key: string;

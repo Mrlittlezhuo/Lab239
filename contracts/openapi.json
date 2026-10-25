@@ -1564,6 +1564,170 @@
         "title": "BriefBody",
         "type": "object"
       },
+      "BriefChangeOut": {
+        "description": "diff_brief_content 的一条差异。\n\n`from` / `to` 是 Python 关键字，所以字段名用 from_value / to_value，靠 alias\n保持线上 JSON 的键名不变（FastAPI 按 alias 序列化响应）。\n列表字段给 list[str]，文本字段给 str，所以是 Union。",
+        "properties": {
+          "added": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "From"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "removed": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Removed"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "To"
+          }
+        },
+        "required": [
+          "added",
+          "field",
+          "from",
+          "label",
+          "removed",
+          "to"
+        ],
+        "title": "BriefChangeOut",
+        "type": "object"
+      },
+      "BriefComparisonOut": {
+        "description": "GET .../research/briefs/{ref}/compare 的响应。\n\n之前路由没有 response_model，契约里该响应是空 object，前端只能手抄\nBriefComparison / BriefChange。status 的取值来自 DB CHECK\n（migrations.py:1636）。",
+        "properties": {
+          "brief_id": {
+            "title": "Brief Id",
+            "type": "string"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/BriefChangeOut"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "from_confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Confirmed At"
+          },
+          "from_status": {
+            "enum": [
+              "draft",
+              "confirmed",
+              "rejected",
+              "superseded"
+            ],
+            "title": "From Status",
+            "type": "string"
+          },
+          "from_version": {
+            "title": "From Version",
+            "type": "integer"
+          },
+          "to_confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Confirmed At"
+          },
+          "to_status": {
+            "enum": [
+              "draft",
+              "confirmed",
+              "rejected",
+              "superseded"
+            ],
+            "title": "To Status",
+            "type": "string"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "brief_id",
+          "changes",
+          "code",
+          "from_confirmed_at",
+          "from_status",
+          "from_version",
+          "to_confirmed_at",
+          "to_status",
+          "to_version"
+        ],
+        "title": "BriefComparisonOut",
+        "type": "object"
+      },
       "BriefContentIn": {
         "description": "结构化研究定义内容（§4.3 的卡片字段）。",
         "properties": {
@@ -5763,6 +5927,20 @@
           "message"
         ],
         "title": "MCPProfileStatusResponse",
+        "type": "object"
+      },
+      "MarkReadOut": {
+        "description": "POST /notifications/read 的响应。\n\n之前路由返回裸 `{\"updated\": ...}` dict，FastAPI 推不出 response_model，\n契约里该响应是空 object，前端只能手抄 `{ updated: number }`。",
+        "properties": {
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "title": "MarkReadOut",
         "type": "object"
       },
       "MaterialIn": {
@@ -18669,7 +18847,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarkReadOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -20127,11 +20307,14 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "附件文件本体"
           },
           "422": {
             "content": {
@@ -23662,7 +23845,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BriefComparisonOut"
+                }
               }
             },
             "description": "Successful Response"

@@ -216,3 +216,49 @@ def test_supervision_responses_declare_every_field_required(contract: dict):
         "请让这些模型继承 chatchat.server.api_server.api_schemas.ResponseModel：\n  "
         + "\n  ".join(problems)
     )
+
+
+def test_supervision_responses_are_not_untyped(contract: dict):
+    """supervision 的 200 响应必须在契约里有类型。
+
+    路由返回裸 dict（不写 response_model）时，FastAPI 生成的响应是空 object，
+    契约里看不出任何字段，前端只能手抄类型 —— 后端改字段时编译期不会响。
+    二进制下载用 response_class=FileResponse + binary schema，也算有类型。
+    """
+
+    def typed(schema) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        if "$ref" in schema:
+            return True
+        if schema.get("type") in {"string", "number", "integer", "boolean"}:
+            return True
+        if schema.get("properties"):
+            return True
+        if schema.get("type") == "array":
+            return typed(schema.get("items"))
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in schema and any(typed(branch) for branch in schema[key]):
+                return True
+        return False
+
+    checked, untyped = 0, []
+    for path, item in contract["paths"].items():
+        if not path.startswith("/supervision"):
+            continue
+        for method, operation in item.items():
+            if not isinstance(operation, dict):
+                continue
+            content = operation.get("responses", {}).get("200", {}).get("content")
+            if not content:
+                continue
+            checked += 1
+            for media_type, media in content.items():
+                if not typed(media.get("schema")):
+                    untyped.append(f"{method.upper()} {path}  ({media_type})")
+    assert checked >= 100, f"只检查到 {checked} 个端点，疑似路径或响应取错"
+    assert not untyped, (
+        "这些 supervision 端点的 200 响应在契约里没有类型（多半是路由返回裸 dict）。"
+        "前端只能手抄类型，后端改字段时编译期不会报错：\n  "
+        + "\n  ".join(sorted(untyped))
+    )

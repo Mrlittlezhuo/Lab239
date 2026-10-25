@@ -85,11 +85,12 @@ export type AuditEvent = components["schemas"]["AuditEventOut"];
 export type Notification = components["schemas"]["NotificationOut"];
 
 /** 绑导师用的最小用户信息：后端只给这三个字段。 */
-export interface UserHint {
-  user_id: string;
-  username: string;
-  display_name: string;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `SupervisionUserOut` 逐项核对一致
+ * （字段集 / 必填性 / 枚举取值，脚本比对），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type UserHint = components["schemas"]["SupervisionUserOut"];
 
 export const listProjects = () =>
   getJson<SupervisionProject[]>("/supervision/projects");
@@ -155,7 +156,7 @@ export const listNotifications = (unreadOnly = false) =>
 export const markNotificationsRead = (body: {
   notification_id?: string;
   mark_all?: boolean;
-}) => postJson<{ updated: number }>("/supervision/notifications/read", body);
+}) => postJson<components["schemas"]["MarkReadOut"]>("/supervision/notifications/read", body);
 
 /** 关键字至少两个字符，否则后端返回 400。 */
 export const searchUsers = (keyword: string) =>
@@ -587,26 +588,9 @@ export type BriefVersion = components["schemas"]["BriefVersionOut"];
  * （keywords、sub_questions）两边都是字符串数组，并额外给出增删清单
  * （后端 `diff_brief_content`），所以这里必须是联合类型而不是 string。
  */
-export interface BriefChange {
-  field: string;
-  label: string;
-  from: string | string[];
-  to: string | string[];
-  added?: string[];
-  removed?: string[];
-}
+export type BriefChange = components["schemas"]["BriefChangeOut"];
 
-export interface BriefComparison {
-  brief_id: string;
-  code: string;
-  from_version: number;
-  to_version: number;
-  from_status: BriefStatus;
-  to_status: BriefStatus;
-  from_confirmed_at?: string | null;
-  to_confirmed_at?: string | null;
-  changes: BriefChange[];
-}
+export type BriefComparison = components["schemas"]["BriefComparisonOut"];
 
 export const createDialogue = (
   projectRef: string,
@@ -855,27 +839,19 @@ export interface AiReviewFinding {
   batch_index: number;
 }
 
-export interface AiReviewSettings {
-  project_id: string;
-  task_id: string;
-  project_mode: string;
-  task_mode: string;
-  effective_mode: string;
-  auto_review_enabled: boolean;
-  default_is_off: boolean;
-  priority_note: string;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `SettingsOut` 逐项核对一致
+ * （字段集 / 必填性 / 枚举取值，脚本比对），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type AiReviewSettings = components["schemas"]["SettingsOut"];
 
-export interface AiStaleness {
-  run_code: string;
-  stale: boolean;
-  reasons: string[];
-  based_on: string;
-  snapshot_fingerprint: string;
-  attach_allowed: boolean;
-  rerun_allowed: boolean;
-  label: string;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `StalenessOut` 逐项核对一致
+ * （字段集 / 必填性 / 枚举取值，脚本比对），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type AiStaleness = components["schemas"]["StalenessOut"];
 
 export interface AiSuggestion {
   ac_code: string;
@@ -1207,15 +1183,12 @@ export interface LatexConfirmResult {
   progress: LatexProgress;
 }
 
-export interface LatexDraftConfirmBody {
-  task_ref?: string;
-  milestone_ref?: string;
-  done?: string;
-  results?: string;
-  materials?: string;
-  problems?: string;
-  next_steps?: string;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `DraftConfirmBody` 逐项核对一致
+ * （字段集 / 必填性 / 枚举取值，脚本比对），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type LatexDraftConfirmBody = components["schemas"]["DraftConfirmBody"];
 
 export const analyzeLatexArchive = (
   projectRef: string,
@@ -1545,21 +1518,12 @@ export interface LiteratureCitation {
   create_time?: string | null;
 }
 
-export interface LiteratureTaskBody {
-  brief_ref: string;
-  goal: string;
-  purpose?: string;
-  keywords?: string[];
-  synonyms?: string[];
-  exclude_terms?: string[];
-  sources?: string[];
-  year_from?: number | null;
-  year_to?: number | null;
-  require_fulltext?: boolean;
-  result_limit?: number;
-  deep_extract_limit?: number | null;
-  as_draft?: boolean;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `TaskBody` 逐项核对一致
+ * （字段集 / 必填性 / 枚举取值，脚本比对），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type LiteratureTaskBody = components["schemas"]["chatchat__server__api_server__supervision_literature_routes__TaskBody"];
 
 export interface LiteratureConclusionBody {
   statement: string;
