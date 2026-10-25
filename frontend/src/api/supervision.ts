@@ -50,13 +50,12 @@ export type BriefStatus = "draft" | "confirmed" | "rejected" | "superseded";
 // 0A：项目、成员、审计、通知
 // ---------------------------------------------------------------------------
 
-export interface ProjectMember {
-  user_id: string;
-  role: ProjectRole;
-  status: "active" | "removed";
-  joined_at?: string | null;
-  removed_at?: string | null;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `ProjectMemberOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type ProjectMember = components["schemas"]["ProjectMemberOut"];
 
 export interface SupervisionProject {
   project_id: string;
@@ -78,20 +77,12 @@ export interface ProjectDetail extends SupervisionProject {
 /** 与契约 `AuditEventOut` 逐字段一致，直接用生成类型。 */
 export type AuditEvent = components["schemas"]["AuditEventOut"];
 
-export interface Notification {
-  notification_id: string;
-  event_code: string;
-  event_type: string;
-  project_id: string | null;
-  object_type: string;
-  object_code: string;
-  title: string;
-  body: string;
-  level: string;
-  read: boolean;
-  created_at?: string | null;
-  read_at?: string | null;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `NotificationOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type Notification = components["schemas"]["NotificationOut"];
 
 /** 绑导师用的最小用户信息：后端只给这三个字段。 */
 export interface UserHint {
@@ -181,15 +172,21 @@ export const searchUsers = (keyword: string) =>
  */
 export type Milestone = components["schemas"]["MilestoneOut"];
 
-export interface TaskAc {
-  ac_code: string;
-  statement: string;
-  evidence_requirement: string;
-  required: boolean;
-  check_type: string;
-  version: number;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `AcOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type TaskAc = components["schemas"]["AcOut"];
 
+/**
+ * 刻意保持手写，不用契约生成类型。
+ * 后端 TaskOut.required_materials 声明为 List[dict]，契约就是
+ * `array of additionalProperties:true object`，生成类型是 `{}`；前端需要
+ * material.key / label / required 的具体形状（TaskDetail.tsx、taskDraft.ts 在用）。
+ * 其余 18 个字段与 TaskOut 逐项一致（含 status 的 Literal 枚举），只差这一处。
+ * 要接上，先在后端把材料要求声明成模型。
+ */
 export interface Task {
   task_id: string;
   code: string;
@@ -232,32 +229,12 @@ export interface ProgressUpdate {
   notes: ProgressNote[];
 }
 
-export interface Submission {
-  submission_id: string;
-  code: string;
-  /** 例如 S-001-v2；接口引用就用它 */
-  display_code: string;
-  version: number;
-  task_id: string;
-  status: SubmissionStatus;
-  summary: string;
-  git_repo: string;
-  git_branch: string;
-  git_commit: string;
-  experiment_notes: string;
-  known_issues: string;
-  unfinished_items: string;
-  self_assessment: Record<string, unknown>[];
-  /** 提交当时的验收标准快照；导师审核始终绑定它 */
-  ac_snapshot: Record<string, unknown>[];
-  materials: Record<string, unknown>[];
-  /** §6.4 完整性提醒：只警告，不阻止提交 */
-  completeness_check: Record<string, unknown>[];
-  author_id: string;
-  create_time?: string | null;
-  withdrawn_at?: string | null;
-  withdraw_reason: string;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `SubmissionOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type Submission = components["schemas"]["SubmissionOut"];
 
 export interface ReviewAcConclusion {
   ac_code: string;
@@ -266,6 +243,14 @@ export interface ReviewAcConclusion {
   ai_relation: string;
 }
 
+/**
+ * 刻意保持手写，不用契约生成类型。
+ * 后端 ReviewOut.conclusions 的元素里 conclusion: str，契约是 `string`；
+ * 前端 ReviewAcConclusion.conclusion 是窄联合 AcConclusion，接上契约会把这条
+ * 联合放宽成 string，reviewDraft.ts 的 matrixFromConclusions 就失去编译期保护。
+ * 其余 16 个字段与 ReviewOut 逐项一致（含 status 的 Literal 枚举），只差这一处。
+ * 要接上，先把 conclusions 的元素声明成模型并给 conclusion 加 Literal。
+ */
 export interface Review {
   review_id: string;
   code: string;
@@ -285,22 +270,12 @@ export interface Review {
   notes: ProgressNote[];
 }
 
-export interface Attachment {
-  attachment_id: string;
-  code: string;
-  name: string;
-  ext: string;
-  mime_type: string;
-  size: number;
-  sha256: string;
-  version: number;
-  kind: string;
-  status: "active" | "replaced" | "removed";
-  task_id?: string | null;
-  submission_id?: string | null;
-  uploaded_by: string;
-  create_time?: string | null;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `AttachmentOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type Attachment = components["schemas"]["AttachmentOut"];
 
 export interface TaskInput {
   title: string;
@@ -543,19 +518,19 @@ export interface ResearchDialogue {
   update_time?: string | null;
 }
 
-export interface DialogueMessage {
-  message_id: string;
-  query: string;
-  response: string;
-  metadata?: Record<string, unknown> | null;
-  create_time?: string | null;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `DialogueMessageOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type DialogueMessage = components["schemas"]["DialogueMessageOut"];
 
-export interface DialogueMessages {
-  conversation_id: string;
-  code: string;
-  messages: DialogueMessage[];
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `DialogueMessagesOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type DialogueMessages = components["schemas"]["DialogueMessagesOut"];
 
 export interface ResearchBrief {
   brief_id: string;
@@ -598,34 +573,12 @@ export interface ResearchBrief {
   sub_questions: string[];
 }
 
-export interface BriefVersion {
-  version: number;
-  status: BriefStatus;
-  entry_type: string;
-  edited_fields: string[];
-  confirmed_by: string;
-  confirmed_at?: string | null;
-  confirm_note: string;
-  superseded_at?: string | null;
-  create_time?: string | null;
-  source_message_ids: string[];
-  // 14 个内容字段与后端 BriefVersionOut 一一对应（不是 unknown）。
-  background: string;
-  question: string;
-  objectives: string;
-  subjects: string;
-  scope: string;
-  prior_attempts: string;
-  hypotheses: string;
-  constraints: string;
-  methods: string;
-  metrics: string;
-  expected_outcomes: string;
-  to_verify: string;
-  keywords: string[];
-  sub_questions: string[];
-  [key: string]: unknown;
-}
+/**
+ * 字段名、字段类型与必填性都与后端契约 `BriefVersionOut` 逐项核对一致
+ * （脚本比对：字段集 / 必填性 / 枚举取值），因此直接用生成类型。
+ * 后端改这个模型时前端会在编译期报错，而不是运行时拿到 undefined。
+ */
+export type BriefVersion = components["schemas"]["BriefVersionOut"];
 
 /**
  * 版本比较的一条字段差异。

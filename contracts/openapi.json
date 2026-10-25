@@ -128,10 +128,10 @@
         },
         "required": [
           "ac_code",
-          "statement",
+          "check_type",
           "evidence_requirement",
           "required",
-          "check_type",
+          "statement",
           "version"
         ],
         "title": "AcOut",
@@ -204,12 +204,12 @@
           }
         },
         "required": [
-          "run_code",
           "ac_code",
-          "verdict",
-          "conclusion",
           "ai_relation",
-          "review_code"
+          "conclusion",
+          "review_code",
+          "run_code",
+          "verdict"
         ],
         "title": "AdoptOut",
         "type": "object"
@@ -325,6 +325,11 @@
             "type": "integer"
           },
           "status": {
+            "enum": [
+              "active",
+              "replaced",
+              "removed"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -362,15 +367,18 @@
         "required": [
           "attachment_id",
           "code",
-          "name",
+          "create_time",
           "ext",
-          "mime_type",
-          "size",
-          "sha256",
-          "version",
           "kind",
+          "mime_type",
+          "name",
+          "sha256",
+          "size",
           "status",
-          "uploaded_by"
+          "submission_id",
+          "task_id",
+          "uploaded_by",
+          "version"
         ],
         "title": "AttachmentOut",
         "type": "object"
@@ -418,13 +426,14 @@
           }
         },
         "required": [
-          "event_code",
-          "object_type",
-          "object_code",
+          "action",
           "actor_id",
           "actor_role",
-          "action",
-          "detail"
+          "created_at",
+          "detail",
+          "event_code",
+          "object_code",
+          "object_type"
         ],
         "title": "AuditEventOut",
         "type": "object"
@@ -1971,19 +1980,43 @@
           }
         },
         "required": [
+          "background",
           "brief_id",
+          "can_edit",
           "code",
-          "display_code",
-          "project_id",
-          "owner_user_id",
-          "owner_role",
-          "kind",
-          "title",
-          "status",
-          "version_status",
-          "entry_type",
+          "confirm_note",
+          "confirmed_at",
+          "confirmed_by",
+          "constraints",
+          "create_time",
           "current_version",
-          "shown_version"
+          "display_code",
+          "entry_type",
+          "expected_outcomes",
+          "hypotheses",
+          "is_owner",
+          "keywords",
+          "kind",
+          "methods",
+          "metrics",
+          "objectives",
+          "owner_role",
+          "owner_user_id",
+          "prior_attempts",
+          "project_id",
+          "question",
+          "scope",
+          "shared_version",
+          "shown_version",
+          "source_conversation_id",
+          "source_message_ids",
+          "status",
+          "sub_questions",
+          "subjects",
+          "title",
+          "to_verify",
+          "update_time",
+          "version_status"
         ],
         "title": "BriefOut",
         "type": "object"
@@ -2140,6 +2173,12 @@
             "type": "array"
           },
           "status": {
+            "enum": [
+              "draft",
+              "confirmed",
+              "rejected",
+              "superseded"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -2178,9 +2217,30 @@
           }
         },
         "required": [
-          "version",
+          "background",
+          "confirm_note",
+          "confirmed_at",
+          "confirmed_by",
+          "constraints",
+          "create_time",
+          "edited_fields",
+          "entry_type",
+          "expected_outcomes",
+          "hypotheses",
+          "keywords",
+          "methods",
+          "metrics",
+          "objectives",
+          "prior_attempts",
+          "question",
+          "scope",
+          "source_message_ids",
           "status",
-          "entry_type"
+          "sub_questions",
+          "subjects",
+          "superseded_at",
+          "to_verify",
+          "version"
         ],
         "title": "BriefVersionOut",
         "type": "object"
@@ -2505,13 +2565,27 @@
           }
         },
         "required": [
+          "bound_object_code",
+          "bound_object_type",
           "citation_id",
           "code",
+          "content_hash",
+          "create_time",
+          "granted_at",
+          "granted_by",
+          "granted_role",
+          "note",
           "project_id",
+          "purpose",
+          "revoke_reason",
+          "revoked_at",
+          "revoked_by",
+          "snapshot",
+          "source_code",
           "source_kind",
-          "source_ref",
           "source_owner_id",
-          "purpose"
+          "source_ref",
+          "source_version"
         ],
         "title": "CitationOut",
         "type": "object"
@@ -2868,12 +2942,39 @@
           }
         },
         "required": [
-          "conclusion_id",
           "code",
-          "version",
+          "conclusion_id",
+          "confirm_note",
+          "confirmed_at",
+          "confirmed_by",
+          "create_time",
+          "created_by",
+          "created_role",
+          "current_included_count",
+          "evidence_cards",
+          "literature_changed",
+          "literature_count",
+          "literature_snapshot",
+          "literature_snapshot_hash",
+          "mentor_at",
+          "mentor_by",
+          "mentor_note",
+          "mentor_role",
+          "mentor_state",
           "project_id",
+          "research_gaps",
+          "search_task_code",
+          "search_task_id",
           "statement",
-          "status"
+          "status",
+          "student_judgements",
+          "superseded_at",
+          "superseded_by_code",
+          "superseded_by_version",
+          "supported_facts",
+          "unverified_hypotheses",
+          "update_time",
+          "version"
         ],
         "title": "ConclusionOut",
         "type": "object"
@@ -3565,7 +3666,11 @@
           }
         },
         "required": [
-          "message_id"
+          "create_time",
+          "message_id",
+          "metadata",
+          "query",
+          "response"
         ],
         "title": "DialogueMessageOut",
         "type": "object"
@@ -3589,8 +3694,9 @@
           }
         },
         "required": [
+          "code",
           "conversation_id",
-          "code"
+          "messages"
         ],
         "title": "DialogueMessagesOut",
         "type": "object"
@@ -3669,8 +3775,14 @@
           }
         },
         "required": [
+          "chat_type",
+          "code",
           "conversation_id",
-          "code"
+          "create_time",
+          "message_count",
+          "name",
+          "supervision_project_id",
+          "update_time"
         ],
         "title": "DialogueOut",
         "type": "object"
@@ -4078,50 +4190,54 @@
           }
         },
         "required": [
-          "draft_id",
-          "code",
-          "project_id",
-          "library_draft_id",
-          "status",
-          "published",
-          "requires_student_confirmation",
-          "baseline_only",
-          "draft_version",
-          "parser_version",
-          "checker_version",
-          "zip_safety_version",
-          "snapshot_code",
-          "base_snapshot_code",
           "attachment_code",
           "attachment_sha256",
           "attachment_version",
           "base_attachment_code",
-          "base_attachment_version",
           "base_attachment_sha256",
-          "main_file",
+          "base_attachment_version",
           "base_main_file",
-          "summary",
+          "base_snapshot_code",
+          "baseline_only",
           "caveat",
-          "items",
-          "item_count",
-          "truncated",
-          "dropped_items",
-          "counts",
-          "word_count_old",
-          "word_count_new",
-          "word_count_delta",
-          "model_summary",
-          "model_summary_status",
-          "model_summary_note",
-          "model_name",
-          "confirmed_progress_code",
+          "checker_version",
+          "code",
+          "confirmed_at",
           "confirmed_by",
+          "confirmed_progress_code",
           "confirmed_role",
+          "counts",
+          "create_time",
+          "created_by",
+          "created_role",
+          "discard_reason",
+          "discarded_at",
           "discarded_by",
           "discarded_role",
-          "discard_reason",
-          "created_by",
-          "created_role"
+          "draft_id",
+          "draft_version",
+          "dropped_items",
+          "item_count",
+          "items",
+          "library_draft_id",
+          "main_file",
+          "model_name",
+          "model_summary",
+          "model_summary_note",
+          "model_summary_status",
+          "parser_version",
+          "project_id",
+          "published",
+          "requires_student_confirmation",
+          "snapshot_code",
+          "status",
+          "summary",
+          "truncated",
+          "update_time",
+          "word_count_delta",
+          "word_count_new",
+          "word_count_old",
+          "zip_safety_version"
         ],
         "title": "DraftOut",
         "type": "object"
@@ -4313,12 +4429,26 @@
           }
         },
         "required": [
+          "brief_field",
           "card_id",
           "code",
+          "create_time",
+          "created_by",
+          "created_role",
+          "evidence_type",
+          "extraction_id",
+          "extraction_version",
+          "level",
+          "locator",
           "project_id",
-          "result_id",
+          "quote",
+          "quote_verified",
           "result_code",
-          "quote"
+          "result_id",
+          "sub_question",
+          "summary",
+          "support_relation",
+          "updated_at"
         ],
         "title": "EvidenceCardOut",
         "type": "object"
@@ -4594,10 +4724,28 @@
           }
         },
         "required": [
+          "algorithm",
+          "create_time",
+          "created_by",
+          "created_role",
+          "differences",
+          "evidence",
+          "experiments",
           "extraction_id",
+          "level",
+          "limitations",
+          "method",
+          "model_name",
           "project_id",
-          "result_id",
+          "prompt_version",
+          "research_problem",
           "result_code",
+          "result_id",
+          "results_metrics",
+          "subtask_code",
+          "subtask_id",
+          "summary",
+          "superseded_at",
           "version"
         ],
         "title": "ExtractionOut",
@@ -4717,27 +4865,30 @@
           }
         },
         "required": [
-          "finding_id",
-          "run_id",
-          "run_code",
           "ac_code",
           "ac_statement",
           "ac_version",
-          "required",
+          "batch_index",
           "check_type",
-          "verdict",
-          "evidence_depth",
-          "support_relation",
-          "reason",
-          "satisfied_parts",
-          "missing_parts",
-          "mentor_focus",
-          "injection_suspected",
-          "injection_note",
-          "runtime_claim_flag",
           "downgrade_reason",
+          "evidence_depth",
+          "evidence_refs",
+          "finding_id",
+          "injection_note",
+          "injection_suspected",
+          "mentor_focus",
+          "missing_materials",
+          "missing_parts",
+          "reason",
+          "required",
+          "risks",
+          "run_code",
+          "run_id",
+          "runtime_claim_flag",
+          "satisfied_parts",
+          "support_relation",
           "validated",
-          "batch_index"
+          "verdict"
         ],
         "title": "FindingOut",
         "type": "object"
@@ -6103,11 +6254,11 @@
         },
         "required": [
           "ac_code",
-          "verdict",
-          "suggested_conclusion",
-          "mentor_conclusion",
           "ai_relation",
-          "consistent"
+          "consistent",
+          "mentor_conclusion",
+          "suggested_conclusion",
+          "verdict"
         ],
         "title": "MentorDiffOut",
         "type": "object"
@@ -6394,15 +6545,19 @@
           }
         },
         "required": [
-          "milestone_id",
           "code",
-          "title",
+          "create_time",
           "description",
-          "success_criteria",
-          "status",
-          "owner_user_id",
           "mentor_confirmation",
-          "mentor_confirmation_note"
+          "mentor_confirmation_note",
+          "mentor_confirmed_at",
+          "milestone_id",
+          "owner_user_id",
+          "planned_end",
+          "planned_start",
+          "status",
+          "success_criteria",
+          "title"
         ],
         "title": "MilestoneOut",
         "type": "object"
@@ -6561,16 +6716,18 @@
           }
         },
         "required": [
-          "notification_id",
+          "body",
+          "created_at",
           "event_code",
           "event_type",
-          "project_id",
-          "object_type",
-          "object_code",
-          "title",
-          "body",
           "level",
-          "read"
+          "notification_id",
+          "object_code",
+          "object_type",
+          "project_id",
+          "read",
+          "read_at",
+          "title"
         ],
         "title": "NotificationOut",
         "type": "object"
@@ -7969,10 +8126,11 @@
           }
         },
         "required": [
-          "note_id",
-          "note",
           "author_id",
-          "author_role"
+          "author_role",
+          "create_time",
+          "note",
+          "note_id"
         ],
         "title": "ProgressNoteOut",
         "type": "object"
@@ -7993,9 +8151,9 @@
           }
         },
         "required": [
-          "project_id",
           "context",
-          "has_project_context"
+          "has_project_context",
+          "project_id"
         ],
         "title": "ProjectContextOut",
         "type": "object"
@@ -8127,11 +8285,19 @@
           }
         },
         "required": [
-          "project_id",
+          "archive_reject_reason",
+          "archive_request_reason",
+          "archive_requested_at",
+          "archived_at",
           "code",
-          "name",
+          "create_time",
           "description",
-          "status"
+          "members",
+          "my_role",
+          "name",
+          "project_id",
+          "status",
+          "update_time"
         ],
         "title": "ProjectDetailOut",
         "type": "object"
@@ -8161,10 +8327,18 @@
             "title": "Removed At"
           },
           "role": {
+            "enum": [
+              "student",
+              "mentor"
+            ],
             "title": "Role",
             "type": "string"
           },
           "status": {
+            "enum": [
+              "active",
+              "removed"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -8174,9 +8348,11 @@
           }
         },
         "required": [
-          "user_id",
+          "joined_at",
+          "removed_at",
           "role",
-          "status"
+          "status",
+          "user_id"
         ],
         "title": "ProjectMemberOut",
         "type": "object"
@@ -8270,11 +8446,18 @@
           }
         },
         "required": [
-          "project_id",
+          "archive_reject_reason",
+          "archive_request_reason",
+          "archive_requested_at",
+          "archived_at",
           "code",
-          "name",
+          "create_time",
           "description",
-          "status"
+          "my_role",
+          "name",
+          "project_id",
+          "status",
+          "update_time"
         ],
         "title": "ProjectOut",
         "type": "object"
@@ -8937,12 +9120,44 @@
           }
         },
         "required": [
-          "result_id",
+          "abstract",
+          "arxiv_id",
+          "authors",
           "code",
-          "project_id",
-          "search_task_id",
+          "create_time",
+          "decided_at",
+          "decided_by",
+          "decided_role",
+          "decision",
+          "decision_history",
+          "decision_reason",
           "dedup_key",
-          "title"
+          "doi",
+          "evidence_cards",
+          "extract_state",
+          "first_seen_at",
+          "fulltext_status",
+          "latest_extraction_version",
+          "project_id",
+          "recommended_action",
+          "relevance_level",
+          "relevance_matched",
+          "relevance_missing",
+          "relevance_reason",
+          "relevance_rules_version",
+          "relevance_score",
+          "relevance_score_source",
+          "result_id",
+          "search_task_id",
+          "semantic_analysis",
+          "source",
+          "sources",
+          "subtask_id",
+          "title",
+          "title_key",
+          "update_time",
+          "url",
+          "year"
         ],
         "title": "ResultOut",
         "type": "object"
@@ -8968,9 +9183,9 @@
         },
         "required": [
           "ac_code",
+          "ai_relation",
           "conclusion",
-          "reason",
-          "ai_relation"
+          "reason"
         ],
         "title": "ReviewAcOut",
         "type": "object"
@@ -9102,6 +9317,11 @@
             "type": "string"
           },
           "status": {
+            "enum": [
+              "not_started",
+              "drafting",
+              "published"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -9122,16 +9342,22 @@
           }
         },
         "required": [
-          "review_id",
           "code",
-          "submission_id",
-          "task_id",
-          "status",
-          "overall_decision",
+          "conclusions",
           "decision_reason",
           "feedback",
+          "first_touched_at",
+          "must_fix",
           "next_steps",
-          "reviewer_id"
+          "notes",
+          "overall_decision",
+          "published_at",
+          "review_id",
+          "reviewer_id",
+          "status",
+          "submission_id",
+          "suggestions",
+          "task_id"
         ],
         "title": "ReviewOut",
         "type": "object"
@@ -9523,25 +9749,59 @@
           }
         },
         "required": [
-          "run_id",
+          "ac_version",
+          "attach_allowed",
+          "attached_to_submission",
+          "budget_config_version",
+          "call_plan",
+          "cancel_reason",
+          "cancelled_at",
+          "cancelled_by",
+          "check_snapshot",
           "code",
+          "completed_batches",
+          "create_time",
           "display_code",
-          "revision",
+          "draft_fingerprint",
+          "failure_reason",
+          "finding_counts",
+          "finished_at",
+          "input_budget",
+          "material_manifest",
+          "model_available",
+          "model_calls",
+          "model_name",
+          "parser_version",
+          "partial_results",
+          "partially_read_materials",
           "project_id",
-          "task_id",
+          "queue_status",
+          "queued_at",
+          "revision",
+          "rules_version",
+          "run_id",
+          "security_flags",
+          "stale",
+          "stale_label",
+          "stale_reasons",
+          "started_at",
+          "status",
+          "submission_code",
+          "submission_display",
+          "submission_id",
+          "submission_version",
+          "summary_note",
+          "summary_state",
           "task_code",
+          "task_id",
+          "total_batches",
           "trigger_source",
           "triggered_by",
           "triggered_role",
-          "status",
-          "summary_state",
-          "summary_note",
-          "ac_version",
-          "total_batches",
-          "completed_batches",
-          "partial_results",
+          "unchecked_acs",
+          "unread_materials",
           "visible_to_mentor",
-          "attached_to_submission"
+          "whitelist_version"
         ],
         "title": "RunOut",
         "type": "object"
@@ -9815,14 +10075,14 @@
           }
         },
         "required": [
-          "project_id",
-          "task_id",
-          "project_mode",
-          "task_mode",
-          "effective_mode",
           "auto_review_enabled",
           "default_is_off",
-          "priority_note"
+          "effective_mode",
+          "priority_note",
+          "project_id",
+          "project_mode",
+          "task_id",
+          "task_mode"
         ],
         "title": "SettingsOut",
         "type": "object"
@@ -10040,40 +10300,43 @@
           }
         },
         "required": [
-          "snapshot_id",
-          "code",
-          "project_id",
           "attachment_code",
           "attachment_name",
           "attachment_sha256",
           "attachment_version",
+          "available_files",
+          "candidates",
+          "check",
+          "checker_version",
+          "code",
+          "compiled",
+          "counts",
+          "create_time",
+          "created_by",
+          "created_role",
+          "dangerous_findings",
+          "document",
+          "document_present",
+          "extracted_files",
+          "file_count",
+          "finding_counts",
+          "findings",
+          "limits",
+          "main",
           "main_file",
           "main_path",
           "main_status",
-          "main",
-          "candidates",
-          "parser_version",
-          "checker_version",
-          "zip_safety_version",
-          "limits",
-          "parse_budget",
-          "document_present",
-          "compiled",
-          "counts",
-          "outline",
-          "word_count",
-          "findings",
-          "finding_counts",
-          "dangerous_findings",
-          "partially_read",
           "not_read",
-          "unreferenced_tex",
-          "available_files",
-          "extracted_files",
-          "file_count",
+          "outline",
+          "parse_budget",
+          "parser_version",
+          "partially_read",
+          "project_id",
+          "snapshot_id",
           "total_bytes",
-          "created_by",
-          "created_role"
+          "unreferenced_tex",
+          "word_count",
+          "zip_safety_version"
         ],
         "title": "SnapshotOut",
         "type": "object"
@@ -10118,13 +10381,14 @@
           }
         },
         "required": [
-          "run_code",
-          "stale",
-          "based_on",
-          "snapshot_fingerprint",
           "attach_allowed",
+          "based_on",
+          "label",
+          "reasons",
           "rerun_allowed",
-          "label"
+          "run_code",
+          "snapshot_fingerprint",
+          "stale"
         ],
         "title": "StalenessOut",
         "type": "object"
@@ -10269,6 +10533,11 @@
             "type": "array"
           },
           "status": {
+            "enum": [
+              "submitted",
+              "withdrawn",
+              "superseded"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -10310,20 +10579,27 @@
           }
         },
         "required": [
-          "submission_id",
+          "ac_snapshot",
+          "author_id",
           "code",
+          "completeness_check",
+          "create_time",
           "display_code",
-          "version",
-          "task_id",
-          "status",
-          "summary",
-          "git_repo",
+          "experiment_notes",
           "git_branch",
           "git_commit",
-          "experiment_notes",
+          "git_repo",
           "known_issues",
+          "materials",
+          "self_assessment",
+          "status",
+          "submission_id",
+          "summary",
+          "task_id",
           "unfinished_items",
-          "author_id"
+          "version",
+          "withdraw_reason",
+          "withdrawn_at"
         ],
         "title": "SubmissionOut",
         "type": "object"
@@ -10516,10 +10792,34 @@
           }
         },
         "required": [
-          "subtask_id",
+          "attempt",
+          "cancel_reason",
+          "cancelled_at",
+          "cancelled_by",
           "code",
+          "consumer",
+          "create_time",
+          "created_by",
+          "created_role",
+          "duplicate_total",
+          "error_code",
+          "error_message",
+          "failure_history",
+          "finished_at",
           "kind",
-          "status"
+          "model_calls",
+          "model_name",
+          "new_total",
+          "payload",
+          "prompt_version",
+          "query",
+          "queued_at",
+          "result_total",
+          "source",
+          "started_at",
+          "status",
+          "subtask_id",
+          "update_time"
         ],
         "title": "SubtaskOut",
         "type": "object"
@@ -10553,11 +10853,11 @@
         },
         "required": [
           "ac_code",
-          "verdict",
+          "note",
+          "reason",
           "suggested_conclusion",
           "suggested_label",
-          "reason",
-          "note"
+          "verdict"
         ],
         "title": "SuggestionOut",
         "type": "object"
@@ -10579,9 +10879,9 @@
           }
         },
         "required": [
+          "display_name",
           "user_id",
-          "username",
-          "display_name"
+          "username"
         ],
         "title": "SupervisionUserOut",
         "type": "object"
@@ -10755,17 +11055,19 @@
           }
         },
         "required": [
-          "progress_id",
-          "code",
-          "project_id",
-          "done",
-          "results",
-          "materials",
-          "problems",
-          "next_steps",
-          "links",
           "author_id",
-          "author_role"
+          "author_role",
+          "code",
+          "create_time",
+          "done",
+          "links",
+          "materials",
+          "next_steps",
+          "problems",
+          "progress_id",
+          "project_id",
+          "results",
+          "task_id"
         ],
         "title": "ProgressOut",
         "type": "object"
@@ -11263,15 +11565,62 @@
           }
         },
         "required": [
-          "task_id",
-          "code",
-          "project_id",
-          "status",
-          "purpose",
-          "goal",
-          "brief_id",
           "brief_code",
-          "brief_version"
+          "brief_confirmed_at",
+          "brief_confirmed_by",
+          "brief_id",
+          "brief_kind",
+          "brief_latest_version",
+          "brief_shared_version",
+          "brief_snapshot",
+          "brief_superseded",
+          "brief_version",
+          "close_reason",
+          "closed_at",
+          "code",
+          "concluded_at",
+          "conclusion_total",
+          "create_time",
+          "created_by",
+          "created_role",
+          "deduped_total",
+          "deep_extract_limit",
+          "deep_extract_used",
+          "exclude_terms",
+          "excluded_total",
+          "goal",
+          "hits_total",
+          "included_total",
+          "keywords",
+          "plan_error",
+          "plan_status",
+          "project_id",
+          "purpose",
+          "read_later_total",
+          "recent_subtasks",
+          "require_fulltext",
+          "result_limit",
+          "result_total",
+          "search_plan",
+          "search_plan_confirmed_at",
+          "search_plan_confirmed_by",
+          "search_plan_generated_at",
+          "search_plan_model",
+          "search_plan_note",
+          "search_plan_prompt_version",
+          "searched_at",
+          "source_failures",
+          "sources",
+          "status",
+          "stored_total",
+          "subtask_failed_total",
+          "subtask_total",
+          "synonyms",
+          "task_id",
+          "undecided_total",
+          "update_time",
+          "year_from",
+          "year_to"
         ],
         "title": "TaskOut",
         "type": "object"
@@ -11534,15 +11883,20 @@
           }
         },
         "required": [
-          "progress_id",
-          "code",
-          "done",
-          "results",
-          "materials",
-          "problems",
-          "next_steps",
           "author_id",
-          "author_role"
+          "author_role",
+          "code",
+          "create_time",
+          "done",
+          "links",
+          "materials",
+          "milestone_id",
+          "next_steps",
+          "notes",
+          "problems",
+          "progress_id",
+          "results",
+          "task_id"
         ],
         "title": "ProgressOut",
         "type": "object"
@@ -11722,6 +12076,13 @@
             "type": "boolean"
           },
           "status": {
+            "enum": [
+              "draft",
+              "active",
+              "completed",
+              "cancelled",
+              "archived"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -11739,17 +12100,24 @@
           }
         },
         "required": [
-          "task_id",
+          "acs",
+          "cancel_reason",
           "code",
-          "title",
-          "purpose",
+          "create_time",
           "description",
-          "status",
+          "due_at",
           "label",
+          "milestone_id",
           "priority",
-          "version",
+          "published_at",
+          "purpose",
+          "required_materials",
           "requires_code_review",
-          "requires_runtime"
+          "requires_runtime",
+          "status",
+          "task_id",
+          "title",
+          "version"
         ],
         "title": "TaskOut",
         "type": "object"

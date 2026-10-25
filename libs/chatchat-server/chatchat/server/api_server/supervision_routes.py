@@ -29,10 +29,11 @@
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -82,15 +83,19 @@ def _resolve_or_404(
 # ---------------------------------------------------------------------------
 
 
-class ProjectMemberOut(BaseModel):
+class ProjectMemberOut(ResponseModel):
     user_id: str
-    role: str
-    status: str
+    # 用 Literal 而不是 str：DB 本来就有 CHECK 约束（migrations.py:1237-1238，
+    # role IN ('student','mentor') / status IN ('active','removed')）。声明成 str
+    # 时契约只能给 `string`，前端就只能自己手抄窄枚举；后端加取值时前端不会有任何
+    # 编译期信号。声明成 Literal 后契约产出 enum，前端由契约生成的类型就是窄的。
+    role: Literal["student", "mentor"]
+    status: Literal["active", "removed"]
     joined_at: Optional[str] = None
     removed_at: Optional[str] = None
 
 
-class SupervisionUserOut(BaseModel):
+class SupervisionUserOut(ResponseModel):
     """绑定项目成员用的最小用户信息（不含角色、状态、时间戳）。"""
 
     user_id: str
@@ -98,7 +103,7 @@ class SupervisionUserOut(BaseModel):
     display_name: str
 
 
-class ProjectOut(BaseModel):
+class ProjectOut(ResponseModel):
     project_id: str
     code: str
     name: str
@@ -117,7 +122,7 @@ class ProjectDetailOut(ProjectOut):
     members: List[ProjectMemberOut] = Field(default_factory=list)
 
 
-class AuditEventOut(BaseModel):
+class AuditEventOut(ResponseModel):
     event_code: str
     object_type: str
     object_code: str
@@ -128,7 +133,7 @@ class AuditEventOut(BaseModel):
     created_at: Optional[str] = None
 
 
-class NotificationOut(BaseModel):
+class NotificationOut(ResponseModel):
     notification_id: str
     event_code: str
     event_type: str

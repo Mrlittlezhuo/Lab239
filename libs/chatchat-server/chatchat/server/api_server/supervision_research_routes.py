@@ -20,10 +20,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -222,7 +223,7 @@ class ReasonBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class DialogueOut(BaseModel):
+class DialogueOut(ResponseModel):
     conversation_id: str
     code: str
     name: Optional[str] = None
@@ -233,7 +234,7 @@ class DialogueOut(BaseModel):
     update_time: Optional[datetime] = None
 
 
-class DialogueMessageOut(BaseModel):
+class DialogueMessageOut(ResponseModel):
     message_id: str
     query: Optional[str] = None
     response: Optional[str] = None
@@ -241,13 +242,13 @@ class DialogueMessageOut(BaseModel):
     create_time: Optional[datetime] = None
 
 
-class DialogueMessagesOut(BaseModel):
+class DialogueMessagesOut(ResponseModel):
     conversation_id: str
     code: str
     messages: List[DialogueMessageOut] = Field(default_factory=list)
 
 
-class BriefOut(BaseModel):
+class BriefOut(ResponseModel):
     brief_id: str
     code: str
     display_code: str
@@ -288,9 +289,10 @@ class BriefOut(BaseModel):
     sub_questions: List[str] = Field(default_factory=list)
 
 
-class BriefVersionOut(BaseModel):
+class BriefVersionOut(ResponseModel):
     version: int
-    status: str
+    # CHECK（migrations.py:1636）status IN ('draft','confirmed','rejected','superseded')
+    status: Literal["draft", "confirmed", "rejected", "superseded"]
     entry_type: str
     edited_fields: List[str] = Field(default_factory=list)
     confirmed_by: str = ""
@@ -315,7 +317,7 @@ class BriefVersionOut(BaseModel):
     sub_questions: List[str] = Field(default_factory=list)
 
 
-class ProjectContextOut(BaseModel):
+class ProjectContextOut(ResponseModel):
     project_id: str
     context: str
     has_project_context: bool

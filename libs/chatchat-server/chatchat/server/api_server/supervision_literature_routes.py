@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -370,7 +371,7 @@ class CitationBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class StrictOut(BaseModel):
+class StrictOut(ResponseModel):
     model_config = ConfigDict(extra="ignore")
 
 

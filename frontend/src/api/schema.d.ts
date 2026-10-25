@@ -71,16 +71,16 @@ export interface components {
     AttachmentOut: {
       attachment_id: string;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       ext: string;
       kind: string;
       mime_type: string;
       name: string;
       sha256: string;
       size: number;
-      status: string;
-      submission_id?: string | null;
-      task_id?: string | null;
+      status: "active" | "replaced" | "removed";
+      submission_id: string | null;
+      task_id: string | null;
       uploaded_by: string;
       version: number;
     };
@@ -88,7 +88,7 @@ export interface components {
       action: string;
       actor_id: string;
       actor_role: string;
-      created_at?: string | null;
+      created_at: string | null;
       detail: string;
       event_code: string;
       object_code: string;
@@ -291,42 +291,42 @@ export interface components {
       to_verify?: string | string[];
     };
     BriefOut: {
-      background?: string;
+      background: string;
       brief_id: string;
-      can_edit?: boolean;
+      can_edit: boolean;
       code: string;
-      confirm_note?: string;
-      confirmed_at?: string | null;
-      confirmed_by?: string;
-      constraints?: string;
-      create_time?: string | null;
+      confirm_note: string;
+      confirmed_at: string | null;
+      confirmed_by: string;
+      constraints: string;
+      create_time: string | null;
       current_version: number;
       display_code: string;
       entry_type: string;
-      expected_outcomes?: string;
-      hypotheses?: string;
-      is_owner?: boolean;
-      keywords?: string[];
+      expected_outcomes: string;
+      hypotheses: string;
+      is_owner: boolean;
+      keywords: string[];
       kind: string;
-      methods?: string;
-      metrics?: string;
-      objectives?: string;
+      methods: string;
+      metrics: string;
+      objectives: string;
       owner_role: string;
       owner_user_id: string;
-      prior_attempts?: string;
+      prior_attempts: string;
       project_id: string;
-      question?: string;
-      scope?: string;
-      shared_version?: number | null;
+      question: string;
+      scope: string;
+      shared_version: number | null;
       shown_version: number;
-      source_conversation_id?: string | null;
-      source_message_ids?: string[];
+      source_conversation_id: string | null;
+      source_message_ids: string[];
       status: string;
-      sub_questions?: string[];
-      subjects?: string;
+      sub_questions: string[];
+      subjects: string;
       title: string;
-      to_verify?: string;
-      update_time?: string | null;
+      to_verify: string;
+      update_time: string | null;
       version_status: string;
     };
     BriefPatchBody: {
@@ -335,29 +335,29 @@ export interface components {
       title?: string | null;
     };
     BriefVersionOut: {
-      background?: string;
-      confirm_note?: string;
-      confirmed_at?: string | null;
-      confirmed_by?: string;
-      constraints?: string;
-      create_time?: string | null;
-      edited_fields?: string[];
+      background: string;
+      confirm_note: string;
+      confirmed_at: string | null;
+      confirmed_by: string;
+      constraints: string;
+      create_time: string | null;
+      edited_fields: string[];
       entry_type: string;
-      expected_outcomes?: string;
-      hypotheses?: string;
-      keywords?: string[];
-      methods?: string;
-      metrics?: string;
-      objectives?: string;
-      prior_attempts?: string;
-      question?: string;
-      scope?: string;
-      source_message_ids?: string[];
-      status: string;
-      sub_questions?: string[];
-      subjects?: string;
-      superseded_at?: string | null;
-      to_verify?: string;
+      expected_outcomes: string;
+      hypotheses: string;
+      keywords: string[];
+      methods: string;
+      metrics: string;
+      objectives: string;
+      prior_attempts: string;
+      question: string;
+      scope: string;
+      source_message_ids: string[];
+      status: "draft" | "confirmed" | "rejected" | "superseded";
+      sub_questions: string[];
+      subjects: string;
+      superseded_at: string | null;
+      to_verify: string;
       version: number;
     };
     CancelBody: {
@@ -401,29 +401,29 @@ export interface components {
       source_ref: string;
     };
     CitationOut: {
-      bound_object_code?: string;
-      bound_object_type?: string;
+      bound_object_code: string;
+      bound_object_type: string;
       citation_id: string;
       code: string;
-      content_hash?: string;
-      create_time?: string | null;
-      granted_at?: string | null;
-      granted_by?: string;
-      granted_role?: string;
-      note?: string;
+      content_hash: string;
+      create_time: string | null;
+      granted_at: string | null;
+      granted_by: string;
+      granted_role: string;
+      note: string;
       project_id: string;
       purpose: string;
-      revoke_reason?: string;
-      revoked_at?: string | null;
-      revoked_by?: string;
-      snapshot?: {
+      revoke_reason: string;
+      revoked_at: string | null;
+      revoked_by: string;
+      snapshot: {
         [key: string]: unknown;
       };
-      source_code?: string;
+      source_code: string;
       source_kind: string;
       source_owner_id: string;
       source_ref: string;
-      source_version?: string;
+      source_version: string;
     };
     CompareBody: {
       result_refs?: string[];
@@ -453,46 +453,46 @@ export interface components {
     ConclusionOut: {
       code: string;
       conclusion_id: string;
-      confirm_note?: string;
-      confirmed_at?: string | null;
-      confirmed_by?: string;
-      create_time?: string | null;
-      created_by?: string;
-      created_role?: string;
-      current_included_count?: number;
-      evidence_cards?: {
+      confirm_note: string;
+      confirmed_at: string | null;
+      confirmed_by: string;
+      create_time: string | null;
+      created_by: string;
+      created_role: string;
+      current_included_count: number;
+      evidence_cards: {
         [key: string]: unknown;
       }[];
-      literature_changed?: boolean;
-      literature_count?: number;
-      literature_snapshot?: {
+      literature_changed: boolean;
+      literature_count: number;
+      literature_snapshot: {
         [key: string]: unknown;
       }[];
-      literature_snapshot_hash?: string;
-      mentor_at?: string | null;
-      mentor_by?: string;
-      mentor_note?: string;
-      mentor_role?: string;
-      mentor_state?: string;
+      literature_snapshot_hash: string;
+      mentor_at: string | null;
+      mentor_by: string;
+      mentor_note: string;
+      mentor_role: string;
+      mentor_state: string;
       project_id: string;
-      research_gaps?: string[];
-      search_task_code?: string;
-      search_task_id?: string | null;
+      research_gaps: string[];
+      search_task_code: string;
+      search_task_id: string | null;
       statement: string;
       status: string;
-      student_judgements?: {
+      student_judgements: {
         [key: string]: unknown;
       }[];
-      superseded_at?: string | null;
-      superseded_by_code?: string;
-      superseded_by_version?: number;
-      supported_facts?: {
+      superseded_at: string | null;
+      superseded_by_code: string;
+      superseded_by_version: number;
+      supported_facts: {
         [key: string]: unknown;
       }[];
-      unverified_hypotheses?: {
+      unverified_hypotheses: {
         [key: string]: unknown;
       }[];
-      update_time?: string | null;
+      update_time: string | null;
       version: number;
     };
     ConfirmBody: {
@@ -596,28 +596,28 @@ export interface components {
       text: string;
     };
     DialogueMessageOut: {
-      create_time?: string | null;
+      create_time: string | null;
       message_id: string;
-      metadata?: {
+      metadata: {
         [key: string]: unknown;
       };
-      query?: string | null;
-      response?: string | null;
+      query: string | null;
+      response: string | null;
     };
     DialogueMessagesOut: {
       code: string;
       conversation_id: string;
-      messages?: components["schemas"]["DialogueMessageOut"][];
+      messages: components["schemas"]["DialogueMessageOut"][];
     };
     DialogueOut: {
-      chat_type?: string | null;
+      chat_type: string | null;
       code: string;
       conversation_id: string;
-      create_time?: string | null;
-      message_count?: number;
-      name?: string | null;
-      supervision_project_id?: string | null;
-      update_time?: string | null;
+      create_time: string | null;
+      message_count: number;
+      name: string | null;
+      supervision_project_id: string | null;
+      update_time: string | null;
     };
     DimensionItem: {
       id: string;
@@ -666,18 +666,18 @@ export interface components {
       caveat: string;
       checker_version: string;
       code: string;
-      confirmed_at?: string | null;
+      confirmed_at: string | null;
       confirmed_by: string;
       confirmed_progress_code: string;
       confirmed_role: string;
       counts: {
         [key: string]: unknown;
       };
-      create_time?: string | null;
+      create_time: string | null;
       created_by: string;
       created_role: string;
       discard_reason: string;
-      discarded_at?: string | null;
+      discarded_at: string | null;
       discarded_by: string;
       discarded_role: string;
       draft_id: string;
@@ -701,7 +701,7 @@ export interface components {
       status: string;
       summary: string;
       truncated: boolean;
-      update_time?: string | null;
+      update_time: string | null;
       word_count_delta: number;
       word_count_new: number;
       word_count_old: number;
@@ -722,28 +722,28 @@ export interface components {
       support_relation?: string;
     };
     EvidenceCardOut: {
-      brief_field?: string;
+      brief_field: string;
       card_id: string;
       code: string;
-      create_time?: string | null;
-      created_by?: string;
-      created_role?: string;
-      evidence_type?: string;
-      extraction_id?: string | null;
-      extraction_version?: number;
-      level?: string;
-      locator?: {
+      create_time: string | null;
+      created_by: string;
+      created_role: string;
+      evidence_type: string;
+      extraction_id: string | null;
+      extraction_version: number;
+      level: string;
+      locator: {
         [key: string]: unknown;
       };
       project_id: string;
       quote: string;
-      quote_verified?: boolean;
+      quote_verified: boolean;
       result_code: string;
       result_id: string;
-      sub_question?: string;
-      summary?: string;
-      support_relation?: string;
-      updated_at?: string | null;
+      sub_question: string;
+      summary: string;
+      support_relation: string;
+      updated_at: string | null;
     };
     EvidenceExtractRequest: {
       model?: string | null;
@@ -765,32 +765,32 @@ export interface components {
       title?: string;
     };
     ExtractionOut: {
-      algorithm?: string;
-      create_time?: string | null;
-      created_by?: string;
-      created_role?: string;
-      differences?: {
+      algorithm: string;
+      create_time: string | null;
+      created_by: string;
+      created_role: string;
+      differences: {
         [key: string]: unknown;
       };
-      evidence?: {
+      evidence: {
         [key: string]: unknown;
       }[];
-      experiments?: string;
+      experiments: string;
       extraction_id: string;
-      level?: string;
-      limitations?: string;
-      method?: string;
-      model_name?: string;
+      level: string;
+      limitations: string;
+      method: string;
+      model_name: string;
       project_id: string;
-      prompt_version?: string;
-      research_problem?: string;
+      prompt_version: string;
+      research_problem: string;
       result_code: string;
       result_id: string;
-      results_metrics?: string;
-      subtask_code?: string;
-      subtask_id?: string;
-      summary?: string;
-      superseded_at?: string | null;
+      results_metrics: string;
+      subtask_code: string;
+      subtask_id: string;
+      summary: string;
+      superseded_at: string | null;
       version: number;
     };
     FindingOut: {
@@ -801,18 +801,18 @@ export interface components {
       check_type: string;
       downgrade_reason: string;
       evidence_depth: string;
-      evidence_refs?: {
+      evidence_refs: {
         [key: string]: unknown;
       }[];
       finding_id: string;
       injection_note: string;
       injection_suspected: boolean;
       mentor_focus: string;
-      missing_materials?: string[];
+      missing_materials: string[];
       missing_parts: string;
       reason: string;
       required: boolean;
-      risks?: {
+      risks: {
         [key: string]: unknown;
       }[];
       run_code: string;
@@ -1066,15 +1066,15 @@ export interface components {
     };
     MilestoneOut: {
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       description: string;
       mentor_confirmation: string;
       mentor_confirmation_note: string;
-      mentor_confirmed_at?: string | null;
+      mentor_confirmed_at: string | null;
       milestone_id: string;
       owner_user_id: string;
-      planned_end?: string | null;
-      planned_start?: string | null;
+      planned_end: string | null;
+      planned_start: string | null;
       status: string;
       success_criteria: string;
       title: string;
@@ -1090,7 +1090,7 @@ export interface components {
     };
     NotificationOut: {
       body: string;
-      created_at?: string | null;
+      created_at: string | null;
       event_code: string;
       event_type: string;
       level: string;
@@ -1099,7 +1099,7 @@ export interface components {
       object_type: string;
       project_id: string;
       read: boolean;
-      read_at?: string | null;
+      read_at: string | null;
       title: string;
     };
     OpenAIAudioSpeechInput: {
@@ -1314,7 +1314,7 @@ export interface components {
     ProgressNoteOut: {
       author_id: string;
       author_role: string;
-      create_time?: string | null;
+      create_time: string | null;
       note: string;
       note_id: string;
     };
@@ -1329,40 +1329,40 @@ export interface components {
       scope?: string;
     };
     ProjectDetailOut: {
-      archive_reject_reason?: string;
-      archive_request_reason?: string;
-      archive_requested_at?: string | null;
-      archived_at?: string | null;
+      archive_reject_reason: string;
+      archive_request_reason: string;
+      archive_requested_at: string | null;
+      archived_at: string | null;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       description: string;
-      members?: components["schemas"]["ProjectMemberOut"][];
-      my_role?: string | null;
+      members: components["schemas"]["ProjectMemberOut"][];
+      my_role: string | null;
       name: string;
       project_id: string;
       status: string;
-      update_time?: string | null;
+      update_time: string | null;
     };
     ProjectMemberOut: {
-      joined_at?: string | null;
-      removed_at?: string | null;
-      role: string;
-      status: string;
+      joined_at: string | null;
+      removed_at: string | null;
+      role: "student" | "mentor";
+      status: "active" | "removed";
       user_id: string;
     };
     ProjectOut: {
-      archive_reject_reason?: string;
-      archive_request_reason?: string;
-      archive_requested_at?: string | null;
-      archived_at?: string | null;
+      archive_reject_reason: string;
+      archive_request_reason: string;
+      archive_requested_at: string | null;
+      archived_at: string | null;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       description: string;
-      my_role?: string | null;
+      my_role: string | null;
       name: string;
       project_id: string;
       status: string;
-      update_time?: string | null;
+      update_time: string | null;
     };
     ProjectUpdate: {
       name?: string | null;
@@ -1425,54 +1425,54 @@ export interface components {
       type: "text";
     };
     ResultOut: {
-      abstract?: string;
-      arxiv_id?: string | null;
-      authors?: string;
+      abstract: string;
+      arxiv_id: string | null;
+      authors: string;
       code: string;
-      create_time?: string | null;
-      decided_at?: string | null;
-      decided_by?: string;
-      decided_role?: string;
-      decision?: string;
-      decision_history?: {
+      create_time: string | null;
+      decided_at: string | null;
+      decided_by: string;
+      decided_role: string;
+      decision: string;
+      decision_history: {
         [key: string]: unknown;
       }[];
-      decision_reason?: string;
+      decision_reason: string;
       dedup_key: string;
-      doi?: string | null;
-      evidence_cards?: components["schemas"]["EvidenceCardOut"][];
-      extract_state?: string;
-      first_seen_at?: string | null;
-      fulltext_status?: string;
-      latest_extraction_version?: number;
+      doi: string | null;
+      evidence_cards: components["schemas"]["EvidenceCardOut"][];
+      extract_state: string;
+      first_seen_at: string | null;
+      fulltext_status: string;
+      latest_extraction_version: number;
       project_id: string;
-      recommended_action?: string;
-      relevance_level?: string;
-      relevance_matched?: {
+      recommended_action: string;
+      relevance_level: string;
+      relevance_matched: {
         [key: string]: unknown;
       }[];
-      relevance_missing?: {
+      relevance_missing: {
         [key: string]: unknown;
       }[];
-      relevance_reason?: string;
-      relevance_rules_version?: string;
-      relevance_score?: number | null;
-      relevance_score_source?: string;
+      relevance_reason: string;
+      relevance_rules_version: string;
+      relevance_score: number | null;
+      relevance_score_source: string;
       result_id: string;
       search_task_id: string;
-      semantic_analysis?: {
+      semantic_analysis: {
         [key: string]: unknown;
       };
-      source?: string;
-      sources?: {
+      source: string;
+      sources: {
         [key: string]: unknown;
       }[];
-      subtask_id?: string;
+      subtask_id: string;
       title: string;
-      title_key?: string | null;
-      update_time?: string | null;
-      url?: string | null;
-      year?: number | null;
+      title_key: string | null;
+      update_time: string | null;
+      url: string | null;
+      year: number | null;
     };
     ReviewAcOut: {
       ac_code: string;
@@ -1489,20 +1489,20 @@ export interface components {
     };
     ReviewOut: {
       code: string;
-      conclusions?: components["schemas"]["ReviewAcOut"][];
+      conclusions: components["schemas"]["ReviewAcOut"][];
       decision_reason: string;
       feedback: string;
-      first_touched_at?: string | null;
-      must_fix?: string[];
+      first_touched_at: string | null;
+      must_fix: string[];
       next_steps: string;
-      notes?: components["schemas"]["ProgressNoteOut"][];
+      notes: components["schemas"]["ProgressNoteOut"][];
       overall_decision: string;
-      published_at?: string | null;
+      published_at: string | null;
       review_id: string;
       reviewer_id: string;
-      status: string;
+      status: "not_started" | "drafting" | "published";
       submission_id: string;
-      suggestions?: string[];
+      suggestions: string[];
       task_id: string;
     };
     ReviewPublishBody: {
@@ -1516,62 +1516,62 @@ export interface components {
     };
     RunOut: {
       ac_version: number;
-      attach_allowed?: boolean;
+      attach_allowed: boolean;
       attached_to_submission: boolean;
-      budget_config_version?: string;
-      call_plan?: {
+      budget_config_version: string;
+      call_plan: {
         [key: string]: unknown;
       }[];
-      cancel_reason?: string;
-      cancelled_at?: string | null;
-      cancelled_by?: string;
-      check_snapshot?: {
+      cancel_reason: string;
+      cancelled_at: string | null;
+      cancelled_by: string;
+      check_snapshot: {
         [key: string]: unknown;
       };
       code: string;
       completed_batches: number;
-      create_time?: string | null;
+      create_time: string | null;
       display_code: string;
-      draft_fingerprint?: string;
-      failure_reason?: string;
-      finding_counts?: {
+      draft_fingerprint: string;
+      failure_reason: string;
+      finding_counts: {
         [key: string]: unknown;
       };
-      finished_at?: string | null;
-      input_budget?: {
+      finished_at: string | null;
+      input_budget: {
         [key: string]: unknown;
       };
-      material_manifest?: {
+      material_manifest: {
         [key: string]: unknown;
       }[];
-      model_available?: boolean;
-      model_calls?: {
+      model_available: boolean;
+      model_calls: {
         [key: string]: unknown;
       }[];
-      model_name?: string;
-      parser_version?: string;
+      model_name: string;
+      parser_version: string;
       partial_results: boolean;
-      partially_read_materials?: {
+      partially_read_materials: {
         [key: string]: unknown;
       }[];
       project_id: string;
-      queue_status?: {
+      queue_status: {
         [key: string]: unknown;
       };
-      queued_at?: string | null;
+      queued_at: string | null;
       revision: number;
-      rules_version?: string;
+      rules_version: string;
       run_id: string;
-      security_flags?: string[];
-      stale?: boolean;
-      stale_label?: string;
-      stale_reasons?: string[];
-      started_at?: string | null;
+      security_flags: string[];
+      stale: boolean;
+      stale_label: string;
+      stale_reasons: string[];
+      started_at: string | null;
       status: string;
-      submission_code?: string;
-      submission_display?: string;
-      submission_id?: string | null;
-      submission_version?: number;
+      submission_code: string;
+      submission_display: string;
+      submission_id: string | null;
+      submission_version: number;
       summary_note: string;
       summary_state: string;
       task_code: string;
@@ -1580,12 +1580,12 @@ export interface components {
       trigger_source: string;
       triggered_by: string;
       triggered_role: string;
-      unchecked_acs?: string[];
-      unread_materials?: {
+      unchecked_acs: string[];
+      unread_materials: {
         [key: string]: unknown;
       }[];
       visible_to_mentor: boolean;
-      whitelist_version?: string;
+      whitelist_version: string;
     };
     ScreeningUpdate: {
       reason?: string;
@@ -1650,7 +1650,7 @@ export interface components {
       candidates: {
         [key: string]: unknown;
       }[];
-      check?: {
+      check: {
         [key: string]: unknown;
       } | null;
       checker_version: string;
@@ -1659,13 +1659,13 @@ export interface components {
       counts: {
         [key: string]: unknown;
       };
-      create_time?: string | null;
+      create_time: string | null;
       created_by: string;
       created_role: string;
       dangerous_findings: {
         [key: string]: unknown;
       }[];
-      document?: {
+      document: {
         [key: string]: unknown;
       } | null;
       document_present: boolean;
@@ -1710,7 +1710,7 @@ export interface components {
       attach_allowed: boolean;
       based_on: string;
       label: string;
-      reasons?: string[];
+      reasons: string[];
       rerun_allowed: boolean;
       run_code: string;
       snapshot_fingerprint: string;
@@ -1728,71 +1728,71 @@ export interface components {
       unfinished_items?: string;
     };
     SubmissionOut: {
-      ac_snapshot?: {
+      ac_snapshot: {
         [key: string]: unknown;
       }[];
       author_id: string;
       code: string;
-      completeness_check?: {
+      completeness_check: {
         [key: string]: unknown;
       }[];
-      create_time?: string | null;
+      create_time: string | null;
       display_code: string;
       experiment_notes: string;
       git_branch: string;
       git_commit: string;
       git_repo: string;
       known_issues: string;
-      materials?: {
+      materials: {
         [key: string]: unknown;
       }[];
-      self_assessment?: {
+      self_assessment: {
         [key: string]: unknown;
       }[];
-      status: string;
+      status: "submitted" | "withdrawn" | "superseded";
       submission_id: string;
       summary: string;
       task_id: string;
       unfinished_items: string;
       version: number;
-      withdraw_reason?: string;
-      withdrawn_at?: string | null;
+      withdraw_reason: string;
+      withdrawn_at: string | null;
     };
     SubtaskOut: {
-      attempt?: number;
-      cancel_reason?: string;
-      cancelled_at?: string | null;
-      cancelled_by?: string;
+      attempt: number;
+      cancel_reason: string;
+      cancelled_at: string | null;
+      cancelled_by: string;
       code: string;
-      consumer?: string;
-      create_time?: string | null;
-      created_by?: string;
-      created_role?: string;
-      duplicate_total?: number;
-      error_code?: string;
-      error_message?: string;
-      failure_history?: {
+      consumer: string;
+      create_time: string | null;
+      created_by: string;
+      created_role: string;
+      duplicate_total: number;
+      error_code: string;
+      error_message: string;
+      failure_history: {
         [key: string]: unknown;
       }[];
-      finished_at?: string | null;
+      finished_at: string | null;
       kind: string;
-      model_calls?: {
+      model_calls: {
         [key: string]: unknown;
       }[];
-      model_name?: string;
-      new_total?: number;
-      payload?: {
+      model_name: string;
+      new_total: number;
+      payload: {
         [key: string]: unknown;
       };
-      prompt_version?: string;
-      query?: string;
-      queued_at?: string | null;
-      result_total?: number;
-      source?: string;
-      started_at?: string | null;
+      prompt_version: string;
+      query: string;
+      queued_at: string | null;
+      result_total: number;
+      source: string;
+      started_at: string | null;
       status: string;
       subtask_id: string;
-      update_time?: string | null;
+      update_time: string | null;
     };
     SuggestionOut: {
       ac_code: string;
@@ -1826,7 +1826,7 @@ export interface components {
       author_id: string;
       author_role: string;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       done: string;
       links: {
         [key: string]: unknown;
@@ -1837,7 +1837,7 @@ export interface components {
       progress_id: string;
       project_id: string;
       results: string;
-      task_id?: string | null;
+      task_id: string | null;
     };
     chatchat__server__api_server__supervision_literature_routes__NoteBody: {
       note?: string;
@@ -1859,67 +1859,67 @@ export interface components {
     };
     chatchat__server__api_server__supervision_literature_routes__TaskOut: {
       brief_code: string;
-      brief_confirmed_at?: string | null;
-      brief_confirmed_by?: string;
+      brief_confirmed_at: string | null;
+      brief_confirmed_by: string;
       brief_id: string;
-      brief_kind?: string;
-      brief_latest_version?: number | null;
-      brief_shared_version?: number | null;
-      brief_snapshot?: {
+      brief_kind: string;
+      brief_latest_version: number | null;
+      brief_shared_version: number | null;
+      brief_snapshot: {
         [key: string]: unknown;
       };
-      brief_superseded?: boolean;
+      brief_superseded: boolean;
       brief_version: number;
-      close_reason?: string;
-      closed_at?: string | null;
+      close_reason: string;
+      closed_at: string | null;
       code: string;
-      concluded_at?: string | null;
-      conclusion_total?: number;
-      create_time?: string | null;
-      created_by?: string;
-      created_role?: string;
-      deduped_total?: number;
-      deep_extract_limit?: number;
-      deep_extract_used?: number;
-      exclude_terms?: string[];
-      excluded_total?: number;
+      concluded_at: string | null;
+      conclusion_total: number;
+      create_time: string | null;
+      created_by: string;
+      created_role: string;
+      deduped_total: number;
+      deep_extract_limit: number;
+      deep_extract_used: number;
+      exclude_terms: string[];
+      excluded_total: number;
       goal: string;
-      hits_total?: number;
-      included_total?: number;
-      keywords?: string[];
-      plan_error?: string;
-      plan_status?: string;
+      hits_total: number;
+      included_total: number;
+      keywords: string[];
+      plan_error: string;
+      plan_status: string;
       project_id: string;
       purpose: string;
-      read_later_total?: number;
-      recent_subtasks?: components["schemas"]["SubtaskOut"][];
-      require_fulltext?: boolean;
-      result_limit?: number;
-      result_total?: number;
-      search_plan?: {
+      read_later_total: number;
+      recent_subtasks: components["schemas"]["SubtaskOut"][];
+      require_fulltext: boolean;
+      result_limit: number;
+      result_total: number;
+      search_plan: {
         [key: string]: unknown;
       };
-      search_plan_confirmed_at?: string | null;
-      search_plan_confirmed_by?: string;
-      search_plan_generated_at?: string | null;
-      search_plan_model?: string;
-      search_plan_note?: string;
-      search_plan_prompt_version?: string;
-      searched_at?: string | null;
-      source_failures?: {
+      search_plan_confirmed_at: string | null;
+      search_plan_confirmed_by: string;
+      search_plan_generated_at: string | null;
+      search_plan_model: string;
+      search_plan_note: string;
+      search_plan_prompt_version: string;
+      searched_at: string | null;
+      source_failures: {
         [key: string]: unknown;
       }[];
-      sources?: string[];
+      sources: string[];
       status: string;
-      stored_total?: number;
-      subtask_failed_total?: number;
-      subtask_total?: number;
-      synonyms?: string[];
+      stored_total: number;
+      subtask_failed_total: number;
+      subtask_total: number;
+      synonyms: string[];
       task_id: string;
-      undecided_total?: number;
-      update_time?: string | null;
-      year_from?: number | null;
-      year_to?: number | null;
+      undecided_total: number;
+      update_time: string | null;
+      year_from: number | null;
+      year_to: number | null;
     };
     chatchat__server__api_server__supervision_literature_routes__TaskPatchBody: {
       deep_extract_limit?: number | null;
@@ -1942,19 +1942,19 @@ export interface components {
       author_id: string;
       author_role: string;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       done: string;
-      links?: {
+      links: {
         [key: string]: unknown;
       }[];
       materials: string;
-      milestone_id?: string | null;
+      milestone_id: string | null;
       next_steps: string;
-      notes?: components["schemas"]["ProgressNoteOut"][];
+      notes: components["schemas"]["ProgressNoteOut"][];
       problems: string;
       progress_id: string;
       results: string;
-      task_id?: string | null;
+      task_id: string | null;
     };
     chatchat__server__api_server__supervision_work_routes__TaskBody: {
       acs?: components["schemas"]["AcIn"][];
@@ -1970,23 +1970,23 @@ export interface components {
       title: string;
     };
     chatchat__server__api_server__supervision_work_routes__TaskOut: {
-      acs?: components["schemas"]["AcOut"][];
-      cancel_reason?: string;
+      acs: components["schemas"]["AcOut"][];
+      cancel_reason: string;
       code: string;
-      create_time?: string | null;
+      create_time: string | null;
       description: string;
-      due_at?: string | null;
+      due_at: string | null;
       label: string;
-      milestone_id?: string | null;
+      milestone_id: string | null;
       priority: string;
-      published_at?: string | null;
+      published_at: string | null;
       purpose: string;
-      required_materials?: {
+      required_materials: {
         [key: string]: unknown;
       }[];
       requires_code_review: boolean;
       requires_runtime: boolean;
-      status: string;
+      status: "draft" | "active" | "completed" | "cancelled" | "archived";
       task_id: string;
       title: string;
       version: number;

@@ -165,3 +165,54 @@ def test_frontend_actually_consumes_sse_frame_types():
             f"{rel} 不再引用 @/api/sse-frames —— 它可能又手写了一份帧枚举副本，"
             "这样后端改状态机时前端不会有任何编译期信号"
         )
+
+
+def _response_schema_names(contract: dict, prefix: str) -> set[str]:
+    """取某类路径下所有 200 响应引用的 schema 名（含数组元素引用）。"""
+    names: set[str] = set()
+
+    def walk(schema: dict):
+        if not isinstance(schema, dict):
+            return
+        if "$ref" in schema:
+            names.add(schema["$ref"].rsplit("/", 1)[-1])
+        if "items" in schema:
+            walk(schema["items"])
+
+    for path, item in contract["paths"].items():
+        if not path.startswith(prefix):
+            continue
+        for operation in item.values():
+            if not isinstance(operation, dict):
+                continue
+            content = operation.get("responses", {}).get("200", {}).get("content", {})
+            for media in content.values():
+                walk(media.get("schema", {}))
+    return names
+
+
+def test_supervision_responses_declare_every_field_required(contract: dict):
+    """supervision 的响应模型必须把全部字段标成 required。
+
+    FastAPI 序列化响应模型时会写出所有字段（本仓库没有用 response_model_exclude_unset /
+    exclude_none 的路由），所以契约里把有默认值的字段标成可选，就比运行时更松：
+    前端由契约生成的类型会多出 `| undefined`，后端删字段时编译期不会响。
+    `api_schemas.ResponseModel` 基类负责补全 required；谁把基类改回 BaseModel，
+    或者新加一个没继承它的响应模型，这里会红。
+    """
+    schemas = contract["components"]["schemas"]
+    checked, problems = 0, []
+    for name in sorted(_response_schema_names(contract, "/supervision")):
+        schema = schemas.get(name)
+        if not isinstance(schema, dict) or "properties" not in schema:
+            continue
+        checked += 1
+        missing = set(schema["properties"]) - set(schema.get("required", []))
+        if missing:
+            problems.append(f"{name}: 字段 {sorted(missing)} 没进 required")
+    assert checked >= 20, f"只检查到 {checked} 个响应模型，疑似路径或引用取错"
+    assert not problems, (
+        "响应契约比运行时更松（让前端类型被削弱）。"
+        "请让这些模型继承 chatchat.server.api_server.api_schemas.ResponseModel：\n  "
+        + "\n  ".join(problems)
+    )

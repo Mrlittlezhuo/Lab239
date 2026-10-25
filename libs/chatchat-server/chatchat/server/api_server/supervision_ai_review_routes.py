@@ -27,6 +27,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server import ai_review_runtime as ai_runtime
@@ -146,7 +147,7 @@ class SettingsBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class RunOut(BaseModel):
+class RunOut(ResponseModel):
     run_id: str
     code: str
     display_code: str
@@ -206,7 +207,7 @@ class RunOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class FindingOut(BaseModel):
+class FindingOut(ResponseModel):
     finding_id: str
     run_id: str
     run_code: str
@@ -233,7 +234,7 @@ class FindingOut(BaseModel):
     batch_index: int
 
 
-class StalenessOut(BaseModel):
+class StalenessOut(ResponseModel):
     run_code: str
     stale: bool
     reasons: List[str] = []
@@ -244,7 +245,7 @@ class StalenessOut(BaseModel):
     label: str
 
 
-class SettingsOut(BaseModel):
+class SettingsOut(ResponseModel):
     project_id: str
     task_id: str
     project_mode: str
@@ -255,7 +256,7 @@ class SettingsOut(BaseModel):
     priority_note: str
 
 
-class SuggestionOut(BaseModel):
+class SuggestionOut(ResponseModel):
     ac_code: str
     verdict: str
     suggested_conclusion: str
@@ -264,7 +265,7 @@ class SuggestionOut(BaseModel):
     note: str
 
 
-class AdoptOut(BaseModel):
+class AdoptOut(ResponseModel):
     run_code: str
     ac_code: str
     verdict: str
@@ -273,7 +274,7 @@ class AdoptOut(BaseModel):
     review_code: str
 
 
-class MentorDiffOut(BaseModel):
+class MentorDiffOut(ResponseModel):
     ac_code: str
     verdict: str
     suggested_conclusion: str

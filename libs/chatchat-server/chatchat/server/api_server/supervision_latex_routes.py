@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -238,7 +239,7 @@ class DraftDiscardBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class SnapshotOut(BaseModel):
+class SnapshotOut(ResponseModel):
     snapshot_id: str
     code: str
     project_id: str
@@ -278,7 +279,7 @@ class SnapshotOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class DraftOut(BaseModel):
+class DraftOut(ResponseModel):
     draft_id: str
     code: str
     project_id: str
@@ -329,7 +330,7 @@ class DraftOut(BaseModel):
     update_time: Optional[str] = None
 
 
-class ProgressOut(BaseModel):
+class ProgressOut(ResponseModel):
     progress_id: str
     code: str
     project_id: str
@@ -345,7 +346,7 @@ class ProgressOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class ConfirmOut(BaseModel):
+class ConfirmOut(ResponseModel):
     draft: DraftOut
     progress: ProgressOut
 

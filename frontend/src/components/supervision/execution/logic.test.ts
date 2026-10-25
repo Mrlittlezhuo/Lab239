@@ -68,6 +68,9 @@ function attachment(code: string, kind: string): Attachment {
     task_id: null,
     submission_id: null,
     uploaded_by: "u1",
+    // 契约里 create_time 是必填（可为 null）：FastAPI 一定会写出该字段。
+    // 之前 fixture 省掉它，等于假装 API 不返回这个字段。
+    create_time: null,
   };
 }
 

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -27,6 +27,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from chatchat.server.api_server.api_schemas import ResponseModel
 from sqlalchemy.orm import Session
 
 from chatchat.server.auth.deps import require_password_changed
@@ -240,7 +241,7 @@ class ReviewPublishBody(ReviewDraftBody):
 # ---------------------------------------------------------------------------
 
 
-class AcOut(BaseModel):
+class AcOut(ResponseModel):
     ac_code: str
     statement: str
     evidence_requirement: str
@@ -249,7 +250,7 @@ class AcOut(BaseModel):
     version: int
 
 
-class MilestoneOut(BaseModel):
+class MilestoneOut(ResponseModel):
     milestone_id: str
     code: str
     title: str
@@ -265,13 +266,14 @@ class MilestoneOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class TaskOut(BaseModel):
+class TaskOut(ResponseModel):
     task_id: str
     code: str
     title: str
     purpose: str
     description: str
-    status: str
+    # CHECK（migrations.py:1377）status IN ('draft','active','completed','cancelled','archived')
+    status: Literal["draft", "active", "completed", "cancelled", "archived"]
     label: str
     priority: str
     version: int
@@ -286,7 +288,7 @@ class TaskOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class ProgressNoteOut(BaseModel):
+class ProgressNoteOut(ResponseModel):
     note_id: str
     note: str
     author_id: str
@@ -294,7 +296,7 @@ class ProgressNoteOut(BaseModel):
     create_time: Optional[str] = None
 
 
-class ProgressOut(BaseModel):
+class ProgressOut(ResponseModel):
     progress_id: str
     code: str
     task_id: Optional[str] = None
@@ -311,13 +313,14 @@ class ProgressOut(BaseModel):
     notes: List[ProgressNoteOut] = Field(default_factory=list)
 
 
-class SubmissionOut(BaseModel):
+class SubmissionOut(ResponseModel):
     submission_id: str
     code: str
     display_code: str
     version: int
     task_id: str
-    status: str
+    # CHECK（migrations.py:1458）status IN ('submitted','withdrawn','superseded')
+    status: Literal["submitted", "withdrawn", "superseded"]
     summary: str
     git_repo: str
     git_branch: str
@@ -335,19 +338,20 @@ class SubmissionOut(BaseModel):
     withdraw_reason: str = ""
 
 
-class ReviewAcOut(BaseModel):
+class ReviewAcOut(ResponseModel):
     ac_code: str
     conclusion: str
     reason: str
     ai_relation: str
 
 
-class ReviewOut(BaseModel):
+class ReviewOut(ResponseModel):
     review_id: str
     code: str
     submission_id: str
     task_id: str
-    status: str
+    # CHECK（migrations.py:1484）status IN ('not_started','drafting','published')
+    status: Literal["not_started", "drafting", "published"]
     overall_decision: str
     decision_reason: str
     feedback: str
@@ -361,7 +365,7 @@ class ReviewOut(BaseModel):
     notes: List[ProgressNoteOut] = Field(default_factory=list)
 
 
-class AttachmentOut(BaseModel):
+class AttachmentOut(ResponseModel):
     attachment_id: str
     code: str
     name: str
@@ -371,7 +375,10 @@ class AttachmentOut(BaseModel):
     sha256: str
     version: int
     kind: str
-    status: str
+    # CHECK ck_supervision_attachment_status（migrations.py:1542）
+    # status IN ('active','replaced','removed')。声明成 Literal 让契约产出 enum，
+    # 前端不必再手抄窄枚举（见 ProjectMemberOut 上同样的说明）。
+    status: Literal["active", "replaced", "removed"]
     task_id: Optional[str] = None
     submission_id: Optional[str] = None
     uploaded_by: str

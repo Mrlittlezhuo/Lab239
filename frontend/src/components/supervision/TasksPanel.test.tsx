@@ -68,7 +68,9 @@ function project(role: "mentor" | "student"): ProjectDetail {
     description: "",
     status: "active",
     my_role: role,
-    members: [{ user_id: "u1", role, status: "active" }],
+    members: [
+      { user_id: "u1", role, status: "active", joined_at: null, removed_at: null },
+    ],
   };
 }
 
