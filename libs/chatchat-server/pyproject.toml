@@ -36,6 +36,20 @@ openinference-instrumentation-langchain = "0.1.78"
 # strawberry-graphql 0.270.1 与 graphql-core 3.3+ 不兼容（ExecutionContext 移除）
 arize-phoenix-evals = "2.13.0"
 graphql-core = "3.2.7"
+# 兼容性钉版：arize-phoenix 12.6.1 不约束 pyarrow，pip 会解析到 21+，而那些 wheel 是按
+# NumPy 2.x 编译的，与本文件 `numpy = ">=1.26,<2"` 直接冲突。后果不是「可观测性不能用」
+# 而是「测试全跑不了」：arize-phoenix 注册了 pytest11 插件（phoenix.client.pytest.plugin），
+# pytest 启动即 import phoenix → import pyarrow → ImportError，整个会话无法收集。
+# 18.x 是仍按 NumPy 1.x 构建的最后一支（18.1.0 实测与 numpy 1.26.4 共存、1422 个测试可收集）。
+pyarrow = ">=18.1.0,<19"
+# 兼容性钉版：protobuf 必须留在 4.x —— streamlit 1.34.0 要 `protobuf<5`，
+# onnxruntime 与 arize-phoenix 要 `>=4.25.8`，交集就是 >=4.25.8,<5。
+# 而 googleapis-common-protos 1.75+ 要求 `protobuf>=6.33.5`，与 streamlit 不可同时满足；
+# 它生成的 pb2 代码 `from google.protobuf import runtime_version`，protobuf 4.x 没有该模块，
+# 于是 phoenix.otel 导入即失败（tests/unit_tests/test_observability.py 6 个用例）。
+# 1.62.0 是仍按 protobuf 4.x 生成的最后一支（实测 phoenix.otel 导入通过、6 个用例转绿）。
+protobuf = ">=4.25.8,<5"
+googleapis-common-protos = "1.62.0"
 openai = ">=3,<4"
 humanlayer= "0.7.6"
 nest_asyncio = "1.6.0"

@@ -18,6 +18,17 @@
   `conda run -n Langchain-Chatchat ...` 或上述绝对路径，不得误用 `base`
   环境或系统 Python。
 - 安装依赖时优先使用 `python -m pip`，确保 pip 与当前 Python 属于同一环境。
+- 跑后端 pytest 之前，`CHATCHAT_ROOT` 指向的目录必须先建好数据目录：
+  `python -c "from chatchat.settings import Settings; Settings.basic_settings.make_dirs()"`。
+  否则 `test_supervision_project.py::test_router_is_mounted_on_the_real_server_app`
+  会因 `data/media` 不存在而失败，看起来像代码 bug（2026-10-25 实测踩过）。
+- `tests/unit_tests/test_research_workflow.py` 内部用 `pytest.raises(KeyboardInterrupt)`
+  模拟进程崩溃，在全量会话里会打断整个 pytest（退出码 2，后面的测试根本不执行）。
+  单独跑它是 11 passed。全量跑时先 `--ignore` 排除它，再单独补跑这一个文件。
+- 依赖钉版集中在 `libs/chatchat-server/pyproject.toml`（仓库没有 poetry.lock /
+  requirements.txt）。`pyarrow`、`protobuf`、`googleapis-common-protos` 都是
+  **兼容性钉版**，改动前先看注释里的冲突原因：`streamlit 1.34.0` 要求 `protobuf<5`，
+  与 `googleapis-common-protos 1.75+`（要 `protobuf>=6.33`）不可同时满足。
 
 ## 工作方式
 
