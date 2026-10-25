@@ -135,7 +135,12 @@ class SPAStaticFiles(StaticFiles):
 
         if scope.get("method") not in ("GET", "HEAD"):
             raise HTTPException(status_code=404)
-        if _first_segment(path) in self.api_prefixes or _has_extension(path):
+        # starlette 的 StaticFiles.get_path 走 os.path.normpath，Windows 上会把
+        # "/" 换成 "\\"，于是 _first_segment 取不到一级路径，API 前缀闸门失效：
+        # 打错的 /auth/xxx 会被 index.html 以 200 吞掉。这里只归一化用来判断的副本，
+        # 真正的文件查找仍用原 path（POSIX 下反斜杠是合法文件名字符，不能改）。
+        lookup = path.replace("\\", "/")
+        if _first_segment(lookup) in self.api_prefixes or _has_extension(lookup):
             raise HTTPException(status_code=404)
 
         try:
