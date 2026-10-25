@@ -22,11 +22,12 @@
   `python -c "from chatchat.settings import Settings; Settings.basic_settings.make_dirs()"`。
   否则 `test_supervision_project.py::test_router_is_mounted_on_the_real_server_app`
   会因 `data/media` 不存在而失败，看起来像代码 bug（2026-10-25 实测踩过）。
-- `tests/unit_tests/test_research_workflow.py` 共 21 个用例，其中 3 个用
-  `pytest.raises(KeyboardInterrupt)` 模拟进程崩溃；有一个的异常会逃逸并打断整个
-  pytest 会话（退出码 2，排在它后面的用例根本不执行）。单独整文件跑只会看到
-  `11 passed` 然后就中断。正确做法：用 `-k "not crash"` 跑（18 passed, 3 deselected），
-  那 3 个崩溃用例在同进程里无法完整跑通。
+- `tests/unit_tests/test_research_workflow.py` 的崩溃模拟用例原先用 `KeyboardInterrupt`：
+  langgraph 把节点包进 `asyncio.create_task`，而 `Task.__step` 对 KeyboardInterrupt
+  特殊处理，异常绕过 `pytest.raises` 直接打断整个 pytest 会话（退出码 2，后面的用例
+  根本不跑），还会留下 pending task 与 aiosqlite 线程让进程卡在退出不返回。
+  2026-10-25 已改为 `SimulatedCrash(BaseException)`，整文件 21 passed 正常退出。
+  现在跑全量 `tests/unit_tests` 不再需要 `--ignore` 或 `-k` 绕过。
 - 依赖钉版集中在 `libs/chatchat-server/pyproject.toml`（仓库没有 poetry.lock /
   requirements.txt）。`pyarrow`、`protobuf`、`googleapis-common-protos` 都是
   **兼容性钉版**，改动前先看注释里的冲突原因：`streamlit 1.34.0` 要求 `protobuf<5`，

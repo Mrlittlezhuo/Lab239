@@ -220,6 +220,22 @@ def _paper(title, arxiv_id=None, doi=None, year=2023, abstract=""):
     )
 
 
+class SimulatedCrash(BaseException):
+    """模拟进程被硬中断（Ctrl-C / SIGINT 级别），刻意继承 BaseException。
+
+    为什么不用 KeyboardInterrupt：langgraph 把节点协程包进
+    `asyncio.create_task(...)`（langgraph/_internal/_runnable.py），而
+    `Task.__step` 对 KeyboardInterrupt / SystemExit 是特殊处理的 —— 不把异常存到
+    task 上，而是直接抛回事件循环线程。后果是它绕过 `pytest.raises`，在会话层把
+    整个 pytest 打断（退出码 2，后面的用例根本不跑），还会留下 pending task 和
+    aiosqlite 工作线程，进程卡在退出不返回。实测单跑这一个用例挂死 10 分钟。
+
+    被测性质不变：运行时只兜 `CancelledError / GeneratorExit / Exception`，
+    非 Exception 的 BaseException 会逃逸，靠 `finally` 里的
+    `converge_run_best_effort` 把运行收敛成终态。
+    """
+
+
 class FakeSource:
     def __init__(self, name, results=(), error=None, crash=None, on_search=None):
         self.name = name
@@ -530,12 +546,12 @@ class TestCrashRecovery:
     ):
         _wire_service(monkeypatch, temp_db)
         pid, rid = _make_project_run(temp_db)
-        crash = FakeSource("alpha", crash=KeyboardInterrupt("模拟进程崩溃"))
+        crash = FakeSource("alpha", crash=SimulatedCrash("模拟进程崩溃"))
         planner = FakePlanner()
         await research_service.generate_research_plan(
             rid, "alice", planner=planner, sources={"alpha": crash}
         )
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(SimulatedCrash):
             await research_service.confirm_and_execute_research_run(
                 rid, "alice", planner=planner, sources={"alpha": crash}
             )
