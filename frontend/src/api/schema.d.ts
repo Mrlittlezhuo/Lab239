@@ -453,6 +453,11 @@ export interface components {
       model?: string | null;
       run_id?: string | null;
     };
+    CompletenessCheckOut: {
+      key: "self_assessment" | "required_materials" | "code_material" | "runtime_material" | "unfinished_items";
+      message: string;
+      passed: boolean;
+    };
     ConclusionBody: {
       confirm?: boolean;
       evidence_card_codes?: string[];
@@ -1630,6 +1635,12 @@ export interface components {
       note?: string;
       self_assessment: string;
     };
+    SelfAssessmentOut: {
+      ac_code: string;
+      evidence: string;
+      note: string;
+      self_assessment: "done" | "partially_done" | "not_done" | "not_applicable";
+    };
     ServerModelsOut: {
       default_embedding: string;
       default_llm: string;
@@ -1754,15 +1765,19 @@ export interface components {
       summary?: string;
       unfinished_items?: string;
     };
+    SubmissionMaterialOut: {
+      attachment_code: string;
+      kind: string;
+      name: string;
+      sha256: string;
+      size: number;
+      version: number;
+    };
     SubmissionOut: {
-      ac_snapshot: {
-        [key: string]: unknown;
-      }[];
+      ac_snapshot: components["schemas"]["AcOut"][];
       author_id: string;
       code: string;
-      completeness_check: {
-        [key: string]: unknown;
-      }[];
+      completeness_check: components["schemas"]["CompletenessCheckOut"][];
       create_time: string | null;
       display_code: string;
       experiment_notes: string;
@@ -1770,12 +1785,8 @@ export interface components {
       git_commit: string;
       git_repo: string;
       known_issues: string;
-      materials: {
-        [key: string]: unknown;
-      }[];
-      self_assessment: {
-        [key: string]: unknown;
-      }[];
+      materials: components["schemas"]["SubmissionMaterialOut"][];
+      self_assessment: components["schemas"]["SelfAssessmentOut"][];
       status: "submitted" | "withdrawn" | "superseded";
       submission_id: string;
       summary: string;

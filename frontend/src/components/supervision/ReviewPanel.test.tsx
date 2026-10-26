@@ -75,8 +75,12 @@ const SUBMISSION: Submission = {
       version: 1,
     },
   ],
-  materials: [{ attachment_code: "A-001", name: "train.py", kind: "code", version: 1, size: 10 }],
-  completeness_check: [{ key: "runtime", passed: false, message: "缺少运行产物" }],
+  materials: [
+    { attachment_code: "A-001", name: "train.py", sha256: "ab12cd", kind: "code", version: 1, size: 10 },
+  ],
+  // key 只能是后端 completeness_warnings 实际会写的那五个值；之前写 "runtime"
+  // 是个后端永远不会发的取值，fixture 在撒谎。
+  completeness_check: [{ key: "runtime_material", passed: false, message: "缺少运行产物" }],
   author_id: "u-student",
   create_time: "2026-10-18T09:00:00",
   withdrawn_at: null,

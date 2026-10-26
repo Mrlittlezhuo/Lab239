@@ -168,16 +168,31 @@ def test_frontend_actually_consumes_sse_frame_types():
 
 
 def _response_schema_names(contract: dict, prefix: str) -> set[str]:
-    """取某类路径下所有 200 响应引用的 schema 名（含数组元素引用）。"""
+    """取某类路径下所有 200 响应引用到的 schema 名。
+
+    跟 $ref、数组元素、anyOf/oneOf/allOf 分支（`Optional[XxxOut]` 就是 anyOf），
+    并递归进入被引用的模型，否则只覆盖到最外层会漏掉一大半。
+    """
+    schemas = contract.get("components", {}).get("schemas", {})
     names: set[str] = set()
 
     def walk(schema: dict):
         if not isinstance(schema, dict):
             return
         if "$ref" in schema:
-            names.add(schema["$ref"].rsplit("/", 1)[-1])
+            name = schema["$ref"].rsplit("/", 1)[-1]
+            if name in names:
+                return
+            names.add(name)
+            walk(schemas.get(name, {}))
+            return
         if "items" in schema:
             walk(schema["items"])
+        for key in ("anyOf", "oneOf", "allOf"):
+            for branch in schema.get(key, []):
+                walk(branch)
+        for prop in schema.get("properties", {}).values():
+            walk(prop)
 
     for path, item in contract["paths"].items():
         if not path.startswith(prefix):
@@ -261,4 +276,71 @@ def test_supervision_responses_are_not_untyped(contract: dict):
         "这些 supervision 端点的 200 响应在契约里没有类型（多半是路由返回裸 dict）。"
         "前端只能手抄类型，后端改字段时编译期不会报错：\n  "
         + "\n  ".join(sorted(untyped))
+    )
+
+
+# 棘轮基线，2026-10-26 实测。这些字段声明成 List[dict] / Dict[str, Any]，契约里
+# 元素是 additionalProperties 的空壳，生成的 TS 是 `{}`：前端接上契约等于把有形状的
+# 东西变成没形状，只能继续手抄。修一处就把这个数调小一处，新增一处这道门直接红。
+# 确实要保留开放结构时（内容来自模型输出或用户自己写的 YAML，写死会拒绝合法数据），
+# 在提交说明里写清理由再调基数。
+UNTYPED_NESTED_BASELINE = 49
+
+
+def test_supervision_untyped_nested_fields_do_not_grow(contract: dict):
+    """supervision 响应模型里的无类型嵌套字段只准减少、不准增加（棘轮）。
+
+    无类型 = 对象只有 additionalProperties，或数组元素是这种空壳对象。
+    `Optional[Dict[str, Any]]`（anyOf: null + 空壳）同样算无类型。
+    """
+
+    schemas = contract["components"]["schemas"]
+
+    def typed(schema) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        if "$ref" in schema:
+            return True
+        if schema.get("type") in {"string", "number", "integer", "boolean"}:
+            return True
+        if schema.get("properties"):
+            return True
+        if schema.get("type") == "array":
+            return typed(schema.get("items"))
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in schema and any(typed(branch) for branch in schema[key]):
+                return True
+        return False
+
+    untyped: list[str] = []
+    seen: set[str] = set()
+
+    def walk_model(name: str) -> None:
+        if name in seen or name not in schemas:
+            return
+        seen.add(name)
+        for field, prop in schemas[name].get("properties", {}).items():
+            if not typed(prop):
+                untyped.append(f"{name}.{field}")
+            target = prop
+            while isinstance(target, dict) and "$ref" in target:
+                target = schemas.get(target["$ref"].rsplit("/", 1)[-1], {})
+            if not isinstance(target, dict):
+                continue
+            items = target.get("items", {})
+            if target.get("type") == "array" and isinstance(items, dict) and "$ref" in items:
+                walk_model(items["$ref"].rsplit("/", 1)[-1])
+            elif "$ref" in target:
+                walk_model(target["$ref"].rsplit("/", 1)[-1])
+
+    names = _response_schema_names(contract, "/supervision")
+    for name in sorted(names):
+        walk_model(name)
+
+    assert len(seen) >= 40, f"只覆盖到 {len(seen)} 个响应模型，疑似遍历漏了"
+    assert len(untyped) <= UNTYPED_NESTED_BASELINE, (
+        f"无类型嵌套字段从 {UNTYPED_NESTED_BASELINE} 涨到 {len(untyped)} 个。"
+        "新加的 List[dict] / Dict[str, Any] 会让前端拿到空壳类型，请声明成模型；"
+        "确实要保留开放结构就在提交说明里写明理由，并把基线常量调大："
+        + "\n  ".join(sorted(set(untyped)))
     )

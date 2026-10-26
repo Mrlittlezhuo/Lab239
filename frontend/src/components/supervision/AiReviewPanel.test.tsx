@@ -91,7 +91,9 @@ const SUBMISSION: Submission = {
   unfinished_items: "",
   self_assessment: [],
   ac_snapshot: [],
-  materials: [{ attachment_code: "A-001", name: "train.py", kind: "code", version: 1, size: 10 }],
+  materials: [
+    { attachment_code: "A-001", name: "train.py", sha256: "ab12cd", kind: "code", version: 1, size: 10 },
+  ],
   completeness_check: [],
   author_id: "u-student",
   create_time: "2026-10-18T09:00:00",

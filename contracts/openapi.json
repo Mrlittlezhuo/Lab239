@@ -2820,6 +2820,38 @@
         "title": "ComparisonGenerateRequest",
         "type": "object"
       },
+      "CompletenessCheckOut": {
+        "description": "提交前完整性检查的一条结果（submission.completeness_check 的元素）。\n\nkey 的取值只可能来自仓库 completeness_warnings 里那五处 checks.append；\n后两个只在任务要求代码检查 / 要求实际运行时才出现。这一项只提醒、\n不替代导师审核也不阻塞提交（§6.4）。",
+        "properties": {
+          "key": {
+            "enum": [
+              "self_assessment",
+              "required_materials",
+              "code_material",
+              "runtime_material",
+              "unfinished_items"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "message",
+          "passed"
+        ],
+        "title": "CompletenessCheckOut",
+        "type": "object"
+      },
       "ConclusionBody": {
         "description": "文献结论：论文事实 / 学生判断 / 待验证假设三类必须分开（§4.5）。",
         "properties": {
@@ -10127,6 +10159,43 @@
         "title": "SelfAssessmentIn",
         "type": "object"
       },
+      "SelfAssessmentOut": {
+        "description": "学生逐条自评（submission.self_assessment 的元素）。\n\n形状来自仓库 `_clean_self_assessment`：四个取值在那里校验、不合法直接拒写，\n所以声明成 Literal 与运行时一致。之前写 List[dict]，契约里元素是空壳，\n前端 Submission 虽然已接上契约，这四处拿到的仍是 `{}`。",
+        "properties": {
+          "ac_code": {
+            "title": "Ac Code",
+            "type": "string"
+          },
+          "evidence": {
+            "default": "",
+            "title": "Evidence",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "self_assessment": {
+            "enum": [
+              "done",
+              "partially_done",
+              "not_done",
+              "not_applicable"
+            ],
+            "title": "Self Assessment",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_code",
+          "evidence",
+          "note",
+          "self_assessment"
+        ],
+        "title": "SelfAssessmentOut",
+        "type": "object"
+      },
       "ServerModelsOut": {
         "description": "`GET /server/models` 的响应契约。\n\n字段必须与 `get_server_models()` 的返回一一对应：FastAPI 的 `response_model`\n会按本模型**过滤**输出，漏声明字段等于直接从响应里删掉它。改这个模型时，\n前端 `src/api/server.ts` 会经 `schema.d.ts` 在编译期同步，不需要手抄。",
         "properties": {
@@ -10685,12 +10754,55 @@
         "title": "SubmissionBody",
         "type": "object"
       },
+      "SubmissionMaterialOut": {
+        "description": "提交时关联的材料（submission.materials 的元素）。\n\n形状来自仓库 submit_submission 里对附件的快照。`kind` 没有 DB CHECK，\n所以保持 str，不凭猜收窄取值。",
+        "properties": {
+          "attachment_code": {
+            "title": "Attachment Code",
+            "type": "string"
+          },
+          "kind": {
+            "default": "",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "default": "",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "default": 0,
+            "title": "Size",
+            "type": "integer"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attachment_code",
+          "kind",
+          "name",
+          "sha256",
+          "size",
+          "version"
+        ],
+        "title": "SubmissionMaterialOut",
+        "type": "object"
+      },
       "SubmissionOut": {
         "properties": {
           "ac_snapshot": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/AcOut"
             },
             "title": "Ac Snapshot",
             "type": "array"
@@ -10705,8 +10817,7 @@
           },
           "completeness_check": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/CompletenessCheckOut"
             },
             "title": "Completeness Check",
             "type": "array"
@@ -10748,16 +10859,14 @@
           },
           "materials": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SubmissionMaterialOut"
             },
             "title": "Materials",
             "type": "array"
           },
           "self_assessment": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SelfAssessmentOut"
             },
             "title": "Self Assessment",
             "type": "array"

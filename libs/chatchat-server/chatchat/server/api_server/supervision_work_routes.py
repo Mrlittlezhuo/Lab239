@@ -332,6 +332,54 @@ class ProgressOut(ResponseModel):
     notes: List[ProgressNoteOut] = Field(default_factory=list)
 
 
+class SelfAssessmentOut(ResponseModel):
+    """学生逐条自评（submission.self_assessment 的元素）。
+
+    形状来自仓库 `_clean_self_assessment`：四个取值在那里校验、不合法直接拒写，
+    所以声明成 Literal 与运行时一致。之前写 List[dict]，契约里元素是空壳，
+    前端 Submission 虽然已接上契约，这四处拿到的仍是 `{}`。
+    """
+
+    ac_code: str
+    self_assessment: Literal["done", "partially_done", "not_done", "not_applicable"]
+    evidence: str = ""
+    note: str = ""
+
+
+class SubmissionMaterialOut(ResponseModel):
+    """提交时关联的材料（submission.materials 的元素）。
+
+    形状来自仓库 submit_submission 里对附件的快照。`kind` 没有 DB CHECK，
+    所以保持 str，不凭猜收窄取值。
+    """
+
+    attachment_code: str
+    name: str = ""
+    sha256: str = ""
+    size: int = 0
+    kind: str = ""
+    version: int = 1
+
+
+class CompletenessCheckOut(ResponseModel):
+    """提交前完整性检查的一条结果（submission.completeness_check 的元素）。
+
+    key 的取值只可能来自仓库 completeness_warnings 里那五处 checks.append；
+    后两个只在任务要求代码检查 / 要求实际运行时才出现。这一项只提醒、
+    不替代导师审核也不阻塞提交（§6.4）。
+    """
+
+    key: Literal[
+        "self_assessment",
+        "required_materials",
+        "code_material",
+        "runtime_material",
+        "unfinished_items",
+    ]
+    passed: bool
+    message: str = ""
+
+
 class SubmissionOut(ResponseModel):
     submission_id: str
     code: str
@@ -347,10 +395,11 @@ class SubmissionOut(ResponseModel):
     experiment_notes: str
     known_issues: str
     unfinished_items: str
-    self_assessment: List[dict] = Field(default_factory=list)
-    ac_snapshot: List[dict] = Field(default_factory=list)
-    materials: List[dict] = Field(default_factory=list)
-    completeness_check: List[dict] = Field(default_factory=list)
+    self_assessment: List[SelfAssessmentOut] = Field(default_factory=list)
+    # ac_snapshot 的元素与 AcOut 完全同形（仓库里就是照那六个字段快照的），直接复用
+    ac_snapshot: List[AcOut] = Field(default_factory=list)
+    materials: List[SubmissionMaterialOut] = Field(default_factory=list)
+    completeness_check: List[CompletenessCheckOut] = Field(default_factory=list)
     author_id: str
     create_time: Optional[str] = None
     withdrawn_at: Optional[str] = None
