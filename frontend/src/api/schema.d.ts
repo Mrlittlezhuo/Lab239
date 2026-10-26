@@ -898,6 +898,28 @@ export interface components {
       score_threshold: number;
       vector_search_top_k: number;
     };
+    LatexCheckReportOut: {
+      checked_files: string[];
+      checker_version: string;
+      compiled: boolean;
+      counts: {
+        [key: string]: number;
+      };
+      findings: components["schemas"]["LatexFindingOut"][];
+      ok: boolean;
+      parser_version: string;
+    };
+    LatexFindingOut: {
+      detail: string;
+      end_line: number;
+      kind: string;
+      line: number;
+      message: string;
+      path: string;
+      severity: string;
+      snippet: string;
+      target: string;
+    };
     ListResponse: {
       code: number;
       data: unknown[];
@@ -1701,9 +1723,7 @@ export interface components {
       candidates: {
         [key: string]: unknown;
       }[];
-      check: {
-        [key: string]: unknown;
-      } | null;
+      check: components["schemas"]["LatexCheckReportOut"] | null;
       checker_version: string;
       code: string;
       compiled: boolean;
@@ -1713,9 +1733,7 @@ export interface components {
       create_time: string | null;
       created_by: string;
       created_role: string;
-      dangerous_findings: {
-        [key: string]: unknown;
-      }[];
+      dangerous_findings: components["schemas"]["LatexFindingOut"][];
       document: {
         [key: string]: unknown;
       } | null;
@@ -1727,9 +1745,7 @@ export interface components {
       finding_counts: {
         [key: string]: number;
       };
-      findings: {
-        [key: string]: unknown;
-      }[];
+      findings: components["schemas"]["LatexFindingOut"][];
       limits: components["schemas"]["SnapshotLimitsOut"];
       main: {
         [key: string]: unknown;
@@ -1737,21 +1753,23 @@ export interface components {
       main_file: string;
       main_path: string;
       main_status: string;
-      not_read: {
-        [key: string]: unknown;
-      }[];
+      not_read: components["schemas"]["SourceReadStateOut"][];
       outline: string[];
       parse_budget: components["schemas"]["ParseBudgetOut"];
       parser_version: string;
-      partially_read: {
-        [key: string]: unknown;
-      }[];
+      partially_read: components["schemas"]["SourceReadStateOut"][];
       project_id: string;
       snapshot_id: string;
       total_bytes: number;
       unreferenced_tex: string[];
       word_count: number;
       zip_safety_version: string;
+    };
+    SourceReadStateOut: {
+      path: string;
+      read_state: string;
+      reason: string;
+      truncated_at_line: number;
     };
     StalenessOut: {
       attach_allowed: boolean;

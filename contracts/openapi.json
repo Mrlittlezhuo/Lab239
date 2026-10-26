@@ -5410,6 +5410,113 @@
         "title": "KBDefaultsOut",
         "type": "object"
       },
+      "LatexCheckReportOut": {
+        "description": "一次静态检查的汇总。字段与 `latex_check.LatexCheckReport.as_dict()` 对应。\n\n`compiled` 恒为 False —— 系统从不编译 LaTeX，这个键是故意留着表明口径的。",
+        "properties": {
+          "checked_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checked Files",
+            "type": "array"
+          },
+          "checker_version": {
+            "title": "Checker Version",
+            "type": "string"
+          },
+          "compiled": {
+            "title": "Compiled",
+            "type": "boolean"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/LatexFindingOut"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "parser_version": {
+            "title": "Parser Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_files",
+          "checker_version",
+          "compiled",
+          "counts",
+          "findings",
+          "ok",
+          "parser_version"
+        ],
+        "title": "LatexCheckReportOut",
+        "type": "object"
+      },
+      "LatexFindingOut": {
+        "description": "一条静态检查发现。\n\n字段与 `supervision.latex_check.LatexFinding.as_dict()` 一一对应（9 个键）。\n`kind` / `severity` 保持 `str` 而不是 `Literal`：这两组取值只由 latex_check 的\n代码决定，数据库里没有 CHECK 兜着，写死会让\"新增一种 kind\"直接变 500。\n取值口径写在 latex_check.py:107-111 的注释里。",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "end_line": {
+            "title": "End Line",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "line": {
+            "title": "Line",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "end_line",
+          "kind",
+          "line",
+          "message",
+          "path",
+          "severity",
+          "snippet",
+          "target"
+        ],
+        "title": "LatexFindingOut",
+        "type": "object"
+      },
       "ListResponse": {
         "example": {
           "code": 200,
@@ -10553,14 +10660,12 @@
           "check": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/LatexCheckReportOut"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Check"
+            ]
           },
           "checker_version": {
             "title": "Checker Version",
@@ -10602,8 +10707,7 @@
           },
           "dangerous_findings": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/LatexFindingOut"
             },
             "title": "Dangerous Findings",
             "type": "array"
@@ -10645,8 +10749,7 @@
           },
           "findings": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/LatexFindingOut"
             },
             "title": "Findings",
             "type": "array"
@@ -10673,8 +10776,7 @@
           },
           "not_read": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SourceReadStateOut"
             },
             "title": "Not Read",
             "type": "array"
@@ -10695,8 +10797,7 @@
           },
           "partially_read": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SourceReadStateOut"
             },
             "title": "Partially Read",
             "type": "array"
@@ -10769,6 +10870,35 @@
           "zip_safety_version"
         ],
         "title": "SnapshotOut",
+        "type": "object"
+      },
+      "SourceReadStateOut": {
+        "description": "没读全 / 根本没读的文件，如实列出来（超预算不假装读完了）。\n\n四个键与 `latex_repository._read_states()` 构造的 row 一一对应（:245-250）。\n`read_state` 保持 `str`：latex 侧没有数据库 CHECK，取值由 latex_parse 决定\n（`partially_read` / `not_read`；`fully_read` 不会进这个列表）。\n`truncated_at_line` / `not_read_reason` 在 latex_parse.py:161-162 有非空默认值\n（0 / \"\"），所以这里不是可空字段。",
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "read_state": {
+            "title": "Read State",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "truncated_at_line": {
+            "title": "Truncated At Line",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "read_state",
+          "reason",
+          "truncated_at_line"
+        ],
+        "title": "SourceReadStateOut",
         "type": "object"
       },
       "StalenessOut": {

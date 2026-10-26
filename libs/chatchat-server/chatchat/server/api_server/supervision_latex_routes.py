@@ -266,6 +266,57 @@ class SnapshotLimitsOut(ResponseModel):
     allowed_extensions: List[str]
 
 
+class LatexFindingOut(ResponseModel):
+    """一条静态检查发现。
+
+    字段与 `supervision.latex_check.LatexFinding.as_dict()` 一一对应（9 个键）。
+    `kind` / `severity` 保持 `str` 而不是 `Literal`：这两组取值只由 latex_check 的
+    代码决定，数据库里没有 CHECK 兜着，写死会让"新增一种 kind"直接变 500。
+    取值口径写在 latex_check.py:107-111 的注释里。
+    """
+
+    kind: str
+    severity: str
+    message: str
+    path: str
+    line: int
+    end_line: int
+    snippet: str
+    target: str
+    detail: str
+
+
+class LatexCheckReportOut(ResponseModel):
+    """一次静态检查的汇总。字段与 `latex_check.LatexCheckReport.as_dict()` 对应。
+
+    `compiled` 恒为 False —— 系统从不编译 LaTeX，这个键是故意留着表明口径的。
+    """
+
+    parser_version: str
+    checker_version: str
+    ok: bool
+    compiled: bool
+    counts: Dict[str, int]
+    findings: List[LatexFindingOut]
+    checked_files: List[str]
+
+
+class SourceReadStateOut(ResponseModel):
+    """没读全 / 根本没读的文件，如实列出来（超预算不假装读完了）。
+
+    四个键与 `latex_repository._read_states()` 构造的 row 一一对应（:245-250）。
+    `read_state` 保持 `str`：latex 侧没有数据库 CHECK，取值由 latex_parse 决定
+    （`partially_read` / `not_read`；`fully_read` 不会进这个列表）。
+    `truncated_at_line` / `not_read_reason` 在 latex_parse.py:161-162 有非空默认值
+    （0 / ""），所以这里不是可空字段。
+    """
+
+    path: str
+    read_state: str
+    truncated_at_line: int
+    reason: str
+
+
 class SnapshotOut(ResponseModel):
     snapshot_id: str
     code: str
@@ -290,19 +341,22 @@ class SnapshotOut(ResponseModel):
     counts: Dict[str, int]
     outline: List[str]
     word_count: int
-    findings: List[Dict[str, Any]]
+    # repository:317 `findings = [f.as_dict() for f in check.findings]`
+    findings: List[LatexFindingOut]
     # latex_check 里 counts 的声明就是 Dict[str, int]（按 severity 与 kind 计数）
     finding_counts: Dict[str, int]
-    dangerous_findings: List[Dict[str, Any]]
-    partially_read: List[Dict[str, Any]]
-    not_read: List[Dict[str, Any]]
+    # 同一批 dict 的 kind == "dangerous_command" 子集，形状完全相同
+    dangerous_findings: List[LatexFindingOut]
+    partially_read: List[SourceReadStateOut]
+    not_read: List[SourceReadStateOut]
     unreferenced_tex: List[str]
     available_files: List[str]
     extracted_files: List[Dict[str, Any]]
     file_count: int
     total_bytes: int
     document: Optional[Dict[str, Any]] = None
-    check: Optional[Dict[str, Any]] = None
+    # check_json 就是 LatexCheckReport.as_dict() 的落库结果
+    check: Optional[LatexCheckReportOut] = None
     created_by: str
     created_role: str
     create_time: Optional[str] = None

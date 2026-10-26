@@ -291,7 +291,10 @@ def test_supervision_responses_are_not_untyped(contract: dict):
 # 49 -> 45：SnapshotOut 的 limits / parse_budget 定成真模型（字段与
 # zip_safety.ZipLimits.as_dict()、latex_repository.parse_budget() 一一对应），
 # counts / finding_counts 收成 Dict[str, int]（生产者的返回标注就是 Dict[str, int]）。
-UNTYPED_NESTED_BASELINE = 45
+# 45 -> 40：findings / dangerous_findings / check 定成 LatexFindingOut 与
+# LatexCheckReportOut（字段与 latex_check 两个 as_dict() 一一对应），
+# partially_read / not_read 定成 SourceReadStateOut（repository._read_states 的 row）。
+UNTYPED_NESTED_BASELINE = 40
 
 
 def test_supervision_untyped_nested_fields_do_not_grow(contract: dict):
