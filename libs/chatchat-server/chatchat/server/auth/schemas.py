@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, SecretStr
+from chatchat.server.response_model import ResponseModel
 
 
 # ---------------- 请求 ----------------
@@ -41,7 +42,7 @@ class SetStatusRequest(BaseModel):
 # ---------------- 响应（脱敏） ----------------
 
 
-class UserOut(BaseModel):
+class UserOut(ResponseModel):
     id: str
     username: str
     display_name: str
@@ -52,7 +53,7 @@ class UserOut(BaseModel):
     update_time: Optional[datetime] = None
 
 
-class LoginResponse(BaseModel):
+class LoginResponse(ResponseModel):
     token: str
     token_type: str = "Bearer"
     expires_in: int

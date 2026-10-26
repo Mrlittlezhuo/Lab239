@@ -30,6 +30,7 @@ from chatchat.server.db.repository import (
     set_conversation_project,
 )
 from chatchat.server.db.repository.message_repository import list_messages
+from chatchat.server.response_model import ResponseModel
 
 
 class ConversationCreate(BaseModel):
@@ -56,7 +57,7 @@ class ConversationProject(BaseModel):
     project_id: Optional[str] = Field(None, max_length=32)
 
 
-class ConversationOut(BaseModel):
+class ConversationOut(ResponseModel):
     id: str
     name: Optional[str] = None
     chat_type: Optional[str] = None
@@ -66,7 +67,7 @@ class ConversationOut(BaseModel):
     update_time: Optional[datetime] = None
 
 
-class MessageOut(BaseModel):
+class MessageOut(ResponseModel):
     id: str
     chat_type: Optional[str] = None
     query: Optional[str] = None
@@ -78,7 +79,7 @@ class MessageOut(BaseModel):
     feedback_reason: Optional[str] = ""
 
 
-class ConversationMessagesOut(BaseModel):
+class ConversationMessagesOut(ResponseModel):
     """`GET /conversations/{id}/messages` 的响应包装。
 
     以前这个端点标注的是 `-> dict`，FastAPI 推不出 response_model，契约里
@@ -90,7 +91,7 @@ class ConversationMessagesOut(BaseModel):
     messages: List[MessageOut]
 
 
-class ConversationDeletedOut(BaseModel):
+class ConversationDeletedOut(ResponseModel):
     """删除会话的确认响应（同样原先是 `-> dict`，契约里是空的）。"""
 
     deleted: bool

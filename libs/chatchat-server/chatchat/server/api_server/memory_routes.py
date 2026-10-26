@@ -44,6 +44,7 @@ from chatchat.server.memory.memory_service import (
     select_preferences,
     sensitive_reason,
 )
+from chatchat.server.response_model import ResponseModel
 
 
 def _reject_sensitive(content: Optional[str]) -> None:
@@ -126,7 +127,7 @@ class MemoryUpdate(BaseModel):
         return fields
 
 
-class MemoryOut(BaseModel):
+class MemoryOut(ResponseModel):
     id: str
     memory_key: str
     type: str
@@ -462,7 +463,7 @@ class RecallSwitchesUpdate(BaseModel):
     preferences: Optional[bool] = Field(None, description="使用个人偏好（第一期开关）")
 
 
-class RecallPreviewOut(BaseModel):
+class RecallPreviewOut(ResponseModel):
     """本次回答实际会注入的历史记忆 —— 界面"本次参考了 N 条历史记忆"就是这一份。"""
 
     switches: dict

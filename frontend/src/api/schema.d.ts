@@ -539,29 +539,29 @@ export interface components {
       topic?: string | null;
     };
     ContextOut: {
-      completed_items?: string[];
-      confirmed?: string[];
-      confirmed_saved?: boolean[];
-      constraints?: string[];
+      completed_items: string[];
+      confirmed: string[];
+      confirmed_saved: boolean[];
+      constraints: string[];
       conversation_id: string;
-      goal?: string;
-      needs_rebuild?: boolean;
-      open_questions?: string[];
-      project_id?: string | null;
-      recent_boundary_message_id?: string | null;
-      recent_window_size?: number;
-      recent_window_truncated?: boolean;
-      summarized_count?: number;
-      summarized_message_id?: string | null;
-      summary?: string;
-      summary_error?: string | null;
-      summary_status?: string;
-      summary_type?: string;
-      summary_updated_at?: string | null;
-      temporary?: boolean;
-      topic?: string;
-      update_time?: string | null;
-      version?: number;
+      goal: string;
+      needs_rebuild: boolean;
+      open_questions: string[];
+      project_id: string | null;
+      recent_boundary_message_id: string | null;
+      recent_window_size: number;
+      recent_window_truncated: boolean;
+      summarized_count: number;
+      summarized_message_id: string | null;
+      summary: string;
+      summary_error: string | null;
+      summary_status: string;
+      summary_type: string;
+      summary_updated_at: string | null;
+      temporary: boolean;
+      topic: string;
+      update_time: string | null;
+      version: number;
     };
     ConversationCreate: {
       chat_type?: string;
@@ -578,13 +578,13 @@ export interface components {
       messages: components["schemas"]["MessageOut"][];
     };
     ConversationOut: {
-      chat_type?: string | null;
-      create_time?: string | null;
+      chat_type: string | null;
+      create_time: string | null;
       id: string;
-      name?: string | null;
-      project_id?: string | null;
-      temporary?: boolean;
-      update_time?: string | null;
+      name: string | null;
+      project_id: string | null;
+      temporary: boolean;
+      update_time: string | null;
     };
     ConversationProject: {
       project_id?: string | null;
@@ -893,15 +893,15 @@ export interface components {
       chunk_overlap: number;
       chunk_size: number;
       default_knowledge_base: string;
-      default_search_engine?: string | null;
+      default_search_engine: string | null;
       default_vs_type: string;
       score_threshold: number;
       vector_search_top_k: number;
     };
     ListResponse: {
-      code?: number;
+      code: number;
       data: unknown[];
-      msg?: string;
+      msg: string;
     };
     LoginRequest: {
       password: string;
@@ -910,7 +910,7 @@ export interface components {
     LoginResponse: {
       expires_in: number;
       token: string;
-      token_type?: string;
+      token_type: string;
       user: components["schemas"]["UserOut"];
     };
     MCPConnectionCreate: {
@@ -957,7 +957,7 @@ export interface components {
       transport?: string | null;
     };
     MCPConnectionStatusResponse: {
-      connection_id?: string | null;
+      connection_id: string | null;
       message: string;
       success: boolean;
     };
@@ -1022,25 +1022,25 @@ export interface components {
     };
     MemoryOut: {
       category: string | null;
-      confirmed?: boolean;
+      confirmed: boolean;
       content: string;
       create_time: unknown | null;
       enabled: boolean;
-      expires_at?: unknown | null;
+      expires_at: unknown | null;
       id: string;
       importance: number;
-      kind?: string;
+      kind: string;
       memory_key: string;
-      project_id?: string | null;
-      project_name?: string | null;
-      scope?: string;
+      project_id: string | null;
+      project_name: string | null;
+      scope: string;
       source: string;
       source_conversation_id: string | null;
-      source_label?: string;
+      source_label: string;
       source_message_id: string | null;
-      status?: string;
-      superseded_by?: string | null;
-      supersedes?: string | null;
+      status: string;
+      superseded_by: string | null;
+      supersedes: string | null;
       type: string;
       update_time: unknown | null;
     };
@@ -1073,16 +1073,16 @@ export interface components {
       core_attachment_codes?: string[];
     };
     MessageOut: {
-      chat_type?: string | null;
-      create_time?: string | null;
-      feedback_reason?: string | null;
-      feedback_score?: number | null;
+      chat_type: string | null;
+      create_time: string | null;
+      feedback_reason: string | null;
+      feedback_score: number | null;
       id: string;
-      metadata?: {
+      metadata: {
         [key: string]: unknown;
       };
-      query?: string | null;
-      response?: string | null;
+      query: string | null;
+      response: string | null;
     };
     MilestoneBody: {
       description?: string;
@@ -1315,9 +1315,9 @@ export interface components {
       };
     };
     PlatformModelsOut: {
-      embed_models?: string[];
-      image2text_models?: string[];
-      llm_models?: string[];
+      embed_models: string[];
+      image2text_models: string[];
+      llm_models: string[];
       name: string;
     };
     PreferencesOut: {
@@ -1418,12 +1418,12 @@ export interface components {
       reason: string;
     };
     RecallPreviewOut: {
-      conversation_id?: string | null;
+      conversation_id: string | null;
       max_count: number;
-      memories?: {
+      memories: {
         [key: string]: unknown;
       }[];
-      project_id?: string | null;
+      project_id: string | null;
       switches: {
         [key: string]: unknown;
       };
@@ -1644,22 +1644,22 @@ export interface components {
     ServerModelsOut: {
       default_embedding: string;
       default_llm: string;
-      embedding_models?: string[];
+      embedding_models: string[];
       history_len: number;
-      image2text_models?: string[];
+      image2text_models: string[];
       kb_defaults: components["schemas"]["KBDefaultsOut"];
-      llm_model_config?: {
+      llm_model_config: {
         [key: string]: {
           [key: string]: unknown;
         };
       };
-      llm_models?: string[];
-      max_tokens?: number | null;
-      platforms?: components["schemas"]["PlatformModelsOut"][];
-      search_engines?: string[];
-      support_agent_models?: string[];
+      llm_models: string[];
+      max_tokens: number | null;
+      platforms: components["schemas"]["PlatformModelsOut"][];
+      search_engines: string[];
+      support_agent_models: string[];
       temperature: number;
-      vs_types?: string[];
+      vs_types: string[];
     };
     SetStatusRequest: {
       status: string;
@@ -1846,13 +1846,13 @@ export interface components {
       username: string;
     };
     UserOut: {
-      create_time?: string | null;
+      create_time: string | null;
       display_name: string;
       id: string;
       must_change_password: boolean;
       role: string;
       status: string;
-      update_time?: string | null;
+      update_time: string | null;
       username: string;
     };
     ValidationError: {
@@ -2040,14 +2040,14 @@ export interface components {
       title?: string | null;
     };
     chatchat__server__types__server__response__base__BaseResponse: {
-      code?: number;
-      data?: unknown | null;
-      msg?: string;
+      code: number;
+      data: unknown | null;
+      msg: string;
     };
     chatchat__server__utils__BaseResponse: {
-      code?: number;
-      data?: unknown;
-      msg?: string;
+      code: number;
+      data: unknown;
+      msg: string;
     };
     openai__types__chat__chat_completion_named_tool_choice_param__Function: {
       name: string;

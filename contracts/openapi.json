@@ -3488,7 +3488,29 @@
           }
         },
         "required": [
-          "conversation_id"
+          "completed_items",
+          "confirmed",
+          "confirmed_saved",
+          "constraints",
+          "conversation_id",
+          "goal",
+          "needs_rebuild",
+          "open_questions",
+          "project_id",
+          "recent_boundary_message_id",
+          "recent_window_size",
+          "recent_window_truncated",
+          "summarized_count",
+          "summarized_message_id",
+          "summary",
+          "summary_error",
+          "summary_status",
+          "summary_type",
+          "summary_updated_at",
+          "temporary",
+          "topic",
+          "update_time",
+          "version"
         ],
         "title": "ContextOut",
         "type": "object"
@@ -3545,8 +3567,8 @@
           }
         },
         "required": [
-          "deleted",
-          "conversation_id"
+          "conversation_id",
+          "deleted"
         ],
         "title": "ConversationDeletedOut",
         "type": "object"
@@ -3643,7 +3665,13 @@
           }
         },
         "required": [
-          "id"
+          "chat_type",
+          "create_time",
+          "id",
+          "name",
+          "project_id",
+          "temporary",
+          "update_time"
         ],
         "title": "ConversationOut",
         "type": "object"
@@ -5371,12 +5399,13 @@
           }
         },
         "required": [
-          "chunk_size",
           "chunk_overlap",
-          "vector_search_top_k",
-          "score_threshold",
+          "chunk_size",
           "default_knowledge_base",
-          "default_vs_type"
+          "default_search_engine",
+          "default_vs_type",
+          "score_threshold",
+          "vector_search_top_k"
         ],
         "title": "KBDefaultsOut",
         "type": "object"
@@ -5412,7 +5441,9 @@
           }
         },
         "required": [
-          "data"
+          "code",
+          "data",
+          "msg"
         ],
         "title": "ListResponse",
         "type": "object"
@@ -5457,8 +5488,9 @@
           }
         },
         "required": [
-          "token",
           "expires_in",
+          "token",
+          "token_type",
           "user"
         ],
         "title": "LoginResponse",
@@ -5746,8 +5778,9 @@
           }
         },
         "required": [
-          "success",
-          "message"
+          "connection_id",
+          "message",
+          "success"
         ],
         "title": "MCPConnectionStatusResponse",
         "type": "object"
@@ -6303,17 +6336,27 @@
           }
         },
         "required": [
-          "id",
-          "memory_key",
-          "type",
           "category",
+          "confirmed",
           "content",
-          "source",
-          "importance",
-          "enabled",
-          "source_conversation_id",
-          "source_message_id",
           "create_time",
+          "enabled",
+          "expires_at",
+          "id",
+          "importance",
+          "kind",
+          "memory_key",
+          "project_id",
+          "project_name",
+          "scope",
+          "source",
+          "source_conversation_id",
+          "source_label",
+          "source_message_id",
+          "status",
+          "superseded_by",
+          "supersedes",
+          "type",
           "update_time"
         ],
         "title": "MemoryOut",
@@ -6616,7 +6659,14 @@
           }
         },
         "required": [
-          "id"
+          "chat_type",
+          "create_time",
+          "feedback_reason",
+          "feedback_score",
+          "id",
+          "metadata",
+          "query",
+          "response"
         ],
         "title": "MessageOut",
         "type": "object"
@@ -8222,6 +8272,9 @@
           }
         },
         "required": [
+          "embed_models",
+          "image2text_models",
+          "llm_models",
           "name"
         ],
         "title": "PlatformModelsOut",
@@ -8906,8 +8959,11 @@
           }
         },
         "required": [
-          "switches",
-          "max_count"
+          "conversation_id",
+          "max_count",
+          "memories",
+          "project_id",
+          "switches"
         ],
         "title": "RecallPreviewOut",
         "type": "object"
@@ -10288,11 +10344,20 @@
           }
         },
         "required": [
-          "default_llm",
           "default_embedding",
+          "default_llm",
+          "embedding_models",
           "history_len",
+          "image2text_models",
+          "kb_defaults",
+          "llm_model_config",
+          "llm_models",
+          "max_tokens",
+          "platforms",
+          "search_engines",
+          "support_agent_models",
           "temperature",
-          "kb_defaults"
+          "vs_types"
         ],
         "title": "ServerModelsOut",
         "type": "object"
@@ -11277,12 +11342,14 @@
           }
         },
         "required": [
-          "id",
-          "username",
+          "create_time",
           "display_name",
+          "id",
+          "must_change_password",
           "role",
           "status",
-          "must_change_password"
+          "update_time",
+          "username"
         ],
         "title": "UserOut",
         "type": "object"
@@ -12621,6 +12688,11 @@
             "type": "string"
           }
         },
+        "required": [
+          "code",
+          "data",
+          "msg"
+        ],
         "title": "BaseResponse",
         "type": "object"
       },
@@ -12647,6 +12719,11 @@
             "type": "string"
           }
         },
+        "required": [
+          "code",
+          "data",
+          "msg"
+        ],
         "title": "BaseResponse",
         "type": "object"
       },

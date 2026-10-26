@@ -3,13 +3,14 @@ from typing import Any, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from chatchat.server.constant.response_code import ResponseCode
+from chatchat.server.response_model import ResponseModel
 
 
 def default_data():
     return ""
 
 
-class BaseResponse(BaseModel):
+class BaseResponse(ResponseModel):
     code: int = Field(200, description="API status code")
     msg: str = Field("success", description="API status message")
     data: Optional[Union[Any, None]] = Field(default_factory=default_data, description="API data")

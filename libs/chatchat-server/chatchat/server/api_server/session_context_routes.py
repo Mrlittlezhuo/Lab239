@@ -27,11 +27,12 @@ from chatchat.server.db.models.user_model import UserModel
 from chatchat.server.db.repository import get_owned_conversation
 from chatchat.server.db.session import get_db
 from chatchat.server.memory import session_context
+from chatchat.server.response_model import ResponseModel
 
 session_context_router = APIRouter(prefix="/conversations", tags=["Session Context"])
 
 
-class ContextOut(BaseModel):
+class ContextOut(ResponseModel):
     conversation_id: str
     temporary: bool = False
     topic: str = ""

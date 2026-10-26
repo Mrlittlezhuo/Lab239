@@ -40,6 +40,7 @@ from chatchat.utils import build_logger
 import requests
 
 from langchain_chatchat.embeddings.zhipuai import ZhipuAIEmbeddings
+from chatchat.server.response_model import ResponseModel
 
 logger = build_logger()
 
@@ -499,7 +500,7 @@ class MsgType:
     VIDEO = 4
 
 
-class BaseResponse(BaseModel):
+class BaseResponse(ResponseModel):
     code: int = Field(200, description="API status code")
     msg: str = Field("success", description="API status message")
     data: Any = Field(None, description="API data")

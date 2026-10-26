@@ -7,6 +7,7 @@ from chatchat.server.pydantic_v2 import BaseModel, Field
 from chatchat.server.types.server.response.base import BaseResponse
 from chatchat.settings import Settings
 from chatchat.server.utils import get_prompt_template, get_server_configs
+from chatchat.server.response_model import ResponseModel
 
 server_router = APIRouter(prefix="/server", tags=["Server State"])
 
@@ -33,7 +34,7 @@ def _collect_models(field: str) -> list:
     return collected
 
 
-class PlatformModelsOut(BaseModel):
+class PlatformModelsOut(ResponseModel):
     """单个模型平台的模型清单（不含任何连接凭据）。"""
 
     name: str
@@ -42,7 +43,7 @@ class PlatformModelsOut(BaseModel):
     image2text_models: List[str] = Field(default_factory=list)
 
 
-class KBDefaultsOut(BaseModel):
+class KBDefaultsOut(ResponseModel):
     """知识库默认参数。类型用宽口径：这些值由用户 yaml 配置，可被改成任意名称/取值。"""
 
     chunk_size: int
@@ -54,7 +55,7 @@ class KBDefaultsOut(BaseModel):
     default_search_engine: Optional[str] = None
 
 
-class ServerModelsOut(BaseModel):
+class ServerModelsOut(ResponseModel):
     """`GET /server/models` 的响应契约。
 
     字段必须与 `get_server_models()` 的返回一一对应：FastAPI 的 `response_model`

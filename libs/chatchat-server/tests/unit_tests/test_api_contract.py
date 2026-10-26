@@ -206,18 +206,22 @@ def _response_schema_names(contract: dict, prefix: str) -> set[str]:
     return names
 
 
-def test_supervision_responses_declare_every_field_required(contract: dict):
-    """supervision 的响应模型必须把全部字段标成 required。
+def test_all_responses_declare_every_field_required(contract: dict):
+    """所有接口的响应模型必须把全部字段标成 required（不限 supervision）。
 
     FastAPI 序列化响应模型时会写出所有字段（本仓库没有用 response_model_exclude_unset /
     exclude_none 的路由），所以契约里把有默认值的字段标成可选，就比运行时更松：
     前端由契约生成的类型会多出 `| undefined`，后端删字段时编译期不会响。
-    `api_schemas.ResponseModel` 基类负责补全 required；谁把基类改回 BaseModel，
-    或者新加一个没继承它的响应模型，这里会红。
+    `chatchat.server.response_model.ResponseModel` 基类负责补全 required；谁把基类
+    改回 BaseModel，或者新加一个没继承它的响应模型，这里会红。
+
+    2026-10-26 从 /supervision 扩到全部路径：会话、记忆、会话上下文、服务器、
+    认证/登录、MCP 状态，以及两个旧 chatchat 响应信封（BaseResponse/ListResponse）
+    都补上基类后，67 个响应模型零例外。
     """
     schemas = contract["components"]["schemas"]
     checked, problems = 0, []
-    for name in sorted(_response_schema_names(contract, "/supervision")):
+    for name in sorted(_response_schema_names(contract, "")):
         schema = schemas.get(name)
         if not isinstance(schema, dict) or "properties" not in schema:
             continue
@@ -225,10 +229,10 @@ def test_supervision_responses_declare_every_field_required(contract: dict):
         missing = set(schema["properties"]) - set(schema.get("required", []))
         if missing:
             problems.append(f"{name}: 字段 {sorted(missing)} 没进 required")
-    assert checked >= 20, f"只检查到 {checked} 个响应模型，疑似路径或引用取错"
+    assert checked >= 60, f"只检查到 {checked} 个响应模型，疑似路径或引用取错"
     assert not problems, (
         "响应契约比运行时更松（让前端类型被削弱）。"
-        "请让这些模型继承 chatchat.server.api_server.api_schemas.ResponseModel：\n  "
+        "请让这些模型继承 chatchat.server.response_model.ResponseModel：\n  "
         + "\n  ".join(problems)
     )
 
