@@ -239,6 +239,33 @@ class DraftDiscardBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ParseBudgetOut(ResponseModel):
+    """解析预算。两个键与 `supervision_latex_repository.parse_budget()` 一一对应。
+
+    超预算的文件会被如实标成 partially_read / not_read，所以这两个数前端要显示。
+    """
+
+    max_source_bytes: int
+    max_source_files: int
+
+
+class SnapshotLimitsOut(ResponseModel):
+    """一次解压的全部上限。
+
+    字段与 `supervision.zip_safety.ZipLimits.as_dict()` 一一对应：as_dict 只导出这
+    7 个键（内部判定用的扩展名集合不外露）。改 as_dict 必须同步改这里，否则契约里
+    会多出实际不会写的键，或丢掉前端在用的键。
+    """
+
+    max_entries: int
+    max_total_bytes: int
+    max_single_bytes: int
+    max_compression_ratio: float
+    ratio_min_bytes: int
+    max_name_bytes: int
+    allowed_extensions: List[str]
+
+
 class SnapshotOut(ResponseModel):
     snapshot_id: str
     code: str
@@ -255,15 +282,17 @@ class SnapshotOut(ResponseModel):
     parser_version: str
     checker_version: str
     zip_safety_version: str
-    limits: Dict[str, Any]
-    parse_budget: Dict[str, Any]
+    limits: SnapshotLimitsOut
+    parse_budget: ParseBudgetOut
     document_present: bool
     compiled: bool
-    counts: Dict[str, Any]
+    # document.counts() 的返回标注就是 Dict[str, int]
+    counts: Dict[str, int]
     outline: List[str]
     word_count: int
     findings: List[Dict[str, Any]]
-    finding_counts: Dict[str, Any]
+    # latex_check 里 counts 的声明就是 Dict[str, int]（按 severity 与 kind 计数）
+    finding_counts: Dict[str, int]
     dangerous_findings: List[Dict[str, Any]]
     partially_read: List[Dict[str, Any]]
     not_read: List[Dict[str, Any]]

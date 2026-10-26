@@ -1309,6 +1309,10 @@ export interface components {
       user?: string | null;
       [key: string]: unknown;
     };
+    ParseBudgetOut: {
+      max_source_bytes: number;
+      max_source_files: number;
+    };
     PlanUpdate: {
       plan: {
         [key: string]: unknown;
@@ -1679,6 +1683,15 @@ export interface components {
       task_id: string;
       task_mode: string;
     };
+    SnapshotLimitsOut: {
+      allowed_extensions: string[];
+      max_compression_ratio: number;
+      max_entries: number;
+      max_name_bytes: number;
+      max_single_bytes: number;
+      max_total_bytes: number;
+      ratio_min_bytes: number;
+    };
     SnapshotOut: {
       attachment_code: string;
       attachment_name: string;
@@ -1695,7 +1708,7 @@ export interface components {
       code: string;
       compiled: boolean;
       counts: {
-        [key: string]: unknown;
+        [key: string]: number;
       };
       create_time: string | null;
       created_by: string;
@@ -1712,14 +1725,12 @@ export interface components {
       }[];
       file_count: number;
       finding_counts: {
-        [key: string]: unknown;
+        [key: string]: number;
       };
       findings: {
         [key: string]: unknown;
       }[];
-      limits: {
-        [key: string]: unknown;
-      };
+      limits: components["schemas"]["SnapshotLimitsOut"];
       main: {
         [key: string]: unknown;
       };
@@ -1730,9 +1741,7 @@ export interface components {
         [key: string]: unknown;
       }[];
       outline: string[];
-      parse_budget: {
-        [key: string]: unknown;
-      };
+      parse_budget: components["schemas"]["ParseBudgetOut"];
       parser_version: string;
       partially_read: {
         [key: string]: unknown;

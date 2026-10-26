@@ -288,7 +288,10 @@ def test_supervision_responses_are_not_untyped(contract: dict):
 # 东西变成没形状，只能继续手抄。修一处就把这个数调小一处，新增一处这道门直接红。
 # 确实要保留开放结构时（内容来自模型输出或用户自己写的 YAML，写死会拒绝合法数据），
 # 在提交说明里写清理由再调基数。
-UNTYPED_NESTED_BASELINE = 49
+# 49 -> 45：SnapshotOut 的 limits / parse_budget 定成真模型（字段与
+# zip_safety.ZipLimits.as_dict()、latex_repository.parse_budget() 一一对应），
+# counts / finding_counts 收成 Dict[str, int]（生产者的返回标注就是 Dict[str, int]）。
+UNTYPED_NESTED_BASELINE = 45
 
 
 def test_supervision_untyped_nested_fields_do_not_grow(contract: dict):
@@ -308,6 +311,15 @@ def test_supervision_untyped_nested_fields_do_not_grow(contract: dict):
         if schema.get("type") in {"string", "number", "integer", "boolean"}:
             return True
         if schema.get("properties"):
+            return True
+        if isinstance(schema.get("additionalProperties"), dict) and typed(
+            schema["additionalProperties"]
+        ):
+            # `Dict[str, int]` 这类映射：键是字符串、值有类型，生成的 TS 是
+            # `Record<string, number>`，是真能用的类型，不该算无类型。只有
+            # additionalProperties 为 true / 空对象（没有任何信息）才算。
+            # 2026-10-26 扩这一口时，当时的 49 处里没有一处是这种形状（扩前扩后同为 49），
+            # 所以这不是把欠账藏掉，只是不再误伤有类型的映射。
             return True
         if schema.get("type") == "array":
             return typed(schema.get("items"))

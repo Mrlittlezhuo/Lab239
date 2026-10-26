@@ -8227,6 +8227,25 @@
         "title": "OpenAIImageVariationsInput",
         "type": "object"
       },
+      "ParseBudgetOut": {
+        "description": "解析预算。两个键与 `supervision_latex_repository.parse_budget()` 一一对应。\n\n超预算的文件会被如实标成 partially_read / not_read，所以这两个数前端要显示。",
+        "properties": {
+          "max_source_bytes": {
+            "title": "Max Source Bytes",
+            "type": "integer"
+          },
+          "max_source_files": {
+            "title": "Max Source Files",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_source_bytes",
+          "max_source_files"
+        ],
+        "title": "ParseBudgetOut",
+        "type": "object"
+      },
       "PlanUpdate": {
         "properties": {
           "plan": {
@@ -10451,6 +10470,53 @@
         "title": "SettingsOut",
         "type": "object"
       },
+      "SnapshotLimitsOut": {
+        "description": "一次解压的全部上限。\n\n字段与 `supervision.zip_safety.ZipLimits.as_dict()` 一一对应：as_dict 只导出这\n7 个键（内部判定用的扩展名集合不外露）。改 as_dict 必须同步改这里，否则契约里\n会多出实际不会写的键，或丢掉前端在用的键。",
+        "properties": {
+          "allowed_extensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Extensions",
+            "type": "array"
+          },
+          "max_compression_ratio": {
+            "title": "Max Compression Ratio",
+            "type": "number"
+          },
+          "max_entries": {
+            "title": "Max Entries",
+            "type": "integer"
+          },
+          "max_name_bytes": {
+            "title": "Max Name Bytes",
+            "type": "integer"
+          },
+          "max_single_bytes": {
+            "title": "Max Single Bytes",
+            "type": "integer"
+          },
+          "max_total_bytes": {
+            "title": "Max Total Bytes",
+            "type": "integer"
+          },
+          "ratio_min_bytes": {
+            "title": "Ratio Min Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "allowed_extensions",
+          "max_compression_ratio",
+          "max_entries",
+          "max_name_bytes",
+          "max_single_bytes",
+          "max_total_bytes",
+          "ratio_min_bytes"
+        ],
+        "title": "SnapshotLimitsOut",
+        "type": "object"
+      },
       "SnapshotOut": {
         "properties": {
           "attachment_code": {
@@ -10509,7 +10575,9 @@
             "type": "boolean"
           },
           "counts": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "type": "integer"
+            },
             "title": "Counts",
             "type": "object"
           },
@@ -10569,7 +10637,9 @@
             "type": "integer"
           },
           "finding_counts": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "type": "integer"
+            },
             "title": "Finding Counts",
             "type": "object"
           },
@@ -10582,9 +10652,7 @@
             "type": "array"
           },
           "limits": {
-            "additionalProperties": true,
-            "title": "Limits",
-            "type": "object"
+            "$ref": "#/components/schemas/SnapshotLimitsOut"
           },
           "main": {
             "additionalProperties": true,
@@ -10619,9 +10687,7 @@
             "type": "array"
           },
           "parse_budget": {
-            "additionalProperties": true,
-            "title": "Parse Budget",
-            "type": "object"
+            "$ref": "#/components/schemas/ParseBudgetOut"
           },
           "parser_version": {
             "title": "Parser Version",
