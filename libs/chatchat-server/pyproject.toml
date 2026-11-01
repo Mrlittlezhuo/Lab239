@@ -81,11 +81,14 @@ networkx = "3.1"
 opencv-python = "~4.10.0.84"
 PyMuPDF = "~1.23.16"
 rapidocr_onnxruntime = "~1.3.8"
-# requests 2.32.3 有两条已公开 advisory（GHSA-9hjg-9r4m-mvj7 / CVE-2024-47081：
-# 恶意 URL 会让 .netrc 凭据外泄，2.32.4 修复），并且 langchain-community 0.4.2 要求
-# requests>=2.32.5 —— pip check 一直在报这条冲突。抬到同一 minor 内的 2.32.5，
-# 不跨 minor，风险最小。（OSV 复算见 .tmp/osv_report.json）
-requests = "~2.32.5"
+# requests 的钉版依据是逐条复算：2.32.3 命中 CVE-2024-47081（恶意 URL 让 .netrc 凭据
+# 外泄，2.32.4 修复），且 langchain-community 0.4.2 要求 requests>=2.32.5（pip check
+# 一直报这条冲突）；但停在 2.32.5 仍剩 2 条 MODERATE（GHSA-gc5v-m9x4-r6x2、
+# PYSEC-2026-2275），它们的修复版本是 2.33.0，不跨 minor 就关不掉。
+# 跨 minor 的前提是实测：升级前后 pip freeze 逐行 diff 只有 requests 一行变化；
+# 要求方 langchain-community 的约束是 `requests<3.0.0,>=2.32.5`；responses 0.26.3 与
+# requests-mock 1.12.1 相关的出站请求用例全绿。
+requests = "~2.33.0"
 pathlib = "~1.0.1"
 # mcp 1.30.0 要求 pyjwt[crypto]>=2.10.1；登录令牌签发处已跑过回归（tests/api/test_auth.py）
 pyjwt = ">=2.10.1,<3"
