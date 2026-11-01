@@ -39,11 +39,20 @@ test tests:
 extended_tests:
 	$(PYTHON) -m pytest $(SOCKET_GUARD) --only-extended tests/unit_tests
 
+# 监视模式，两处与实机对齐（都是实测，不是推测）：
+# 1) 不写裸 `ptw`：它装在 .../Scripts 下，而该目录不在 PATH 上，裸命令调不起来；
+#    `$(PYTHON) -m pytest_watcher` 是等价入口。
+# 2) 必须显式 `--runner "$(PYTHON)"` 并把 `-m pytest` 放进测试参数：pytest-watcher 的
+#    --runner 默认值是 PATH 上的 `pytest` 可执行文件，而本项目环境的 Scripts 不在 PATH，
+#    实测默认写法会去用另一个解释器，conftest 直接 `ModuleNotFoundError: No module
+#    named 'chatchat'`；加上 --runner 之后实测 11 passed（test_api_contract）。
+# 3) `--snapshot-update` 是 syrupy 给 pytest 的开关，pytest-watcher 0.6.3 自己不认，
+#    放在 `--` 之前会 argparse 报错，所以跟在 `-m pytest` 之后。
 test_watch:
-	ptw --snapshot-update --now . -- -x $(SOCKET_GUARD) tests/unit_tests
+	$(PYTHON) -m pytest_watcher --now --runner "$(PYTHON)" . -- -m pytest -x --snapshot-update $(SOCKET_GUARD) tests/unit_tests
 
 test_watch_extended:
-	ptw --snapshot-update --now . -- -x $(SOCKET_GUARD) --only-extended tests/unit_tests
+	$(PYTHON) -m pytest_watcher --now --runner "$(PYTHON)" . -- -m pytest -x --snapshot-update $(SOCKET_GUARD) --only-extended tests/unit_tests
 
 integration_tests:
 	poetry run pytest tests/integration_tests
