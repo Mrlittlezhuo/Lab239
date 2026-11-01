@@ -227,21 +227,35 @@ optional = true
 # The only dependencies that should be added are
 # dependencies used for running tests (e.g., pytest, freezegun, response).
 # Any dependencies that do not meet that criteria will be removed.
-pytest = "^7.3.0"
+# pytest 7.4.4（本机实装）命中 2 条 advisory（含 PYSEC-2026-1845），修复版本 9.0.3。
+# 抬到 9 会牵动测试插件链，见下面 pytest-asyncio 与 syrupy 两条注释；这三处必须一起改，
+# 单改 pytest 就是拿依赖冲突换一个安全补丁。实测：1433 passed / exit 0 / 18:54。
+pytest = ">=9.0.3,<10"
 pytest-cov = "^4.0.0"
 pytest-dotenv = "^0.5.2"
 duckdb-engine = "^0.9.2"
 pytest-watcher = "^0.2.6"
 freezegun = "^1.2.2"
 responses = "^0.22.0"
-pytest-asyncio = "^0.23.2"
+# pytest-asyncio 0.23.8（本机实装）自己的 requires_dist 写的是 `pytest<9,>=7.0.0`，
+# 也就是它自己划的上界正好卡在 pytest 9 之前 —— 抬 pytest 必须同时抬它，不是我的推测。
+# 实测 1.4.1：异步用例集中的 test_agent_runtime_langgraph / test_agent_run_answer_stream
+# 等文件全绿。
+pytest-asyncio = ">=1,<2"
 lark = "^1.1.5"
 pytest-mock = "^3.10.0"
 # 测试期间的网络封锁依赖。原先钉 `^0.6.0`（poetry 语义 = >=0.6.0,<0.7.0），但本机实装
 # 0.8.1，声明与现实不符。下限取 0.7 是因为 Makefile 现在用的 `--allow-hosts` 口径是在
 # 实装的 0.8.1 上验证的（0.6 没有实测过，只是不把区间收到把实装版本排除掉的程度）。
 pytest-socket = ">=0.7.0,<0.9"
-syrupy = "^4.0.2"
+# syrupy 4.9.1 的 requires_dist 是 `pytest<9.0.0,>=7.0.0`，是抬 pytest 的硬拦路虎。
+# 它看起来"没用"其实承重方式很隐蔽：AST 扫全部 tests 确认 **0 个用例使用 snapshot
+# fixture**（14 个文件里的 "snapshot" 都是契约领域命名，如 check_snapshot），但
+# 本文件 [tool.pytest.ini_options] 的 addopts 带了 `--snapshot-warn-unused`，而 pytest
+# 又开了 `--strict-config` —— syrupy 不在场，pytest 启动阶段就因未知开关失败。
+# 所以本轮选择升到 5.x 保留它（实测 5.5.3 下该开关仍被接受、全量绿），而不是删。
+# 若将来要删 syrupy，必须同时改 addopts，那是另一笔决定。
+syrupy = ">=5,<6"
 requests-mock = "^1.11.0"
 
 
