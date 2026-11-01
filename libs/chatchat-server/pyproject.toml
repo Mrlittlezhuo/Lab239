@@ -85,7 +85,16 @@ markdownify = ">=0.11.6"
 tqdm = ">=4.66.1"
 websockets = ">=12.0"
 numpy = ">=1.26,<2"
-pandas = "~1.3.0" # test
+# pandas 原先钉 `~1.3.0`（只允许 1.3.x），这个约束在本机环境里早就失效：实际装的是
+# pandas 2.3.3 + numpy 1.26.4，全套测试也一直是绿。而且 1.3.x 与上面的 numpy>=1.26
+# 无法同时成立（pandas 1.3 没有对 numpy 1.26 构建的轮子），新机器照抄这份依赖会装不上。
+# 下限取 2.1：那是第一个同时提供 cp311 轮子并支持 numpy 1.26 的版本。上限 <3 与主要
+# 消费方一致（streamlit 1.34.0 要 pandas<3,>=1.3.0；altair 4.2.2 要 >=0.18；
+# streamlit-aggrid 1.0.5 要 >=1.2，都不排斥 2.x）。
+# 本仓库唯一的 pandas 用法在 chatchat/webui_pages/knowledge_base/knowledge_base.py：
+# 构造 DataFrame、取列、`.any()`，没有用到 2.0 移除的 `DataFrame.append` /
+# `Series.append` / `pd.np` / `.ix[]` / `iteritems` / `get_values`（已 grep 验证）。
+pandas = ">=2.1,<3" # test
 pydantic = "~2.11.1"
 httpx = {version = "0.27.2", extras = ["brotli", "http2", "socks"]}
 python-multipart = "0.0.9"
@@ -209,7 +218,10 @@ responses = "^0.22.0"
 pytest-asyncio = "^0.23.2"
 lark = "^1.1.5"
 pytest-mock = "^3.10.0"
-pytest-socket = "^0.6.0"
+# 测试期间的网络封锁依赖。原先钉 `^0.6.0`（poetry 语义 = >=0.6.0,<0.7.0），但本机实装
+# 0.8.1，声明与现实不符。下限取 0.7 是因为 Makefile 现在用的 `--allow-hosts` 口径是在
+# 实装的 0.8.1 上验证的（0.6 没有实测过，只是不把区间收到把实装版本排除掉的程度）。
+pytest-socket = ">=0.7.0,<0.9"
 syrupy = "^4.0.2"
 requests-mock = "^1.11.0"
 
