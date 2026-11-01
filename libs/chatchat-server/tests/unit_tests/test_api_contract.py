@@ -294,7 +294,12 @@ def test_supervision_responses_are_not_untyped(contract: dict):
 # 45 -> 40：findings / dangerous_findings / check 定成 LatexFindingOut 与
 # LatexCheckReportOut（字段与 latex_check 两个 as_dict() 一一对应），
 # partially_read / not_read 定成 SourceReadStateOut（repository._read_states 的 row）。
-UNTYPED_NESTED_BASELINE = 40
+# 40 -> 35：ai_review 的 material_manifest / unread_materials /
+# partially_read_materials 定成三个**投影**模型（键集分别是 repository 预置的 20 键、
+# :1953 的 9 键、:1957 的 10 键，三者不同形，不能合成一个）；RunOut 的 input_budget 与
+# finding_counts 收成 Dict[str, int]（值全是整数）—— 没用模型是因为未跑完的 run 这两个
+# 字段就是空 dict，套模型会让详情页 500。
+UNTYPED_NESTED_BASELINE = 35
 
 
 def test_supervision_untyped_nested_fields_do_not_grow(contract: dict):

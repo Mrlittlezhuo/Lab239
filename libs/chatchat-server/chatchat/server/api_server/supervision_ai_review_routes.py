@@ -23,7 +23,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -147,6 +147,102 @@ class SettingsBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class InputBudgetOut(ResponseModel):
+    """本次预审的输入预算与配置版本（§5.5.2：实际值与版本都要写进快照并展示）。
+
+    前 13 个键与 repository `input_budget()`（:219-236）的返回一一对应，run **创建时**
+    就写入（:920），所以是必填；五个上限可被 `CHATCHAT_AI_REVIEW_*` 环境变量覆盖。
+    后三个用量键要等到开始读材料才追加（:636-638 → :1951），排队中的 run 没有它们，
+    所以给默认值。改 `input_budget()` 的键集必须同步改这里。
+    """
+
+    max_files: int
+    max_file_bytes: int
+    max_pdf_pages: int
+    max_file_chars: int
+    max_total_chars: int
+    acs_per_batch: int
+    config_version: str
+    whitelist_version: str
+    parser_version: str
+    rules_version: str
+    text_extensions: List[str]
+    pdf_text_layer: bool
+    pdf_ocr: bool
+    candidate_files: int = 0
+    included_files: int = 0
+    evidence_chars_used: int = 0
+
+
+class MaterialManifestEntryOut(ResponseModel):
+    """落库并对外输出的材料清单条目（正文绝不进响应）。
+
+    20 个键与 repository `_manifest_entry()` 预置的 dict 一一对应（:428-445）；
+    内部的 `_text` 由 `strip_manifest_text()`（:642-644）剥掉，键集完全一致。
+    每个字段都给默认值而不是必填：这些 JSON 是 run 生命周期里分批写入的，老数据行
+    可能缺键，缺键补默认值比让详情页 500 更合适（`ResponseModel` 仍把键标成 required）。
+    `read_state` 保持 `str`：模型文件里有 `MATERIAL_READ_STATE_VALUES` 常量，但仓库里
+    没有任何地方校验它，写死会让以后新增取值变 500。
+    """
+
+    attachment_code: str = ""
+    name: str = ""
+    ext: str = ""
+    kind: str = ""
+    size: int = 0
+    sha256: str = ""
+    version: int = 0
+    read_state: str = "not_read"
+    reason: str = ""
+    char_count: int = 0
+    line_start: int = 0
+    line_end: int = 0
+    page_start: int = 0
+    page_end: int = 0
+    char_start: int = 0
+    char_end: int = 0
+    pages_total: int = 0
+    pages_read: int = 0
+    affected_acs: List[str] = Field(default_factory=list)
+    injection_suspected: bool = False
+
+
+class UnreadMaterialOut(ResponseModel):
+    """没进入预审的材料。
+
+    这是清单的**投影**，不是完整条目：repository:1953-1956 只挑这 9 个键。
+    改投影就要改这里，否则契约里会多出实际不会返回的键。
+    """
+
+    attachment_code: str = ""
+    name: str = ""
+    kind: str = ""
+    read_state: str = "not_read"
+    reason: str = ""
+    affected_acs: List[str] = Field(default_factory=list)
+    size: int = 0
+    sha256: str = ""
+    version: int = 0
+
+
+class PartiallyReadMaterialOut(ResponseModel):
+    """只读了一部分的材料。
+
+    另一个投影，repository:1957-1962 挑这 10 个键（带页/字符区间，不带 size/sha256）。
+    """
+
+    attachment_code: str = ""
+    name: str = ""
+    kind: str = ""
+    read_state: str = "not_read"
+    reason: str = ""
+    page_start: int = 0
+    page_end: int = 0
+    char_start: int = 0
+    char_end: int = 0
+    affected_acs: List[str] = Field(default_factory=list)
+
+
 class RunOut(ResponseModel):
     run_id: str
     code: str
@@ -172,12 +268,19 @@ class RunOut(ResponseModel):
     partial_results: bool
     call_plan: List[dict] = []
     model_calls: List[dict] = []
-    input_budget: dict = {}
-    material_manifest: List[dict] = []
-    unread_materials: List[dict] = []
-    partially_read_materials: List[dict] = []
+    # 预算与配置版本：键集与 repository `input_budget()`（:219-236）一致，run 创建时
+    # 就写入（:920），用量三键要跑起来才追加。这里**不能**写 Dict[str, int]：我第一版
+    # 就是这么写的，被 ai_review 测试当场打回 —— budget 里还有四个 *_version 字符串、
+    # 一个 text_extensions 列表和两个布尔。
+    input_budget: InputBudgetOut
+    material_manifest: List[MaterialManifestEntryOut] = Field(default_factory=list)
+    unread_materials: List[UnreadMaterialOut] = Field(default_factory=list)
+    partially_read_materials: List[PartiallyReadMaterialOut] = Field(default_factory=list)
     security_flags: List[str] = []
-    finding_counts: dict = {}
+    # repository:2117-2120 硬编码按四类结论计数（satisfied / partial /
+    # not_satisfied / unverifiable），值都是整数。用 Dict[str, int] 而不是模型：
+    # 排队中 / 未完成的 run 这里是空 dict，模型会让它变 500。
+    finding_counts: Dict[str, int] = Field(default_factory=dict)
     visible_to_mentor: bool
     attached_to_submission: bool
     # 不可变检查快照（§5.3、§17）：页面要能回答"这次到底基于哪一份内容检查的"。

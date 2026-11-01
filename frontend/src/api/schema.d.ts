@@ -869,6 +869,24 @@ export interface components {
     IgnoreRequest: {
       memory_id: string;
     };
+    InputBudgetOut: {
+      acs_per_batch: number;
+      candidate_files: number;
+      config_version: string;
+      evidence_chars_used: number;
+      included_files: number;
+      max_file_bytes: number;
+      max_file_chars: number;
+      max_files: number;
+      max_pdf_pages: number;
+      max_total_chars: number;
+      parser_version: string;
+      pdf_ocr: boolean;
+      pdf_text_layer: boolean;
+      rules_version: string;
+      text_extensions: string[];
+      whitelist_version: string;
+    };
     IntentApplyRequest: {
       category?: string | null;
       content: string;
@@ -1024,6 +1042,28 @@ export interface components {
       key: string;
       label?: string;
       required?: boolean;
+    };
+    MaterialManifestEntryOut: {
+      affected_acs: string[];
+      attachment_code: string;
+      char_count: number;
+      char_end: number;
+      char_start: number;
+      ext: string;
+      injection_suspected: boolean;
+      kind: string;
+      line_end: number;
+      line_start: number;
+      name: string;
+      page_end: number;
+      page_start: number;
+      pages_read: number;
+      pages_total: number;
+      read_state: string;
+      reason: string;
+      sha256: string;
+      size: number;
+      version: number;
     };
     MaterialOut: {
       key: string;
@@ -1335,6 +1375,18 @@ export interface components {
       max_source_bytes: number;
       max_source_files: number;
     };
+    PartiallyReadMaterialOut: {
+      affected_acs: string[];
+      attachment_code: string;
+      char_end: number;
+      char_start: number;
+      kind: string;
+      name: string;
+      page_end: number;
+      page_start: number;
+      read_state: string;
+      reason: string;
+    };
     PlanUpdate: {
       plan: {
         [key: string]: unknown;
@@ -1593,15 +1645,11 @@ export interface components {
       draft_fingerprint: string;
       failure_reason: string;
       finding_counts: {
-        [key: string]: unknown;
+        [key: string]: number;
       };
       finished_at: string | null;
-      input_budget: {
-        [key: string]: unknown;
-      };
-      material_manifest: {
-        [key: string]: unknown;
-      }[];
+      input_budget: components["schemas"]["InputBudgetOut"];
+      material_manifest: components["schemas"]["MaterialManifestEntryOut"][];
       model_available: boolean;
       model_calls: {
         [key: string]: unknown;
@@ -1609,9 +1657,7 @@ export interface components {
       model_name: string;
       parser_version: string;
       partial_results: boolean;
-      partially_read_materials: {
-        [key: string]: unknown;
-      }[];
+      partially_read_materials: components["schemas"]["PartiallyReadMaterialOut"][];
       project_id: string;
       queue_status: {
         [key: string]: unknown;
@@ -1639,9 +1685,7 @@ export interface components {
       triggered_by: string;
       triggered_role: string;
       unchecked_acs: string[];
-      unread_materials: {
-        [key: string]: unknown;
-      }[];
+      unread_materials: components["schemas"]["UnreadMaterialOut"][];
       visible_to_mentor: boolean;
       whitelist_version: string;
     };
@@ -1871,6 +1915,17 @@ export interface components {
       display_name: string;
       user_id: string;
       username: string;
+    };
+    UnreadMaterialOut: {
+      affected_acs: string[];
+      attachment_code: string;
+      kind: string;
+      name: string;
+      read_state: string;
+      reason: string;
+      sha256: string;
+      size: number;
+      version: number;
     };
     UserOut: {
       create_time: string | null;

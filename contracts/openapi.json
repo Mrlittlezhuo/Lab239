@@ -5230,6 +5230,101 @@
         "title": "IgnoreRequest",
         "type": "object"
       },
+      "InputBudgetOut": {
+        "description": "本次预审的输入预算与配置版本（§5.5.2：实际值与版本都要写进快照并展示）。\n\n前 13 个键与 repository `input_budget()`（:219-236）的返回一一对应，run **创建时**\n就写入（:920），所以是必填；五个上限可被 `CHATCHAT_AI_REVIEW_*` 环境变量覆盖。\n后三个用量键要等到开始读材料才追加（:636-638 → :1951），排队中的 run 没有它们，\n所以给默认值。改 `input_budget()` 的键集必须同步改这里。",
+        "properties": {
+          "acs_per_batch": {
+            "title": "Acs Per Batch",
+            "type": "integer"
+          },
+          "candidate_files": {
+            "default": 0,
+            "title": "Candidate Files",
+            "type": "integer"
+          },
+          "config_version": {
+            "title": "Config Version",
+            "type": "string"
+          },
+          "evidence_chars_used": {
+            "default": 0,
+            "title": "Evidence Chars Used",
+            "type": "integer"
+          },
+          "included_files": {
+            "default": 0,
+            "title": "Included Files",
+            "type": "integer"
+          },
+          "max_file_bytes": {
+            "title": "Max File Bytes",
+            "type": "integer"
+          },
+          "max_file_chars": {
+            "title": "Max File Chars",
+            "type": "integer"
+          },
+          "max_files": {
+            "title": "Max Files",
+            "type": "integer"
+          },
+          "max_pdf_pages": {
+            "title": "Max Pdf Pages",
+            "type": "integer"
+          },
+          "max_total_chars": {
+            "title": "Max Total Chars",
+            "type": "integer"
+          },
+          "parser_version": {
+            "title": "Parser Version",
+            "type": "string"
+          },
+          "pdf_ocr": {
+            "title": "Pdf Ocr",
+            "type": "boolean"
+          },
+          "pdf_text_layer": {
+            "title": "Pdf Text Layer",
+            "type": "boolean"
+          },
+          "rules_version": {
+            "title": "Rules Version",
+            "type": "string"
+          },
+          "text_extensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Text Extensions",
+            "type": "array"
+          },
+          "whitelist_version": {
+            "title": "Whitelist Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "acs_per_batch",
+          "candidate_files",
+          "config_version",
+          "evidence_chars_used",
+          "included_files",
+          "max_file_bytes",
+          "max_file_chars",
+          "max_files",
+          "max_pdf_pages",
+          "max_total_chars",
+          "parser_version",
+          "pdf_ocr",
+          "pdf_text_layer",
+          "rules_version",
+          "text_extensions",
+          "whitelist_version"
+        ],
+        "title": "InputBudgetOut",
+        "type": "object"
+      },
       "IntentApplyRequest": {
         "properties": {
           "category": {
@@ -6139,6 +6234,137 @@
           "key"
         ],
         "title": "MaterialIn",
+        "type": "object"
+      },
+      "MaterialManifestEntryOut": {
+        "description": "落库并对外输出的材料清单条目（正文绝不进响应）。\n\n20 个键与 repository `_manifest_entry()` 预置的 dict 一一对应（:428-445）；\n内部的 `_text` 由 `strip_manifest_text()`（:642-644）剥掉，键集完全一致。\n每个字段都给默认值而不是必填：这些 JSON 是 run 生命周期里分批写入的，老数据行\n可能缺键，缺键补默认值比让详情页 500 更合适（`ResponseModel` 仍把键标成 required）。\n`read_state` 保持 `str`：模型文件里有 `MATERIAL_READ_STATE_VALUES` 常量，但仓库里\n没有任何地方校验它，写死会让以后新增取值变 500。",
+        "properties": {
+          "affected_acs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Acs",
+            "type": "array"
+          },
+          "attachment_code": {
+            "default": "",
+            "title": "Attachment Code",
+            "type": "string"
+          },
+          "char_count": {
+            "default": 0,
+            "title": "Char Count",
+            "type": "integer"
+          },
+          "char_end": {
+            "default": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "default": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "ext": {
+            "default": "",
+            "title": "Ext",
+            "type": "string"
+          },
+          "injection_suspected": {
+            "default": false,
+            "title": "Injection Suspected",
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "",
+            "title": "Kind",
+            "type": "string"
+          },
+          "line_end": {
+            "default": 0,
+            "title": "Line End",
+            "type": "integer"
+          },
+          "line_start": {
+            "default": 0,
+            "title": "Line Start",
+            "type": "integer"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "page_end": {
+            "default": 0,
+            "title": "Page End",
+            "type": "integer"
+          },
+          "page_start": {
+            "default": 0,
+            "title": "Page Start",
+            "type": "integer"
+          },
+          "pages_read": {
+            "default": 0,
+            "title": "Pages Read",
+            "type": "integer"
+          },
+          "pages_total": {
+            "default": 0,
+            "title": "Pages Total",
+            "type": "integer"
+          },
+          "read_state": {
+            "default": "not_read",
+            "title": "Read State",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "sha256": {
+            "default": "",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "default": 0,
+            "title": "Size",
+            "type": "integer"
+          },
+          "version": {
+            "default": 0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "affected_acs",
+          "attachment_code",
+          "char_count",
+          "char_end",
+          "char_start",
+          "ext",
+          "injection_suspected",
+          "kind",
+          "line_end",
+          "line_start",
+          "name",
+          "page_end",
+          "page_start",
+          "pages_read",
+          "pages_total",
+          "read_state",
+          "reason",
+          "sha256",
+          "size",
+          "version"
+        ],
+        "title": "MaterialManifestEntryOut",
         "type": "object"
       },
       "MaterialOut": {
@@ -8353,6 +8579,77 @@
         "title": "ParseBudgetOut",
         "type": "object"
       },
+      "PartiallyReadMaterialOut": {
+        "description": "只读了一部分的材料。\n\n另一个投影，repository:1957-1962 挑这 10 个键（带页/字符区间，不带 size/sha256）。",
+        "properties": {
+          "affected_acs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Acs",
+            "type": "array"
+          },
+          "attachment_code": {
+            "default": "",
+            "title": "Attachment Code",
+            "type": "string"
+          },
+          "char_end": {
+            "default": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "char_start": {
+            "default": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "kind": {
+            "default": "",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "page_end": {
+            "default": 0,
+            "title": "Page End",
+            "type": "integer"
+          },
+          "page_start": {
+            "default": 0,
+            "title": "Page Start",
+            "type": "integer"
+          },
+          "read_state": {
+            "default": "not_read",
+            "title": "Read State",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "affected_acs",
+          "attachment_code",
+          "char_end",
+          "char_start",
+          "kind",
+          "name",
+          "page_end",
+          "page_start",
+          "read_state",
+          "reason"
+        ],
+        "title": "PartiallyReadMaterialOut",
+        "type": "object"
+      },
       "PlanUpdate": {
         "properties": {
           "plan": {
@@ -9964,8 +10261,9 @@
             "type": "string"
           },
           "finding_counts": {
-            "additionalProperties": true,
-            "default": {},
+            "additionalProperties": {
+              "type": "integer"
+            },
             "title": "Finding Counts",
             "type": "object"
           },
@@ -9981,16 +10279,11 @@
             "title": "Finished At"
           },
           "input_budget": {
-            "additionalProperties": true,
-            "default": {},
-            "title": "Input Budget",
-            "type": "object"
+            "$ref": "#/components/schemas/InputBudgetOut"
           },
           "material_manifest": {
-            "default": [],
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/MaterialManifestEntryOut"
             },
             "title": "Material Manifest",
             "type": "array"
@@ -10024,10 +10317,8 @@
             "type": "boolean"
           },
           "partially_read_materials": {
-            "default": [],
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/PartiallyReadMaterialOut"
             },
             "title": "Partially Read Materials",
             "type": "array"
@@ -10174,10 +10465,8 @@
             "type": "array"
           },
           "unread_materials": {
-            "default": [],
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/UnreadMaterialOut"
             },
             "title": "Unread Materials",
             "type": "array"
@@ -11484,6 +11773,71 @@
           "username"
         ],
         "title": "SupervisionUserOut",
+        "type": "object"
+      },
+      "UnreadMaterialOut": {
+        "description": "没进入预审的材料。\n\n这是清单的**投影**，不是完整条目：repository:1953-1956 只挑这 9 个键。\n改投影就要改这里，否则契约里会多出实际不会返回的键。",
+        "properties": {
+          "affected_acs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Acs",
+            "type": "array"
+          },
+          "attachment_code": {
+            "default": "",
+            "title": "Attachment Code",
+            "type": "string"
+          },
+          "kind": {
+            "default": "",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "read_state": {
+            "default": "not_read",
+            "title": "Read State",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "sha256": {
+            "default": "",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "default": 0,
+            "title": "Size",
+            "type": "integer"
+          },
+          "version": {
+            "default": 0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "affected_acs",
+          "attachment_code",
+          "kind",
+          "name",
+          "read_state",
+          "reason",
+          "sha256",
+          "size",
+          "version"
+        ],
+        "title": "UnreadMaterialOut",
         "type": "object"
       },
       "UserOut": {
